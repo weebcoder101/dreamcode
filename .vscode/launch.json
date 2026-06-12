@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "DreamCode: Debug TUI",
+      "type": "bun",
+      "request": "launch",
+      "runtime": "bun",
+      "runtimeArgs": ["run", "--conditions=browser", "src/index.ts"],
+      "cwd": "${workspaceFolder}/packages/opencode",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "DreamCode: Attach",
+      "type": "bun",
+      "request": "attach",
+      "url": "ws://localhost:6499/"
+    }
+  ]
+}
