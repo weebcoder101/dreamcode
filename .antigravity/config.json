@@ -1,0 +1,21 @@
+{
+  "dreamcode": {
+    "enabled": true,
+    "sandbox": false,
+    "dream_mode": true,
+    "scoring": true,
+    "model_router": true,
+    "skills": {
+      "auto_chain": true,
+      "max_chain_length": 16
+    },
+    "sensor_gate": {
+      "enabled": true,
+      "guardian_ai": true
+    },
+    "memory": {
+      "backend": "sqlite",
+      "auto_persist": true
+    }
+  }
+}
