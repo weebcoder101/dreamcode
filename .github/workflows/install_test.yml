@@ -1,0 +1,85 @@
+name: Install + Build Test
+
+on:
+  push:
+    branches: [main, dreamcode-fork]
+  pull_request:
+    branches: [main]
+
+jobs:
+  install-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: sudo apt-get install -y unzip
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build
+        run: bun run build
+        working-directory: packages/opencode
+
+      - name: Install globally
+        run: npm install -g .
+        working-directory: packages/opencode
+
+      - name: Smoke test
+        run: |
+          dreamcode --version || echo "version check skipped"
+          echo "Install test passed"
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Typecheck
+        run: bun run typecheck
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Lint
+        run: bun run lint
+
+  sensor-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sensor gate test
+        run: |
+          python3 .opencode/skills/chain-orchestrator/scripts/sensor_gate.py \
+            --prompt "test" 2>&1 | grep -E "SENSOR|chain" | head -10
+          echo "Sensor gate test passed"

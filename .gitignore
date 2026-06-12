@@ -5,7 +5,11 @@ node_modules
 .env
 .env.local
 .idea
-.vscode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .codex
 *~
 playground
