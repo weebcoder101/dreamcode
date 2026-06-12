@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 
-const childProcess = require("child_process")
-const fs = require("fs")
-const path = require("path")
-const os = require("os")
+import { createRequire } from "module"
+import { spawn, spawnSync } from "child_process"
+import { realpathSync, existsSync, readFileSync } from "fs"
+import { dirname, join } from "path"
+import { platform as osPlatform, arch as osArch } from "os"
+
+const require = createRequire(import.meta.url)
 
 const forwardedSignals = ["SIGINT", "SIGTERM", "SIGHUP"]
 
 function run(target) {
-  const child = childProcess.spawn(target, process.argv.slice(2), {
+  const child = spawn(target, process.argv.slice(2), {
     stdio: "inherit",
   })
 
@@ -45,11 +48,11 @@ function run(target) {
 
 const envPath = process.env.OPENCODE_BIN_PATH
 
-const scriptPath = fs.realpathSync(__filename)
-const scriptDir = path.dirname(scriptPath)
+const scriptPath = realpathSync(process.argv[1])
+const scriptDir = dirname(scriptPath)
 
 //
-const cached = path.join(scriptDir, ".opencode")
+const cached = join(scriptDir, ".opencode")
 
 const platformMap = {
   darwin: "darwin",
@@ -62,13 +65,13 @@ const archMap = {
   arm: "arm",
 }
 
-let platform = platformMap[os.platform()]
+let platform = platformMap[osPlatform()]
 if (!platform) {
-  platform = os.platform()
+  platform = osPlatform()
 }
-let arch = archMap[os.arch()]
+let arch = archMap[osArch()]
 if (!arch) {
-  arch = os.arch()
+  arch = osArch()
 }
 const base = "opencode-" + platform + "-" + arch
 const binary = platform === "windows" ? "opencode.exe" : "opencode"
@@ -78,7 +81,7 @@ function supportsAvx2() {
 
   if (platform === "linux") {
     try {
-      return /(^|\s)avx2(\s|$)/i.test(fs.readFileSync("/proc/cpuinfo", "utf8"))
+      return /(^|\s)avx2(\s|$)/i.test(readFileSync("/proc/cpuinfo", "utf8"))
     } catch {
       return false
     }
@@ -86,7 +89,7 @@ function supportsAvx2() {
 
   if (platform === "darwin") {
     try {
-      const result = childProcess.spawnSync("sysctl", ["-n", "hw.optional.avx2_0"], {
+      const result = spawnSync("sysctl", ["-n", "hw.optional.avx2_0"], {
         encoding: "utf8",
         timeout: 1500,
       })
@@ -103,7 +106,7 @@ function supportsAvx2() {
 
     for (const exe of ["powershell.exe", "pwsh.exe", "pwsh", "powershell"]) {
       try {
-        const result = childProcess.spawnSync(exe, ["-NoProfile", "-NonInteractive", "-Command", cmd], {
+        const result = spawnSync(exe, ["-NoProfile", "-NonInteractive", "-Command", cmd], {
           encoding: "utf8",
           timeout: 3000,
           windowsHide: true,
@@ -130,13 +133,13 @@ const names = (() => {
   if (platform === "linux") {
     const musl = (() => {
       try {
-        if (fs.existsSync("/etc/alpine-release")) return true
+        if (existsSync("/etc/alpine-release")) return true
       } catch {
         // ignore
       }
 
       try {
-        const result = childProcess.spawnSync("ldd", ["--version"], { encoding: "utf8" })
+        const result = spawnSync("ldd", ["--version"], { encoding: "utf8" })
         const text = ((result.stdout || "") + (result.stderr || "")).toLowerCase()
         if (text.includes("musl")) return true
       } catch {
@@ -171,14 +174,14 @@ const names = (() => {
 function findBinary(startDir) {
   let current = startDir
   for (;;) {
-    const modules = path.join(current, "node_modules")
-    if (fs.existsSync(modules)) {
+    const modules = join(current, "node_modules")
+    if (existsSync(modules)) {
       for (const name of names) {
-        const candidate = path.join(modules, name, "bin", binary)
-        if (fs.existsSync(candidate)) return candidate
+        const candidate = join(modules, name, "bin", binary)
+        if (existsSync(candidate)) return candidate
       }
     }
-    const parent = path.dirname(current)
+    const parent = dirname(current)
     if (parent === current) {
       return
     }
@@ -186,7 +189,7 @@ function findBinary(startDir) {
   }
 }
 
-const resolved = envPath || (fs.existsSync(cached) ? cached : findBinary(scriptDir))
+const resolved = envPath || (existsSync(cached) ? cached : findBinary(scriptDir))
 if (!resolved) {
   console.error(
     "It seems that your package manager failed to install the right version of the opencode CLI for your platform. You can try manually installing " +

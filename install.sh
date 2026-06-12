@@ -93,6 +93,19 @@ echo -e "${CYAN}Building...${NC}"
 cd packages/opencode
 bun run build 2>/dev/null || echo -e "${ORANGE}WARN: Build script not found, skipping${NC}"
 
+# ─── Create binary symlink ──────────────────────────────────
+PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64) ARCH="x64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+esac
+NATIVE_BIN="dist/opencode-${PLATFORM}-${ARCH}/bin/opencode"
+if [ -f "$NATIVE_BIN" ]; then
+  ln -sf "$(pwd)/$NATIVE_BIN" "$(pwd)/bin/.opencode"
+  echo -e "${GREEN}Linked native binary: ${PLATFORM}-${ARCH}${NC}"
+fi
+
 # ─── Global binary ──────────────────────────────────────────
 echo -e "${CYAN}Installing dreamcode binary globally...${NC}"
 npm install -g . 2>/dev/null || echo -e "${ORANGE}WARN: npm install -g failed, you may need to run manually${NC}"
