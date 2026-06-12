@@ -23,7 +23,7 @@ export interface Interface {
   readonly pull: (url: string) => Effect.Effect<string[]>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/SkillDiscovery") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/SkillDiscovery") {}
 
 export const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | HttpClient.HttpClient> = Layer.effect(
   Service,

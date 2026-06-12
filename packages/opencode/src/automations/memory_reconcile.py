@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/ronya/Pilot-Project")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 MEMORY_DIR = EVOLUTION_DIR / "memory"
 MEMORY_INDEX = EVOLUTION_DIR / "memory_index.json"

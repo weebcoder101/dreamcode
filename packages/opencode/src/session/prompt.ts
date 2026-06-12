@@ -33,6 +33,8 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
+import { SensorGate } from "@/skill/sensor-gate"
+import { ContextCompressor } from "./context-compressor"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { Shell } from "@/shell/shell"
@@ -92,7 +94,7 @@ export interface Interface {
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/SessionPrompt") {}
 
 export const layer = Layer.effect(
   Service,
@@ -1333,6 +1335,46 @@ export const layer = Layer.effect(
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+
+            // ─── Sensor Gate: Native Dream Mode ─────────────────────────
+            // Runs classification + skill chain selection before every response.
+            // Only on step 1 (first user message) to avoid re-classifying on tool loops.
+            if (step === 1) {
+              const sensorGate = yield* SensorGate.Service
+              const userText = msgs
+                .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
+                .flatMap((m) => m.parts)
+                .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
+                .map((p) => p.text)
+                .join("\n")
+
+              if (userText.trim()) {
+                const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
+                if (gateResult && !gateResult.is_social_greeting) {
+                  const sensorBlock = [
+                    "<sensor-gate>",
+                    `Intent: ${gateResult.intent}`,
+                    `Mode: ${gateResult.mode}`,
+                    `Primary Skill: ${gateResult.primary_skill}`,
+                    `Support Skills: ${gateResult.support_skills.join(", ")}`,
+                    `Chain: ${gateResult.chain.join(" → ")}`,
+                    `Guardian: ${gateResult.guardian_decision} (${gateResult.guardian_risk})`,
+                    "",
+                    gateResult.skill_plan,
+                  ]
+
+                  // Add neuro analysis if available
+                  if (gateResult.neuro_result) {
+                    sensorBlock.push("", "<neuro-analysis>", gateResult.neuro_result, "</neuro-analysis>")
+                  }
+
+                  sensorBlock.push("</sensor-gate>")
+                  system.push(sensorBlock.join("\n"))
+                }
+              }
+            }
+            // ─── End Sensor Gate ────────────────────────────────────────
+
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1582,6 +1624,8 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        SensorGate.defaultLayer,
+        ContextCompressor.defaultLayer,
       ),
     ),
   ),

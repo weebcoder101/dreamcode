@@ -17,7 +17,7 @@ export interface Interface {
   readonly clear: (sessionID: SessionID) => Effect.Effect<void>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/TaskGateState") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/TaskGateState") {}
 
 export const layer = Layer.effect(
   Service,

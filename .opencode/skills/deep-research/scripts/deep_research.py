@@ -26,7 +26,7 @@ from pathlib import Path
 
 import httpx
 
-PROJECT_ROOT = Path.cwd() if (Path.cwd() / ".opencode").is_dir() else next(p for p in [Path.cwd()] + list(Path.cwd().parents) if (p / ".opencode").is_dir())
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 RESEARCH_DIR = EVOLUTION_DIR / "research"
 

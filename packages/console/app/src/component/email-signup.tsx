@@ -17,7 +17,6 @@ const emailSignup = action(async (formData: FormData) => {
       email_address: emailAddress,
     }),
   })
-  console.log(response)
   return true
 })
 

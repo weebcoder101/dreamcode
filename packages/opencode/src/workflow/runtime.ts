@@ -139,7 +139,7 @@ export interface Interface {
   readonly resume: (input: { runID: string; agentTimeoutMs?: number }) => Effect.Effect<{ runID: string; resumed: boolean }>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/WorkflowRuntime") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/WorkflowRuntime") {}
 
 /** A plain promise-based semaphore: at most `max` concurrent `run` callbacks. */
 function makeSemaphore(max: number) {

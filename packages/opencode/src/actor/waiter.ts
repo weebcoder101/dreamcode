@@ -47,7 +47,7 @@ export interface Interface {
   }) => Effect.Effect<WaitResult>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/ActorWaiter") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/ActorWaiter") {}
 
 export const layer: Layer.Layer<Service, never, Bus.Service | ActorRegistry.Service | Session.Service> = Layer.effect(
   Service,

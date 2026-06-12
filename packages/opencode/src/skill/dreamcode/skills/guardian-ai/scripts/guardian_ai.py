@@ -30,7 +30,7 @@ from pathlib import Path
 # Config
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path("/home/ronya/Pilot-Project")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 GUARDIAN_LOG = EVOLUTION_DIR / "guardian_ai.jsonl"
 

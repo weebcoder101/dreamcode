@@ -131,8 +131,6 @@ export const anthropicHelper: ProviderHelper = ({ reqModel, providerModel }) => 
               messages.push([`event: ${eventName}`, "\n", `data: ${bytes}`, "\n\n"].join(""))
             }
           } catch (e) {
-            console.log("@@@EE@@@")
-            console.log(e)
             break
           }
         }

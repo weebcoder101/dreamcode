@@ -25,7 +25,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/ronya/Pilot-Project")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 SKILLS_DIR = PROJECT_ROOT / ".opencode" / "skills"
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 CONFIG_PATH = PROJECT_ROOT / ".opencode" / "config" / "opencode.yaml"

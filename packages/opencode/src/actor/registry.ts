@@ -76,7 +76,7 @@ export interface Interface {
   readonly allocateActorID: (sessionID: SessionID, agentType: string) => Effect.Effect<string>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/ActorRegistry") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/ActorRegistry") {}
 
 export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
   Service,

@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/ronya/Pilot-Project")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 SCORE_FILE = EVOLUTION_DIR / "agent_score.json"
 RUN_LOG = EVOLUTION_DIR / "run_log.jsonl"

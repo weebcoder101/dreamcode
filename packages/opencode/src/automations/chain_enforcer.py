@@ -21,7 +21,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/ronya/Pilot-Project")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 SKILLS_DIR = PROJECT_ROOT / ".opencode" / "skills"
 

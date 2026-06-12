@@ -20,7 +20,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
 NEUROHarness = SCRIPT_DIR / "neuro_harness.py"
-CHAINS_DIR = Path("/home/ronya/Pilot-Project/.neuro/chains/latest")
+CHAINS_DIR = Path("$(pwd)/.neuro/chains/latest")
 
 
 # Iteration focus areas (from SKILL.md)

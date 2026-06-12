@@ -171,7 +171,7 @@ export interface Interface {
   readonly getForkContext: (actorID: string) => Effect.Effect<ForkContext | undefined>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/Actor") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/Actor") {}
 
 export const layer = Layer.effect(
   Service,

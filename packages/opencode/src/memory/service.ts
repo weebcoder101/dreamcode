@@ -30,7 +30,7 @@ export interface Interface {
   >
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/Memory") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/Memory") {}
 
 export const layer: Layer.Layer<Service, never, Config.Service> = Layer.effect(
   Service,

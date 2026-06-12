@@ -2,21 +2,22 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import * as fs from "fs"
 import * as path from "path"
-import { execSync } from "child_process"
+import { execFileSync } from "child_process"
 import DESCRIPTION from "./skill.txt"
 
 const PROJECT_ROOT = process.cwd()
-const SKILLS_DIR = path.join(PROJECT_ROOT, ".opencode", "skills")
+const SKILLS_DIR = path.join(PROJECT_ROOT, ".dreamcode", "skills")
 const SENSOR_GATE = path.join(SKILLS_DIR, "chain-orchestrator", "scripts", "sensor_gate.py")
-const CHAIN_LOG = path.join(PROJECT_ROOT, ".opencode", "chain_log.jsonl")
+const CHAIN_LOG = path.join(PROJECT_ROOT, ".dreamcode", "chain_log.jsonl")
 const SCORE_FILE = path.join(PROJECT_ROOT, "evolution", "agent_score.json")
 
 function getAvailableSkills(): string[] {
   try {
     if (!fs.existsSync(SENSOR_GATE)) return []
-    const result = execSync(`python3 ${SENSOR_GATE} --list-skills 2>/dev/null || echo ""`, {
+    const result = execFileSync("python3", [SENSOR_GATE, "--list-skills"], {
       encoding: "utf8",
       timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
     }).trim()
     return result.split("\n").filter(Boolean)
   } catch {
@@ -99,9 +100,10 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
 
           if (runGate && fs.existsSync(SENSOR_GATE)) {
             try {
-              const gateResult = execSync(
-                `python3 ${SENSOR_GATE} --prompt ${JSON.stringify(params.prompt)} 2>&1 | head -20`,
-                { encoding: "utf8", timeout: 15000 }
+              const gateResult = execFileSync(
+                "python3",
+                [SENSOR_GATE, "--prompt", params.prompt],
+                { encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"] }
               )
               results.push(`[SENSOR GATE]\n${gateResult}`)
               score += 10
@@ -119,9 +121,10 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
 
           if (fs.existsSync(skillScript)) {
             try {
-              const skillResult = execSync(
-                `python3 ${skillScript} --prompt ${JSON.stringify(params.prompt)} 2>&1`,
-                { encoding: "utf8", timeout: 60000 }
+              const skillResult = execFileSync(
+                "python3",
+                [skillScript, "--prompt", params.prompt],
+                { encoding: "utf8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"] }
               )
               results.push(`[SKILL: ${params.skill}]\n${skillResult}`)
               score += 5
