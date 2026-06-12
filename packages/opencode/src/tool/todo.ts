@@ -59,7 +59,7 @@ export const Parameters = Schema.Struct({
   }),
 })
 
-export const TodoTool = Tool.define<typeof Parameters, {}>(
+export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
   "todowrite",
   Effect.gen(function* () {
     return {
