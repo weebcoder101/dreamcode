@@ -74,7 +74,7 @@ def check_model_available(model: str, timeout: int = 30) -> bool:
             ["opencode", "run", "say ok", "-m", model,
              "--dangerously-skip-permissions", "--format", "json"],
             capture_output=True, text=True, timeout=timeout,
-            cwd="/home/ronya/Pilot-Project",
+            cwd=os.environ.get("PROJECT_ROOT", str(Path.cwd())),
         )
         available = result.returncode == 0
         _model_health[model] = {"available": available, "failures": 0}

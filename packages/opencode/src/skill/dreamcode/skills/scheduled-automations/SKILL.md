@@ -84,7 +84,7 @@ To actually run on schedule, add to system crontab:
 crontab -e
 
 # Add this line (runs the scheduler's due jobs every minute)
-* * * * * cd /home/ronya/Pilot-Project && python3 .opencode/skills/scheduled-automations/scripts/scheduler.py tick >> /tmp/scheduler.log 2>&1
+* * * * * cd $(pwd) && python3 .opencode/skills/scheduled-automations/scripts/scheduler.py tick >> /tmp/scheduler.log 2>&1
 ```
 
 The `tick` command checks for due jobs and runs them.

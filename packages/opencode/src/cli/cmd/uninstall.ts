@@ -24,7 +24,7 @@ interface RemovalTargets {
 
 export const UninstallCommand = {
   command: "uninstall",
-  describe: "uninstall opencode and remove all related files",
+  describe: "uninstall dreamcode and remove all related files",
   builder: (yargs: Argv) =>
     yargs
       .option("keep-config", {
@@ -129,8 +129,8 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
 
   if (method !== "curl" && method !== "unknown") {
     const cmds: Record<string, string> = {
-      npm: "npm uninstall -g opencode-ai",
-      pnpm: "pnpm uninstall -g opencode-ai",
+      npm: "npm uninstall -g dreamcode",
+      pnpm: "pnpm uninstall -g dreamcode",
       bun: "bun remove -g opencode-ai",
       yarn: "yarn global remove opencode-ai",
       brew: "brew uninstall opencode",

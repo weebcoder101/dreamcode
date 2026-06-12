@@ -89,7 +89,7 @@ export type Interface = {
   readonly tryGetPartMetadata: (input: PartMetadataLookupInput) => Effect.Effect<KnownMessagePartMetadata | undefined>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/ACP/Session") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/ACP/Session") {}
 
 type State = Map<string, Info>
 

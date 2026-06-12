@@ -20,7 +20,7 @@ PIECES_MCP_URL = os.environ.get(
     "PIECES_MCP_URL",
     "http://localhost:39302/model_context_protocol/2024-11-05",
 )
-PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", "/home/ronya/Pilot-Project"))
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 METRICS_PATH = PROJECT_ROOT / "evolution" / "pieces_writes.jsonl"
 
 

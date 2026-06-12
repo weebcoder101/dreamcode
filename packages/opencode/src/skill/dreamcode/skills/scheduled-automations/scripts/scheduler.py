@@ -28,7 +28,7 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path("/home/ronya/Pilot-Project")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 AUTOMATIONS_DIR = PROJECT_ROOT / ".opencode" / "automations"
 JOBS_FILE = AUTOMATIONS_DIR / "jobs.json"
 HISTORY_FILE = AUTOMATIONS_DIR / "history.jsonl"

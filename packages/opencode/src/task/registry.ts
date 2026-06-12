@@ -78,7 +78,7 @@ export interface Interface {
   readonly events: (input: { session_id: SessionID; task_id: string }) => Effect.Effect<TaskEvent[]>
 }
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/TaskRegistry") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/TaskRegistry") {}
 
 export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = Layer.effect(
   Service,

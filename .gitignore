@@ -4,6 +4,8 @@ node_modules
 .sst
 .env
 .env.local
+.env.secret
+.env.neuro
 .idea
 .vscode/*
 !.vscode/settings.json

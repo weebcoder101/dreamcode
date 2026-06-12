@@ -89,6 +89,11 @@ fi
 echo -e "${CYAN}Installing dependencies...${NC}"
 bun install
 
+echo -e "${CYAN}Installing Python dependencies for skill scripts...${NC}"
+if [ -f "$INSTALL_DIR/.dreamcode/requirements.txt" ]; then
+  pip3 install -r "$INSTALL_DIR/.dreamcode/requirements.txt" 2>/dev/null || echo -e "${ORANGE}WARN: pip install failed, some skills may not work${NC}"
+fi
+
 echo -e "${CYAN}Building...${NC}"
 cd packages/opencode
 bun run build 2>/dev/null || echo -e "${ORANGE}WARN: Build script not found, skipping${NC}"
@@ -143,6 +148,11 @@ model_router: true      # Enable 120+ model routing
 YAML
   echo -e "${GREEN}Created default config at $CONFIG_DIR/config.yaml${NC}"
 fi
+
+# ─── DreamCode directories ──────────────────────────────────
+DREAMCODE_DIR="$HOME/.dreamcode"
+mkdir -p "$DREAMCODE_DIR/skills" "$DREAMCODE_DIR/config" "$DREAMCODE_DIR/scripts" "$DREAMCODE_DIR/automations" "$DREAMCODE_DIR/automations/prompts"
+echo -e "${GREEN}Created dreamcode directories at $DREAMCODE_DIR${NC}"
 
 # ─── Verify ─────────────────────────────────────────────────
 echo ""

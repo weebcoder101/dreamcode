@@ -2,7 +2,7 @@
 
 ## State Summary
 **Date/Time:** 2026-05-20
-**Repo Root:** /home/ronya/Pilot-Project
+**Repo Root:** $(pwd)
 **Live Neuro Status:** Connected
 
 ## Configuration
