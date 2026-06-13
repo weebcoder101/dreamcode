@@ -1,3 +1,4 @@
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Context, Layer } from "effect"
 import * as fs from "fs"
 import * as path from "path"
@@ -198,5 +199,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+export const node = LayerNode.make(layer, [])
 
 export * as ContextCompressor from "./context-compressor"

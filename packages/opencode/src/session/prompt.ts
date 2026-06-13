@@ -34,6 +34,7 @@ import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { SensorGate } from "@/skill/sensor-gate"
+import { ContextCompressor } from "./context-compressor"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { Shell } from "@/shell/shell"
@@ -1624,6 +1625,7 @@ export const defaultLayer = Layer.suspend(() =>
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
         SensorGate.defaultLayer,
+        ContextCompressor.defaultLayer,
       ),
     ),
   ),
