@@ -427,6 +427,97 @@ Text to rewrite:
     }
 
 
+def enrich_with_neuro(
+    metadata: dict[str, Any],
+    token_budget: int = 40_000,
+) -> dict[str, Any]:
+    """Use NEURO to enrich metadata with key insights and relationships.
+
+    Takes the metadata dict produced by extract_key_differentials() and
+    calls the NEURO API to add key_insights and relationships fields.
+    """
+    import urllib.error
+    import urllib.request
+
+    if not NEURO_API_KEY:
+        print("  [NEURO] No API key — skipping enrichment")
+        return metadata
+
+    # Build a summary of the metadata for NEURO to analyze
+    metadata_summary = json.dumps(
+        {
+            "entities": metadata.get("entities", [])[:30],
+            "decisions": metadata.get("decisions", [])[:20],
+            "open_items": metadata.get("open_items", [])[:20],
+            "code_blocks": len(metadata.get("code_blocks", [])),
+            "api_contracts": metadata.get("api_contracts", [])[:10],
+            "dependencies": metadata.get("dependencies", [])[:20],
+            "summary": metadata.get("summary", ""),
+        },
+        indent=2,
+        default=str,
+    )
+
+    user_msg = f"""Analyze this extracted metadata from a codebase and provide:
+1. key_insights: A list of 3-5 key architectural insights or patterns
+2. relationships: A list of entity relationships as objects with "from", "to", "type" fields
+
+Return ONLY valid JSON with this structure:
+{{"key_insights": ["insight1", ...], "relationships": [{{"from": "entity1", "to": "entity2", "type": "relates_to"}}, ...]}}
+
+Metadata to analyze:
+{metadata_summary}"""
+
+    payload = {
+        "model": NEURO_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an architectural analyst. Extract key insights and entity relationships from metadata. Return ONLY valid JSON.",
+            },
+            {"role": "user", "content": user_msg},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 2048,
+        "response_format": {"type": "json_object"},
+    }
+
+    payload_bytes = json.dumps(payload).encode()
+    target = NEURO_BASE_URL.rstrip("/")
+    if not target.endswith("/chat/completions"):
+        target += "/chat/completions"
+
+    req = urllib.request.Request(
+        target,
+        data=payload_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {NEURO_API_KEY}",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode())
+            content_str = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+            result = _extract_json(content_str)
+
+            if result:
+                if "key_insights" in result:
+                    metadata["key_insights"] = result["key_insights"]
+                    print(f"  [NEURO] Added {len(result['key_insights'])} key insights")
+                if "relationships" in result:
+                    metadata["relationships"] = result["relationships"]
+                    print(f"  [NEURO] Added {len(result['relationships'])} relationships")
+            else:
+                print("  [NEURO] Could not parse enrichment response")
+
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        print(f"  [NEURO] Enrichment failed (non-fatal): {exc}")
+
+    return metadata
+
+
 def _extract_json(text: str) -> dict | None:
     """Extract JSON object from text."""
     if not text:

@@ -52,7 +52,6 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SensorGate } from "@/skill/sensor-gate"
-import { ContextCompressor } from "@/session/context-compressor"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -102,7 +101,6 @@ export const AppLayer = Layer.mergeAll(
   ShareNext.defaultLayer,
   SessionShare.defaultLayer,
   SensorGate.defaultLayer,
-  ContextCompressor.defaultLayer,
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(InstanceLayer.layer),
