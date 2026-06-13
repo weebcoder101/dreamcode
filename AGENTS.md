@@ -172,3 +172,41 @@ For dreamcode repo:
 bash /home/ronya/Pilot-Project/.opencode/scripts/safe_git_push.sh origin dreamcode-fork "msg" /home/ronya/dreamcode
 
 Check status: tail -10 /home/ronya/Pilot-Project/.opencode/git_push.log
+
+## TYPECHECK — NEVER run `bun turbo typecheck` with default concurrency
+
+`bun turbo typecheck` at the monorepo root spawns 29 parallel tsc processes
+and crashes WSL via OOM (Hyper-V memory exhaustion). This has happened
+repeatedly (Jun 13 2026).
+
+ALWAYS use limited concurrency:
+
+```bash
+bun turbo typecheck --concurrency=2
+```
+
+Or check only the specific package that changed:
+
+```bash
+cd packages/opencode && bun run typecheck
+```
+
+NEVER run the full root typecheck in a dreamcode session. Run it only from
+Windows PowerShell or a dedicated WSL terminal not shared with dreamcode.
+
+## HARD STOP — bun turbo typecheck IS BANNED IN DREAMCODE SESSIONS
+
+Running `bun turbo typecheck` in any form from inside a dreamcode session
+CRASHES WSL. This has happened 4+ times today (Jun 13 2026).
+
+YOU ARE FORBIDDEN FROM RUNNING:
+- bun turbo typecheck
+- bun turbo typecheck --concurrency=N
+- turbo typecheck
+- npx turbo typecheck
+
+If you need to verify types, run ONLY:
+cd packages/opencode && bun run typecheck 2>&1 | tail -20
+
+This is non-negotiable. No exceptions. The typecheck ban applies for the
+entire dreamcode session lifetime.
