@@ -13,8 +13,26 @@ export interface InstanceState<A, E = never, R = never> {
 
 export const context = Effect.gen(function* () {
   const ctx = yield* InstanceRef
-  if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
+  if (!ctx) return FallbackContext
   return ctx
+})
+
+/** Fallback context used when InstanceRef is not available. Callers must check for this. */
+export const FallbackContext: InstanceContext = {
+  directory: process.cwd(),
+  worktree: process.cwd(),
+  project: {
+    id: "default",
+    worktree: process.cwd(),
+    time: { created: Date.now(), updated: Date.now() },
+    sandboxes: [],
+  },
+}
+
+/** Like `context` but returns `null` when no InstanceRef is available instead of dying. */
+export const contextOrNull = Effect.gen(function* () {
+  const ctx = yield* InstanceRef
+  return ctx ?? null
 })
 
 export const workspaceID = Effect.gen(function* () {
@@ -31,7 +49,9 @@ export const make = <A, E = never, R = never>(
       capacity: Number.POSITIVE_INFINITY,
       lookup: () =>
         Effect.gen(function* () {
-          return yield* init(yield* context)
+          const ctx = yield* InstanceRef
+          if (!ctx) return yield* init(FallbackContext)
+          return yield* init(ctx)
         }),
     })
 

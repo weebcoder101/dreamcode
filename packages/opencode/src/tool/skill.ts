@@ -10,6 +10,7 @@ const SKILLS_DIR = path.join(PROJECT_ROOT, ".dreamcode", "skills")
 const SENSOR_GATE = path.join(SKILLS_DIR, "chain-orchestrator", "scripts", "sensor_gate.py")
 const CHAIN_LOG = path.join(PROJECT_ROOT, ".dreamcode", "chain_log.jsonl")
 const SCORE_FILE = path.join(PROJECT_ROOT, "evolution", "agent_score.json")
+const ERROR_LOG = path.join(PROJECT_ROOT, ".dreamcode", "error_log.jsonl")
 
 function getAvailableSkills(): string[] {
   try {
@@ -48,6 +49,21 @@ function logSkillExecution(skill: string, result: string, score: number) {
   }
   fs.mkdirSync(path.dirname(CHAIN_LOG), { recursive: true })
   fs.appendFileSync(CHAIN_LOG, JSON.stringify(entry) + "\n")
+}
+
+function logError(source: string, error: unknown) {
+  try {
+    const message = error instanceof Error ? error.message : String(error)
+    const entry = {
+      timestamp: new Date().toISOString(),
+      source,
+      message,
+    }
+    fs.mkdirSync(path.dirname(ERROR_LOG), { recursive: true })
+    fs.appendFileSync(ERROR_LOG, JSON.stringify(entry) + "\n")
+  } catch {
+    // Silently fail if error logging unavailable
+  }
 }
 
 function recordScore(event: string, points: number, details: string) {
@@ -109,9 +125,10 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
               score += 10
               recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${params.skill}`)
             } catch (e) {
-              results.push(`[SENSOR GATE FAILED]: ${e}`)
+              logError("sensor_gate", e)
+              results.push(`[SENSOR GATE: skipped (logged)]`)
               score -= 25
-              recordScore("sensor_gate_skipped", -25, `Sensor gate failed: ${e}`)
+              recordScore("sensor_gate_skipped", -25, "Sensor gate failed — see error_log.jsonl")
             }
           }
 
@@ -135,9 +152,10 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
               }
               logSkillExecution(params.skill, skillResult, score)
             } catch (e) {
-              results.push(`[SKILL ERROR]: ${e}`)
+              logError(`skill:${params.skill}`, e)
+              results.push(`[SKILL: ${params.skill} — failed (logged)]`)
               score -= 15
-              recordScore("skill_skipped", -15, `Skill ${params.skill} failed: ${e}`)
+              recordScore("skill_skipped", -15, `Skill ${params.skill} failed — see error_log.jsonl`)
             }
           } else if (fs.existsSync(skillMd)) {
             const content = fs.readFileSync(skillMd, "utf8")

@@ -128,7 +128,7 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
             ),
           )
           const result = yield* execute(decoded as Schema.Schema.Type<Parameters>, ctx)
-          if (result.metadata.truncated !== undefined) {
+          if (result.metadata?.truncated !== undefined) {
             return result
           }
           const agent = yield* agents.get(ctx.agent)
