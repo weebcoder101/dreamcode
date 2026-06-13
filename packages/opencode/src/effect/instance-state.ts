@@ -3,6 +3,8 @@ import type { InstanceContext } from "@/project/instance-context"
 import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import { registerDisposer } from "./instance-registry"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
+import { Project } from "@opencode-ai/core/project"
+import { AbsolutePath } from "@opencode-ai/core/schema"
 
 const TypeId = "~opencode/InstanceState"
 
@@ -19,11 +21,11 @@ export const context = Effect.gen(function* () {
 
 /** Fallback context used when InstanceRef is not available. Callers must check for this. */
 export const FallbackContext: InstanceContext = {
-  directory: process.cwd(),
-  worktree: process.cwd(),
+  directory: AbsolutePath.make(process.cwd()),
+  worktree: AbsolutePath.make(process.cwd()),
   project: {
-    id: "default",
-    worktree: process.cwd(),
+    id: Project.ID.make("default"),
+    worktree: AbsolutePath.make(process.cwd()),
     time: { created: Date.now(), updated: Date.now() },
     sandboxes: [],
   },

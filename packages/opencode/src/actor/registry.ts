@@ -1,14 +1,14 @@
-import { Effect, Layer, Context, Schedule } from "effect"
-import { Database, inArray, eq, and, lte, sql } from "@/storage"
-import { Bus } from "@/bus"
+import { Effect, Layer, Context, Schedule, Logger } from "effect"
+import { Database } from "@/storage/storage"
+import { inArray, eq, and, lte, sql } from "drizzle-orm"
+import { GlobalBus } from "@/bus/global"
 import type { SessionID, MessageID } from "@/session/schema"
 import { ActorRegistryTable } from "./actor.sql"
 import type { Actor, ActorStatus, ActorOutcome, ContextMode, Lifecycle, SpawnMode, ToolWhitelist } from "./schema"
 import * as Events from "./events"
-import { Log } from "@/util"
-import { SYSTEM_SPAWNED_AGENT_TYPES } from "@/agent/config"
 
-const log = Log.create({ service: "actor.registry" })
+const log = Effect.log
+const SYSTEM_SPAWNED_AGENT_TYPES = new Set(["checkpointer", "writer"])
 
 const STUCK_THRESHOLD_MS = 5 * 60 * 1000 // 5 minutes
 const SCAN_INTERVAL_MS = 60 * 1000 // every 60s
