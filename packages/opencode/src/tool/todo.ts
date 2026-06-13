@@ -77,7 +77,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
           let list = loadTodoList(projectRoot, params.sessionId)
 
           function publishTodoEvent(items: Array<{ content: string; status: string; priority: string }>) {
-            yield* events.publish(TodoEvent.Updated, {
+            return events.publish(TodoEvent.Updated, {
               sessionID: params.sessionId,
               todos: items.map((i) => ({
                 content: i.content,
