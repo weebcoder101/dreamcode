@@ -5,6 +5,7 @@ import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Event as TodoEvent } from "../session/todo"
+import { SessionID } from "../session/schema"
 
 export interface TodoItem {
   id: string
@@ -69,7 +70,7 @@ export const Parameters = Schema.Struct({
   }),
 })
 
-export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
+export const TodoWriteTool = Tool.define<typeof Parameters, {}, EventV2Bridge.Service>(
   "todowrite",
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
@@ -88,7 +89,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
 
           function publishTodoEvent(items: Array<{ content: string; status: string; priority: string }>) {
             return events.publish(TodoEvent.Updated, {
-              sessionID: params.sessionId,
+              sessionID: params.sessionId as SessionID,
               todos: items.map((i) => ({
                 content: i.content,
                 status: i.status as "pending" | "in_progress" | "completed" | "cancelled",
@@ -100,7 +101,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
           switch (params.action) {
             case "create": {
               if (!resolvedItems || resolvedItems.length === 0) {
-                return { title: "TODO: No items provided", output: "Error: items array required for create action" }
+                return { title: "TODO: No items provided", output: "Error: items array required for create action", metadata: {} as {} }
               }
               const now = new Date().toISOString()
               list = {
@@ -122,14 +123,15 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
               return {
                 title: `TODO: Created ${list.items.length} items`,
                 output: `Created TODO list with ${list.items.length} items:\n${list.items.map(i => `- [${i.status}] ${i.content}`).join("\n")}`,
+                metadata: {} as {},
               }
             }
             case "update": {
               if (!list) {
-                return { title: "TODO: No list found", output: "Error: No TODO list found for this session. Create one first." }
+                return { title: "TODO: No list found", output: "Error: No TODO list found for this session. Create one first.", metadata: {} as {} }
               }
               if (!resolvedItems) {
-                return { title: "TODO: No items provided", output: "Error: items array required for update action" }
+                return { title: "TODO: No items provided", output: "Error: items array required for update action", metadata: {} as {} }
               }
               const now = new Date().toISOString()
               for (const update of resolvedItems) {
@@ -147,11 +149,12 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
               return {
                 title: `TODO: Updated ${resolvedItems.length} items`,
                 output: `Updated TODO list:\n${list.items.map(i => `- [${i.status}] ${i.content}`).join("\n")}`,
+                metadata: {} as {},
               }
             }
             case "list": {
               if (!list) {
-                return { title: "TODO: No list found", output: "No TODO list found for this session." }
+                return { title: "TODO: No list found", output: "No TODO list found for this session.", metadata: {} as {} }
               }
               const pending = list.items.filter(i => i.status === "pending")
               const inProgress = list.items.filter(i => i.status === "in_progress")
@@ -168,6 +171,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
                   "### Completed",
                   ...completed.map(i => `- [x] ${i.content}`),
                 ].join("\n"),
+                metadata: {} as {},
               }
             }
             case "clear": {
@@ -176,13 +180,13 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
                 fs.unlinkSync(todoPath)
               }
               yield* events.publish(TodoEvent.Updated, {
-                sessionID: params.sessionId,
+                sessionID: params.sessionId as SessionID,
                 todos: [],
               }).pipe(Effect.catch(() => Effect.void))
-              return { title: "TODO: Cleared", output: "TODO list cleared." }
+              return { title: "TODO: Cleared", output: "TODO list cleared.", metadata: {} as {} }
             }
             default:
-              return { title: "TODO: Unknown action", output: `Unknown action: ${params.action}. Use 'create', 'update', 'list', or 'clear'.` }
+              return { title: "TODO: Unknown action", output: `Unknown action: ${params.action}. Use 'create', 'update', 'list', or 'clear'.`, metadata: {} as {} }
           }
         }).pipe(Effect.orDie),
     }

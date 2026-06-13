@@ -103,7 +103,7 @@ type Metadata = {
   score: number
 }
 
-export const SkillTool = Tool.define<typeof Parameters, Metadata>(
+export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
   "skill",
   Effect.gen(function* () {
     return {
@@ -113,7 +113,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
         Effect.gen(function* () {
           const results: string[] = []
           let score = 0
-          const skillName = params.name ?? skillName ?? ""
+          const skillName = params.name ?? params.skill ?? ""
           const runGate = params.run_sensor_gate !== false
 
           if (runGate && fs.existsSync(SENSOR_GATE)) {
