@@ -256,7 +256,7 @@ describe("tool parameters", () => {
       const parsed = parse(Todo, {
         todos: [{ id: "t1", content: "do x", status: "pending", priority: "medium" }],
       })
-      expect(parsed.todos.length).toBe(1)
+      expect(parsed.todos!.length).toBe(1)
     })
     test("rejects missing todos", () => {
       expect(accepts(Todo, {})).toBe(false)
