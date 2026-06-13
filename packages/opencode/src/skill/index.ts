@@ -1,6 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import path from "path"
-import { pathToFileURL } from "url"
 import { Effect, Layer, Context, Schema } from "effect"
 import { NamedError } from "@opencode-ai/core/util/error"
 import type { Agent } from "@/agent/agent"
@@ -327,21 +326,23 @@ export const defaultLayer = layer.pipe(
   Layer.provide(RuntimeFlags.defaultLayer),
 )
 
+function chunk<T>(arr: T[], size: number): T[][] {
+  const result: T[][] = []
+  for (let i = 0; i < arr.length; i += size) {
+    result.push(arr.slice(i, i + size))
+  }
+  return result
+}
+
 export function fmt(list: Info[], opts: { verbose: boolean }) {
   const described = list.filter((skill) => skill.description !== undefined)
   if (described.length === 0) return "No skills are currently available."
   if (opts.verbose) {
+    const names = described.toSorted((a, b) => a.name.localeCompare(b.name)).map((s) => s.name)
     return [
       "<available_skills>",
-      ...described
-        .toSorted((a, b) => a.name.localeCompare(b.name))
-        .flatMap((skill) => [
-          "  <skill>",
-          `    <name>${skill.name}</name>`,
-          `    <description>${skill.description}</description>`,
-          `    <location>${pathToFileURL(skill.location).href}</location>`,
-          "  </skill>",
-        ]),
+      "Use the skill tool to load any skill by name. Available skills:",
+      ...chunk(names, 6).map((row) => row.join(", ")),
       "</available_skills>",
     ].join("\n")
   }

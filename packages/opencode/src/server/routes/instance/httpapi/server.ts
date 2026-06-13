@@ -60,7 +60,6 @@ import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { SensorGate } from "@/skill/sensor-gate"
-import { ContextCompressor } from "@/session/context-compressor"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { Api } from "@opencode-ai/server/api"
 import { PublicApi } from "./public"
@@ -141,7 +140,6 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
     SensorGate.defaultLayer,
-    ContextCompressor.defaultLayer,
     configHandlers,
     experimentalHandlers,
     fileHandlers,

@@ -161,7 +161,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
             }
           } else if (fs.existsSync(skillMd)) {
             const content = fs.readFileSync(skillMd, "utf8")
-            results.push(`[SKILL LOADED: ${skillName}]\n${content.slice(0, 1000)}`)
+            results.push(`[SKILL LOADED: ${skillName}]\n${content}`)
             score += 5
             recordScore("skill_executed", 5, `Skill ${skillName} loaded from SKILL.md`)
           } else {
