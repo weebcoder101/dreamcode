@@ -38,3 +38,7 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# Python bytecode
+__pycache__/
+*.pyc

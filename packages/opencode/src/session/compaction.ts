@@ -515,6 +515,7 @@ export const layer = Layer.effect(
               // This is not a stable plugin contract and may change or disappear.
               metadata: { compaction_continue: true },
               synthetic: true,
+              ignored: true,
               text,
               time: {
                 start: Date.now(),

@@ -126,6 +126,7 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const sensorGate = yield* SensorGate.Service
     const { db } = database
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
@@ -1340,7 +1341,6 @@ export const layer = Layer.effect(
             // Runs classification + skill chain selection before every response.
             // Only on step 1 (first user message) to avoid re-classifying on tool loops.
             if (step === 1) {
-              const sensorGate = yield* SensorGate.Service
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
@@ -1349,8 +1349,20 @@ export const layer = Layer.effect(
                 .join("\n")
 
               if (userText.trim()) {
-                const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
+                const gateResult = yield* sensorGate.classify(userText).pipe(
+                  Effect.catchAll((e) =>
+                    Effect.sync(() => console.error("[SensorGate] classify failed:", e)).pipe(
+                      Effect.as(null),
+                    ),
+                  ),
+                )
                 if (gateResult && !gateResult.is_social_greeting) {
+                  const compactPlan = gateResult.skill_plan
+                    .split("\n")
+                    .slice(0, 6)
+                    .join("\n")
+                    .replace(/STEP \d+:.*/g, "…")
+
                   const sensorBlock = [
                     "<sensor-gate>",
                     `Intent: ${gateResult.intent}`,
@@ -1360,12 +1372,15 @@ export const layer = Layer.effect(
                     `Chain: ${gateResult.chain.join(" → ")}`,
                     `Guardian: ${gateResult.guardian_decision} (${gateResult.guardian_risk})`,
                     "",
-                    gateResult.skill_plan,
+                    compactPlan,
                   ]
 
-                  // Add neuro analysis if available
+                  // Add neuro analysis if available (truncated)
                   if (gateResult.neuro_result) {
-                    sensorBlock.push("", "<neuro-analysis>", gateResult.neuro_result, "</neuro-analysis>")
+                    const truncated = gateResult.neuro_result.length > 500
+                      ? gateResult.neuro_result.slice(0, 500) + "\n… [truncated]"
+                      : gateResult.neuro_result
+                    sensorBlock.push("", "<neuro-analysis>", truncated, "</neuro-analysis>")
                   }
 
                   sensorBlock.push("</sensor-gate>")
