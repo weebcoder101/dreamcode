@@ -25,6 +25,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
+import { ContextCompressor } from "./context-compressor"
 
 export const Event = {
   Compacted: EventV2.define({
@@ -174,6 +175,7 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const compressor = yield* ContextCompressor.Service
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -362,6 +364,11 @@ export const layer = Layer.effect(
         stripMedia: true,
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
+
+      // RIT Compaction: compress conversation history in background
+      const conversationJson = JSON.stringify(modelMessages, null, 2)
+      const compressed = yield* compressor.compress(conversationJson)
+
       const tailIndex = selected.tail_start_id
         ? history.findIndex((message) => message.info.id === selected.tail_start_id)
         : -1
@@ -414,6 +421,10 @@ export const layer = Layer.effect(
         tools: {},
         system: [],
         messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: `[RIT Compressed Context — ${compressed.compressedTokens} tokens, ${compressed.compressionRatio.toFixed(1)}x compression]\n\n${compressed.compressed}` }],
+          },
           ...modelMessages,
           {
             role: "user",
@@ -616,6 +627,7 @@ export const node = LayerNode.make(layer, [
   Provider.node,
   EventV2Bridge.node,
   RuntimeFlags.node,
+  ContextCompressor.node,
 ])
 
 export * as SessionCompaction from "./compaction"
