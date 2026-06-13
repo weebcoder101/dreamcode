@@ -90,7 +90,8 @@ function recordScore(event: string, points: number, details: string) {
 }
 
 export const Parameters = Schema.Struct({
-  skill: Schema.String.annotate({ description: "Skill name from the 37-skill graph" }),
+  name: Schema.String.annotate({ description: "Skill name from the 37-skill graph" }),
+  skill: Schema.optional(Schema.String).annotate({ description: "Skill name (deprecated, use name)" }),
   prompt: Schema.String.annotate({ description: "Task prompt to pass to the skill" }),
   run_sensor_gate: Schema.optional(Schema.Boolean).annotate({
     description: "Run sensor gate classification first (default: true, MANDATORY)",
@@ -112,6 +113,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
         Effect.gen(function* () {
           const results: string[] = []
           let score = 0
+          const skillName = params.name ?? skillName ?? ""
           const runGate = params.run_sensor_gate !== false
 
           if (runGate && fs.existsSync(SENSOR_GATE)) {
@@ -123,7 +125,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
               )
               results.push(`[SENSOR GATE]\n${gateResult}`)
               score += 10
-              recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${params.skill}`)
+              recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${skillName}`)
             } catch (e) {
               logError("sensor_gate", e)
               results.push(`[SENSOR GATE: skipped (logged)]`)
@@ -132,8 +134,8 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
             }
           }
 
-          const skillDir = path.join(SKILLS_DIR, params.skill)
-          const skillScript = path.join(skillDir, "scripts", `${params.skill}.py`)
+          const skillDir = path.join(SKILLS_DIR, skillName)
+          const skillScript = path.join(skillDir, "scripts", `${skillName}.py`)
           const skillMd = path.join(skillDir, "SKILL.md")
 
           if (fs.existsSync(skillScript)) {
@@ -143,36 +145,36 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata>(
                 [skillScript, "--prompt", params.prompt],
                 { encoding: "utf8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"] }
               )
-              results.push(`[SKILL: ${params.skill}]\n${skillResult}`)
+              results.push(`[SKILL: ${skillName}]\n${skillResult}`)
               score += 5
-              recordScore("skill_executed", 5, `Skill ${params.skill} executed`)
-              if (params.skill.includes("dream") || params.skill.includes("breakthrough")) {
+              recordScore("skill_executed", 5, `Skill ${skillName} executed`)
+              if (skillName.includes("dream") || skillName.includes("breakthrough")) {
                 score += 15
                 recordScore("dream_completed", 15, "Dream cycle completed")
               }
-              logSkillExecution(params.skill, skillResult, score)
+              logSkillExecution(skillName, skillResult, score)
             } catch (e) {
-              logError(`skill:${params.skill}`, e)
-              results.push(`[SKILL: ${params.skill} — failed (logged)]`)
+              logError(`skill:${skillName}`, e)
+              results.push(`[SKILL: ${skillName} — failed (logged)]`)
               score -= 15
-              recordScore("skill_skipped", -15, `Skill ${params.skill} failed — see error_log.jsonl`)
+              recordScore("skill_skipped", -15, `Skill ${skillName} failed — see error_log.jsonl`)
             }
           } else if (fs.existsSync(skillMd)) {
             const content = fs.readFileSync(skillMd, "utf8")
-            results.push(`[SKILL LOADED: ${params.skill}]\n${content.slice(0, 1000)}`)
+            results.push(`[SKILL LOADED: ${skillName}]\n${content.slice(0, 1000)}`)
             score += 5
-            recordScore("skill_executed", 5, `Skill ${params.skill} loaded from SKILL.md`)
+            recordScore("skill_executed", 5, `Skill ${skillName} loaded from SKILL.md`)
           } else {
-            results.push(`[SKILL NOT FOUND: ${params.skill}] Available: ${getAvailableSkills().join(", ")}`)
+            results.push(`[SKILL NOT FOUND: ${skillName}] Available: ${getAvailableSkills().join(", ")}`)
             score -= 15
-            recordScore("skill_skipped", -15, `Skill ${params.skill} not found`)
+            recordScore("skill_skipped", -15, `Skill ${skillName} not found`)
           }
 
           return {
-            title: `Executed skill: ${params.skill}`,
+            title: `Executed skill: ${skillName}`,
             output: results.join("\n\n"),
             metadata: {
-              skill_executed: params.skill,
+              skill_executed: skillName,
               score,
             },
           }

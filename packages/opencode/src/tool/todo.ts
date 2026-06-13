@@ -59,6 +59,14 @@ export const Parameters = Schema.Struct({
   }))).annotate({
     description: "Items to create or update"
   }),
+  todos: Schema.optional(Schema.Array(Schema.Struct({
+    id: Schema.optional(Schema.String),
+    content: Schema.String,
+    status: Schema.optional(Schema.String),
+    priority: Schema.optional(Schema.String),
+  }))).annotate({
+    description: "Items (alias for items)"
+  }),
 })
 
 export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
@@ -74,7 +82,9 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
           const instanceState = yield* InstanceState.context
           const projectRoot = instanceState.directory
 
+          function itemsOrTodos() { return params.todos ?? params.items }
           let list = loadTodoList(projectRoot, params.sessionId)
+          const resolvedItems = itemsOrTodos()
 
           function publishTodoEvent(items: Array<{ content: string; status: string; priority: string }>) {
             return events.publish(TodoEvent.Updated, {
@@ -84,19 +94,19 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
                 status: i.status as "pending" | "in_progress" | "completed" | "cancelled",
                 priority: i.priority as "high" | "medium" | "low",
               })),
-            }).pipe(Effect.catchAll(() => Effect.void))
+            }).pipe(Effect.catch(() => Effect.void))
           }
 
           switch (params.action) {
             case "create": {
-              if (!params.items || params.items.length === 0) {
+              if (!resolvedItems || resolvedItems.length === 0) {
                 return { title: "TODO: No items provided", output: "Error: items array required for create action" }
               }
               const now = new Date().toISOString()
               list = {
                 id: `todo-${Date.now()}`,
                 sessionId: params.sessionId,
-                items: params.items.map((item, index) => ({
+                items: resolvedItems.map((item, index) => ({
                   id: item.id || `item-${index}`,
                   content: item.content,
                   status: (item.status as TodoItem["status"]) || "pending",
@@ -118,11 +128,11 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
               if (!list) {
                 return { title: "TODO: No list found", output: "Error: No TODO list found for this session. Create one first." }
               }
-              if (!params.items) {
+              if (!resolvedItems) {
                 return { title: "TODO: No items provided", output: "Error: items array required for update action" }
               }
               const now = new Date().toISOString()
-              for (const update of params.items) {
+              for (const update of resolvedItems) {
                 const existing = list.items.find(i => i.id === update.id)
                 if (existing) {
                   if (update.content) existing.content = update.content
@@ -135,7 +145,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
               saveTodoList(projectRoot, params.sessionId, list)
               yield* publishTodoEvent(list.items)
               return {
-                title: `TODO: Updated ${params.items.length} items`,
+                title: `TODO: Updated ${resolvedItems.length} items`,
                 output: `Updated TODO list:\n${list.items.map(i => `- [${i.status}] ${i.content}`).join("\n")}`,
               }
             }
@@ -168,7 +178,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
               yield* events.publish(TodoEvent.Updated, {
                 sessionID: params.sessionId,
                 todos: [],
-              }).pipe(Effect.catchAll(() => Effect.void))
+              }).pipe(Effect.catch(() => Effect.void))
               return { title: "TODO: Cleared", output: "TODO list cleared." }
             }
             default:
