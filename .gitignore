@@ -42,3 +42,7 @@ tsconfig.tsbuildinfo
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Runtime logs
+.opencode/git_push.log
+.opencode/error_log.jsonl

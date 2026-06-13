@@ -3,6 +3,8 @@ import * as Tool from "./tool"
 import * as fs from "fs"
 import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Event as TodoEvent } from "../session/todo"
 
 export interface TodoItem {
   id: string
@@ -62,6 +64,8 @@ export const Parameters = Schema.Struct({
 export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
   "todowrite",
   Effect.gen(function* () {
+    const events = yield* EventV2Bridge.Service
+
     return {
       description: "Create and manage TODO lists for task planning. Use for multi-step tasks to track progress.",
       parameters: Parameters,
@@ -71,6 +75,17 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
           const projectRoot = instanceState.directory
 
           let list = loadTodoList(projectRoot, params.sessionId)
+
+          function publishTodoEvent(items: Array<{ content: string; status: string; priority: string }>) {
+            yield* events.publish(TodoEvent.Updated, {
+              sessionID: params.sessionId,
+              todos: items.map((i) => ({
+                content: i.content,
+                status: i.status as "pending" | "in_progress" | "completed" | "cancelled",
+                priority: i.priority as "high" | "medium" | "low",
+              })),
+            }).pipe(Effect.catchAll(() => Effect.void))
+          }
 
           switch (params.action) {
             case "create": {
@@ -93,6 +108,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
                 updatedAt: now,
               }
               saveTodoList(projectRoot, params.sessionId, list)
+              yield* publishTodoEvent(list.items)
               return {
                 title: `TODO: Created ${list.items.length} items`,
                 output: `Created TODO list with ${list.items.length} items:\n${list.items.map(i => `- [${i.status}] ${i.content}`).join("\n")}`,
@@ -117,6 +133,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
               }
               list.updatedAt = now
               saveTodoList(projectRoot, params.sessionId, list)
+              yield* publishTodoEvent(list.items)
               return {
                 title: `TODO: Updated ${params.items.length} items`,
                 output: `Updated TODO list:\n${list.items.map(i => `- [${i.status}] ${i.content}`).join("\n")}`,
@@ -148,6 +165,10 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}>(
               if (fs.existsSync(todoPath)) {
                 fs.unlinkSync(todoPath)
               }
+              yield* events.publish(TodoEvent.Updated, {
+                sessionID: params.sessionId,
+                todos: [],
+              }).pipe(Effect.catchAll(() => Effect.void))
               return { title: "TODO: Cleared", output: "TODO list cleared." }
             }
             default:

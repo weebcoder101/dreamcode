@@ -197,7 +197,7 @@ function build(input: SplashWriterInput, kind: "entry" | "exit", ctx: Scrollback
       })
     }
 
-    push(lines, body_left, top, "OpenCode", right, undefined, TextAttributes.BOLD)
+    push(lines, body_left, top, "Dreamcode", right, undefined, TextAttributes.BOLD)
     if (input.detail) {
       push(
         lines,
