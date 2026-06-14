@@ -1340,7 +1340,8 @@ export const layer = Layer.effect(
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
             // Runs classification + skill chain selection before every response.
             // Only on step 1 (first user message) to avoid re-classifying on tool loops.
-            if (step === 1) {
+            // Only in root sessions — subagents must NOT re-enter persona spawning.
+            if (step === 1 && !session.parentID) {
               const sensorGate = yield* SensorGate.Service
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
@@ -1402,6 +1403,8 @@ export const layer = Layer.effect(
                       const tracker = PersonaTracker.create(sessionID, gateResult.personas.length)
 
                       // Run all persona subagents concurrently via Effect.all
+                      const subagentAbort = new AbortController()
+
                       yield* Effect.all(
                         gateResult.personas.map((persona) => {
                           const personaPrompt = [
@@ -1434,7 +1437,8 @@ export const layer = Layer.effect(
                               agent: "general",
                               sessionID,
                               messageID: handle.message.id,
-                              abort: new AbortController().signal,
+                              messages: msgs,
+                              abort: subagentAbort.signal,
                               callID: ulid(),
                               extra: { bypassAgentCheck: true, promptOps: subtaskOps },
                               metadata: () => Effect.void,
@@ -1445,7 +1449,11 @@ export const layer = Layer.effect(
                             Effect.catch(() => tracker.complete(persona.name, persona.role, "Subagent failed", "error")),
                           )
                         }),
-                        { concurrency: "unbounded" },
+                        { concurrency: 3 },
+                      ).pipe(
+                        Effect.timeout("120 seconds"),
+                        Effect.catch(() => Effect.void),
+                        Effect.ensuring(Effect.sync(() => subagentAbort.abort())),
                       )
 
                       // Inject synthesis after all complete

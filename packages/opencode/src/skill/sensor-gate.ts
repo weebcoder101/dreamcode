@@ -1,7 +1,7 @@
 import { Effect, Context, Layer } from "effect"
 import * as fs from "fs"
 import * as path from "path"
-import { execFileSync } from "child_process"
+import { execFile } from "child_process"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
 
@@ -151,82 +151,78 @@ function parseSensorGateOutput(output: string): SensorGateResult {
   return result
 }
 
-function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | null {
+function runSensorGate(prompt: string, projectRoot: string): Effect.Effect<SensorGateResult | null> {
   const skillsDir = path.join(projectRoot, ".dreamcode", "skills")
   const sensorGate = path.join(skillsDir, "chain-orchestrator", "scripts", "sensor_gate.py")
 
-  if (!fs.existsSync(sensorGate)) return null
+  if (!fs.existsSync(sensorGate)) return Effect.succeed(null)
 
-  const tryRun = (timeoutMs: number): SensorGateResult | null => {
-    try {
-      const output = execFileSync("python3", [sensorGate, "--prompt", prompt], {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        stdio: ["pipe", "pipe", "pipe"],
-        cwd: projectRoot,
+  const tryRun = (timeoutMs: number): Effect.Effect<SensorGateResult | null> =>
+    Effect.tryPromise(() =>
+      new Promise<SensorGateResult | null>((resolve) => {
+        execFile("python3", [sensorGate, "--prompt", prompt], {
+          encoding: "utf8",
+          timeout: timeoutMs,
+          cwd: projectRoot,
+        }, (error: Error | null, stdout: string) => {
+          if (error || !stdout) return resolve(null)
+          resolve(parseSensorGateOutput(stdout))
+        })
       })
-      return parseSensorGateOutput(output)
-    } catch (e) {
-      return null
-    }
-  }
+    ).pipe(Effect.catch(() => Effect.succeed(null)))
 
-  // First attempt with 200s timeout
-  const result = tryRun(200_000)
-  if (result) return result
-
-  // Auto-retry with 400s timeout if first attempt failed
-  return tryRun(400_000)
+  return tryRun(15_000).pipe(
+    Effect.flatMap((result) =>
+      result ? Effect.succeed(result) : tryRun(30_000)
+    ),
+  )
 }
 
-function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): string | null {
+function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): Effect.Effect<string | null> {
   const skillsDir = path.join(projectRoot, ".dreamcode", "skills")
   const neuroHarness = path.join(skillsDir, "neuro", "scripts", "neuro_harness.py")
 
-  if (!fs.existsSync(neuroHarness)) return null
+  if (!fs.existsSync(neuroHarness)) return Effect.succeed(null)
 
-  const tryRun = (timeoutMs: number): string | null => {
-    try {
-      // Build prompt using TypeScript prompt engine
-      const promptResult = buildPrompt({
-        scanType,
-        files: [{ path: "user_prompt", content: prompt }],
-        context: prompt.slice(0, 500),
+  const tryRun = (timeoutMs: number): Effect.Effect<string | null> =>
+    Effect.tryPromise(() =>
+      new Promise<string | null>((resolve) => {
+        // Build prompt using TypeScript prompt engine
+        const promptResult = buildPrompt({
+          scanType,
+          files: [{ path: "user_prompt", content: prompt }],
+          context: prompt.slice(0, 500),
+        })
+
+        // Create a temp file with a unique name to avoid race conditions
+        const tmpDir = path.join(projectRoot, ".dreamcode", "tmp")
+        fs.mkdirSync(tmpDir, { recursive: true })
+        const tmpFile = path.join(tmpDir, `prompt_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`)
+        fs.writeFileSync(tmpFile, promptResult.userPrompt)
+
+        execFile("python3", [
+          neuroHarness,
+          "--scan-type", scanType,
+          "--file", tmpFile,
+          "--task", prompt.slice(0, 200),
+        ], {
+          encoding: "utf8",
+          timeout: timeoutMs,
+          cwd: projectRoot,
+        }, (error: Error | null, stdout: string) => {
+          // Clean up temp file
+          try { fs.unlinkSync(tmpFile) } catch {}
+          if (error || !stdout) return resolve(null)
+          resolve(stdout)
+        })
       })
+    ).pipe(Effect.catch(() => Effect.succeed(null)))
 
-      // Create a temp file with a unique name to avoid race conditions
-      const tmpDir = path.join(projectRoot, ".dreamcode", "tmp")
-      fs.mkdirSync(tmpDir, { recursive: true })
-      const tmpFile = path.join(tmpDir, `prompt_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`)
-      fs.writeFileSync(tmpFile, promptResult.userPrompt)
-
-      const output = execFileSync("python3", [
-        neuroHarness,
-        "--scan-type", scanType,
-        "--file", tmpFile,
-        "--task", prompt.slice(0, 200),
-      ], {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        stdio: ["pipe", "pipe", "pipe"],
-        cwd: projectRoot,
-      })
-
-      // Clean up temp file
-      try { fs.unlinkSync(tmpFile) } catch {}
-
-      return output
-    } catch (e) {
-      return null
-    }
-  }
-
-  // First attempt with 200s timeout
-  const result = tryRun(200_000)
-  if (result) return result
-
-  // Auto-retry with 400s timeout if first attempt failed
-  return tryRun(400_000)
+  return tryRun(30_000).pipe(
+    Effect.flatMap((result) =>
+      result ? Effect.succeed(result) : tryRun(60_000)
+    ),
+  )
 }
 
 export interface Interface {
@@ -239,7 +235,7 @@ export const layer = Layer.succeed(Service, Service.of({
   classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
     const ctx = yield* InstanceState.contextOrNull
     const directory = ctx?.directory ?? process.cwd()
-    const result = runSensorGate(prompt, directory)
+    const result = yield* runSensorGate(prompt, directory)
     if (!result) return null
 
     const shouldRunNeuro = result.risk_level === "high" ||
@@ -248,7 +244,7 @@ export const layer = Layer.succeed(Service, Service.of({
 
     if (shouldRunNeuro) {
       const scanType = result.risk_level === "high" ? "security" : "full_audit"
-      const neuroResult = runNeuroHarness(prompt, directory, scanType)
+      const neuroResult = yield* runNeuroHarness(prompt, directory, scanType)
       if (neuroResult) {
         result.neuro_result = neuroResult
       }
@@ -261,7 +257,7 @@ export const layer = Layer.succeed(Service, Service.of({
         const persona = result.personas[i]
         const scanType = PERSONA_SCAN_TYPE_MAP[persona.name] || "full_audit"
         const personaTask = `${persona.role}: ${prompt}`
-        const neuroResult = runNeuroHarness(personaTask, directory, scanType)
+        const neuroResult = yield* runNeuroHarness(personaTask, directory, scanType)
         if (neuroResult) {
           persona.neuroResult = neuroResult
         }
