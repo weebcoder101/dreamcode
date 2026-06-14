@@ -40,7 +40,11 @@ export class Service extends ConfigService.Service<Service>()("@dreamcode/Runtim
   enableExperimentalModels: bool("OPENCODE_ENABLE_EXPERIMENTAL_MODELS"),
   enableQuestionTool: bool("OPENCODE_ENABLE_QUESTION_TOOL"),
   experimentalReferences: enabledByExperimental("OPENCODE_EXPERIMENTAL_REFERENCES"),
-  experimentalBackgroundSubagents: enabledByExperimental("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
+  experimentalBackgroundSubagents: Config.all({
+    experimental,
+    enabled: Config.boolean("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS").pipe(Config.option),
+    dreamcode: Config.boolean("OPENCODE_DREAMCODE_MODE").pipe(Config.withDefault(true)),
+  }).pipe(Config.map((flags) => flags.dreamcode || flags.experimental || Option.getOrElse(flags.enabled, () => false))),
   experimentalLspTy: bool("OPENCODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("OPENCODE_EXPERIMENTAL_LSP_TOOL"),
   experimentalOxfmt: enabledByExperimental("OPENCODE_EXPERIMENTAL_OXFMT"),

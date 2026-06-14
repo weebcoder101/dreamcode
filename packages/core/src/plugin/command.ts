@@ -6,6 +6,7 @@ import { Location } from "../location"
 import { PluginV2 } from "../plugin"
 import PROMPT_INITIALIZE from "./command/initialize.txt"
 import PROMPT_REVIEW from "./command/review.txt"
+import PROMPT_RESEARCH from "./command/research.txt"
 
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("command"),
@@ -22,6 +23,11 @@ export const Plugin = PluginV2.define({
       editor.update("review", (command) => {
         command.template = PROMPT_REVIEW.replace("${path}", location.project.directory)
         command.description = "review changes [commit|branch|pr], defaults to uncommitted"
+        command.subtask = true
+      })
+      editor.update("research", (command) => {
+        command.template = PROMPT_RESEARCH
+        command.description = "deep research with parallel sub-agents [topic]"
         command.subtask = true
       })
     })

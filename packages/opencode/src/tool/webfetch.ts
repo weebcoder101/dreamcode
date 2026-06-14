@@ -7,8 +7,8 @@ import DESCRIPTION from "./webfetch.txt"
 import { isImageAttachment } from "@/util/media"
 
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
-const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds
-const MAX_TIMEOUT = 120 * 1000 // 2 minutes
+const DEFAULT_TIMEOUT = 200 * 1000 // 200 seconds
+const MAX_TIMEOUT = 200 * 1000 // 200 seconds
 
 export const Parameters = Schema.Struct({
   url: Schema.String.annotate({ description: "The URL to fetch content from" }),

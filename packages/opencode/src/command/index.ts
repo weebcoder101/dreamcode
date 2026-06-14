@@ -10,6 +10,7 @@ import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
+import PROMPT_RESEARCH from "./template/research.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -54,6 +55,7 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  RESEARCH: "research",
 } as const
 
 export interface Interface {
@@ -93,6 +95,16 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.RESEARCH] = {
+        name: Default.RESEARCH,
+        description: "deep research with parallel sub-agents [topic]",
+        source: "command",
+        get template() {
+          return PROMPT_RESEARCH
+        },
+        subtask: true,
+        hints: hints(PROMPT_RESEARCH),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

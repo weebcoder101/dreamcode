@@ -34,7 +34,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
 
-const DEFAULT_TIMEOUT = 30_000
+const DEFAULT_TIMEOUT = 200_000
 
 export const Resource = Schema.Struct({
   name: Schema.String,

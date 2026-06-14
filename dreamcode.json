@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "github": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "enabled": true,
+      "environment": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+    "filesystem": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."],
+      "enabled": true
+    },
+    "pieces-ltm": {
+      "type": "local",
+      "command": ["mcp-remote", "http://localhost:39302/model_context_protocol/2024-11-05/sse", "--allow-http", "--transport", "sse-only"],
+      "enabled": true
+    },
+    "youtube-transcript": {
+      "type": "remote",
+      "url": "https://youtube-transcript-mcp.ergut.workers.dev/sse",
+      "enabled": true
+    }
+  },
+  "plugin": [
+    ".opencode/plugins/sensor-gate-enforcer.ts"
+  ],
+  "experimental": {
+    "mcp_timeout": 300000
+  }
+}

@@ -47,7 +47,7 @@ def main():
     parser = argparse.ArgumentParser(description="NEURO API harness with prompt engine")
     parser.add_argument("--task", default="", help="Task description")
     parser.add_argument("--scan-type", default="full_audit",
-                        choices=["security", "bug_hunt", "full_audit", "test_gap"])
+                        choices=["security", "bug_hunt", "full_audit", "test_gap", "refactor"])
     parser.add_argument("--file", action="append", default=[], help="Files to analyze")
     parser.add_argument("--file-content", default="", help="Raw file contents as JSON string")
     parser.add_argument("--automation-context", default="{}", help="JSON automation context")
@@ -146,6 +146,7 @@ def main():
             "security": "security",
             "bug_hunt": "debugging",
             "test_gap": "testing",
+            "refactor": "refactoring",
         }
         skill_for_router = scan_to_skill.get(args.scan_type, "neuro")
         task_context = router.analyze_task(args.task, [skill_for_router])

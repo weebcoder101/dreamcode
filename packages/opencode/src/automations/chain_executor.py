@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -31,8 +32,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
-SKILLS_DIR = PROJECT_ROOT / ".opencode" / "skills"
-AUTOMATIONS_DIR = PROJECT_ROOT / ".opencode" / "automations"
+SKILLS_DIR = PROJECT_ROOT / ".dreamcode" / "skills"
+AUTOMATIONS_DIR = PROJECT_ROOT / ".dreamcode" / "automations"
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 
 sys.path.insert(0, str(AUTOMATIONS_DIR))

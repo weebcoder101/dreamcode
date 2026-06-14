@@ -1,0 +1,48 @@
+{
+  "id": "todo-1781459278262",
+  "sessionId": "ses_1393b237cffelUj1gIZPBMmun4",
+  "items": [
+    {
+      "id": "1",
+      "content": "Increase all timeouts to 200s (RPC, NEURO, subagent, etc.)",
+      "status": "completed",
+      "priority": "high",
+      "createdAt": "2026-06-14T17:47:58.262Z",
+      "updatedAt": "2026-06-14T17:55:14.644Z"
+    },
+    {
+      "id": "2",
+      "content": "Remove context truncation - full NEURO results",
+      "status": "completed",
+      "priority": "high",
+      "createdAt": "2026-06-14T17:47:58.262Z",
+      "updatedAt": "2026-06-14T17:55:14.644Z"
+    },
+    {
+      "id": "3",
+      "content": "Add auto-retry on timeout with extended time",
+      "status": "completed",
+      "priority": "high",
+      "createdAt": "2026-06-14T17:47:58.262Z",
+      "updatedAt": "2026-06-14T17:55:14.644Z"
+    },
+    {
+      "id": "4",
+      "content": "Add per-persona NEURO enrichment",
+      "status": "completed",
+      "priority": "high",
+      "createdAt": "2026-06-14T17:47:58.262Z",
+      "updatedAt": "2026-06-14T17:55:14.644Z"
+    },
+    {
+      "id": "5",
+      "content": "Verify all changes",
+      "status": "completed",
+      "priority": "high",
+      "createdAt": "2026-06-14T17:47:58.262Z",
+      "updatedAt": "2026-06-14T17:55:14.644Z"
+    }
+  ],
+  "createdAt": "2026-06-14T17:47:58.262Z",
+  "updatedAt": "2026-06-14T17:55:14.644Z"
+}

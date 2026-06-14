@@ -141,7 +141,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
               const gateResult = execFileSync(
                 "python3",
                 [SENSOR_GATE, "--prompt", params.prompt],
-                { encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"] }
+                { encoding: "utf8", timeout: 200_000, stdio: ["pipe", "pipe", "pipe"] }
               )
               results.push(`[SENSOR GATE]\n${sanitizeSensorGateOutput(gateResult)}`)
               score += 10
@@ -163,7 +163,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
               const skillResult = execFileSync(
                 "python3",
                 [skillScript, "--prompt", params.prompt],
-                { encoding: "utf8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"] }
+                { encoding: "utf8", timeout: 200_000, stdio: ["pipe", "pipe", "pipe"] }
               )
               results.push(`[SKILL: ${skillName}]\n${skillResult}`)
               score += 5

@@ -2,7 +2,7 @@ type Definition = {
   [method: string]: (input: any) => any
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000
+const DEFAULT_TIMEOUT_MS = 200_000
 
 export function listen(rpc: Definition) {
   onmessage = async (evt) => {

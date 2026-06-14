@@ -1,5 +1,5 @@
 {
-  "total": 45,
+  "total": 345,
   "history": [
     {
       "timestamp": "2026-06-14T14:46:01.081Z",
@@ -42,6 +42,222 @@
       "points": 5,
       "total_after": 45,
       "details": "Skill pieces-ltm loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-14T23:55:28.821488+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 55,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T23:55:58.140194+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 65,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T23:56:09.080274+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 75,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T23:56:20.467497+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 85,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:00:21.545179+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 95,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:01:10.937982+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 105,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:04:45.900294+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 115,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:05:20.431799+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 125,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:05:47.764437+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 135,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:41:37.136594+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 145,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:42:33.362194+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 155,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:49:30.296300+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 165,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:49:59.434517+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 175,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:55:38.783294+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 185,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:55:48.542407+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 195,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:56:07.431948+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 205,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:56:50.164843+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 215,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:57:12.967808+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 225,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:57:33.146113+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 235,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:57:58.735239+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 245,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:58:09.167703+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 255,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:58:36.827380+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 265,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:59:06.813027+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 275,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:59:16.638967+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 285,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:59:45.171384+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 295,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:59:55.440390+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 305,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T01:00:20.882776+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 315,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T01:00:59.249335+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 325,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T01:01:30.986144+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 335,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T01:02:10.857792+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 345,
+      "details": "Sensor gate executed"
     }
-  ]
+  ],
+  "current_streak": 30,
+  "best_streak": 30,
+  "total_runs": 30,
+  "successful_runs": 30,
+  "sensor_gate_violations": 0,
+  "dream_violations": 0
 }

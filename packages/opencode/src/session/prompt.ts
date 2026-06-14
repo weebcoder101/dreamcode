@@ -34,6 +34,7 @@ import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { SensorGate } from "@/skill/sensor-gate"
+import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
@@ -1370,6 +1371,92 @@ export const layer = Layer.effect(
 
                   sensorBlock.push("</sensor-gate>")
                   system.push(sensorBlock.join("\n"))
+
+                  // ─── Persona System Injection ─────────────────────────
+                  if (gateResult.personas.length > 0) {
+                    const personaLines = [
+                      "<persona-system>",
+                      `You are the ARCHITECT. You have spawned ${gateResult.personas.length} specialist agent${gateResult.personas.length > 1 ? "s" : ""}:`,
+                      "",
+                    ]
+                    for (let i = 0; i < gateResult.personas.length; i++) {
+                      const p = gateResult.personas[i]
+                      personaLines.push(`${i + 1}. "${p.name}" (${p.role}) — analyzing ${p.focus}`)
+                    }
+                    personaLines.push("")
+                    personaLines.push("Each specialist will provide findings asynchronously.")
+                    personaLines.push("Continue your own analysis while waiting.")
+                    personaLines.push("When all results arrive, synthesize into a unified response.")
+                    personaLines.push("")
+                    personaLines.push("MANDATORY: Execute the full skill chain for your own analysis.")
+                    personaLines.push("</persona-system>")
+                    system.push(personaLines.join("\n"))
+
+                    // ─── ENFORCEMENT: Spawn persona subagents ────────────
+                    const { task: taskTool } = yield* registry.named()
+                    const agents = yield* Agent.Service
+                    const generalAgent = yield* agents.get("general")
+
+                    if (generalAgent) {
+                      const subtaskOps = yield* ops()
+                      const tracker = PersonaTracker.create(sessionID, gateResult.personas.length)
+
+                      // Run all persona subagents concurrently via Effect.all
+                      yield* Effect.all(
+                        gateResult.personas.map((persona) => {
+                          const personaPrompt = [
+                            `You are "${persona.name}" — ${persona.role}.`,
+                            `Your focus area: ${persona.focus}.`,
+                            "",
+                            // Include NEURO enrichment if available
+                            ...(persona.neuroResult ? [
+                              "NEURO analysis for your domain:",
+                              persona.neuroResult,
+                              "",
+                              "Use this analysis to inform your findings.",
+                              "",
+                            ] : []),
+                            `Analyze the following task from your specialized perspective:`,
+                            userText.trim(),
+                            "",
+                            "Provide your findings as a structured analysis.",
+                            "Focus ONLY on your area of expertise.",
+                            "Be specific, cite code locations, and provide actionable recommendations.",
+                          ].join("\n")
+
+                          return taskTool.execute(
+                            {
+                              prompt: personaPrompt,
+                              description: `persona:${persona.name}`,
+                              subagent_type: "general",
+                            },
+                            {
+                              agent: "general",
+                              sessionID,
+                              messageID: handle.message.id,
+                              abort: new AbortController().signal,
+                              callID: ulid(),
+                              extra: { bypassAgentCheck: true, promptOps: subtaskOps },
+                              metadata: () => Effect.void,
+                              ask: () => Effect.succeed({ status: "allow" as const }),
+                            },
+                          ).pipe(
+                            Effect.tap(() => tracker.complete(persona.name, persona.role, "completed", "completed")),
+                            Effect.catch(() => tracker.complete(persona.name, persona.role, "Subagent failed", "error")),
+                          )
+                        }),
+                        { concurrency: "unbounded" },
+                      )
+
+                      // Inject synthesis after all complete
+                      const results = yield* tracker.waitForAll()
+                      yield* Effect.promise(() =>
+                        PersonaTracker.injectSynthesis(sessionID, results, sessions)
+                      )
+                    }
+                    // ─── End Enforcement ─────────────────────────────────
+                  }
+                  // ─── End Persona System ───────────────────────────────
                 }
               }
             }

@@ -38,7 +38,7 @@ from timezone import format_duration, now_ist_iso, now_ist_time
 # MCP Client
 # ---------------------------------------------------------------------------
 
-MCP_BASE = "http://localhost:39302"
+MCP_BASE = os.environ.get("PIECES_MCP_URL", "http://localhost:39302")
 MCP_SSE = f"{MCP_BASE}/model_context_protocol/2024-11-05/sse"
 
 

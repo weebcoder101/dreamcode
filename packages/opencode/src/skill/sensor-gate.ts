@@ -5,6 +5,29 @@ import { execFileSync } from "child_process"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
 
+export interface Persona {
+  name: string
+  role: string
+  focus: string
+  skills: string[]
+  neuroResult?: string
+}
+
+const PERSONA_SCAN_TYPE_MAP: Record<string, string> = {
+  "The Sentinel": "security",
+  "The Diplomat": "full_audit",
+  "The Cartographer": "full_audit",
+  "The Artisan": "full_audit",
+  "The Optimizer": "bug_hunt",
+  "The Examiner": "test_gap",
+  "The Architect": "full_audit",
+  "The Sculptor": "full_audit",
+  "The Detective": "bug_hunt",
+  "The Navigator": "full_audit",
+  "The Chronicler": "full_audit",
+  "The Analyst": "full_audit",
+}
+
 export interface SensorGateResult {
   intent: string
   domain_tags: string[]
@@ -18,6 +41,7 @@ export interface SensorGateResult {
   automation: string
   mode: string
   chain: string[]
+  personas: Persona[]
   guardian_decision: string
   guardian_risk: string
   skill_plan: string
@@ -40,6 +64,7 @@ function parseSensorGateOutput(output: string): SensorGateResult {
     automation: "none",
     mode: "STANDARD",
     chain: [],
+    personas: [],
     guardian_decision: "APPROVED",
     guardian_risk: "low",
     skill_plan: "",
@@ -92,6 +117,37 @@ function parseSensorGateOutput(output: string): SensorGateResult {
       : output.slice(skillPlanStart).trim()
   }
 
+  // Extract Persona block
+  const personaStart = output.indexOf("[PERSONA] Dynamic Agent Personas")
+  if (personaStart !== -1) {
+    const personaEnd = output.indexOf("[", personaStart + 1)
+    const personaBlock = personaEnd !== -1
+      ? output.slice(personaStart, personaEnd).trim()
+      : output.slice(personaStart).trim()
+
+    const personaLines = personaBlock.split("\n")
+    let currentPersona: Partial<Persona> | null = null
+
+    for (const line of personaLines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith("- name:")) {
+        if (currentPersona?.name) {
+          result.personas.push(currentPersona as Persona)
+        }
+        currentPersona = { name: trimmed.slice(7).trim(), role: "", focus: "", skills: [] }
+      } else if (trimmed.startsWith("role:") && currentPersona) {
+        currentPersona.role = trimmed.slice(5).trim()
+      } else if (trimmed.startsWith("focus:") && currentPersona) {
+        currentPersona.focus = trimmed.slice(6).trim()
+      } else if (trimmed.startsWith("skills:") && currentPersona) {
+        currentPersona.skills = trimmed.slice(7).trim().split(",").map(s => s.trim()).filter(Boolean)
+      }
+    }
+    if (currentPersona?.name) {
+      result.personas.push(currentPersona as Persona)
+    }
+  }
+
   return result
 }
 
@@ -101,18 +157,26 @@ function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | 
 
   if (!fs.existsSync(sensorGate)) return null
 
-  try {
-    const output = execFileSync("python3", [sensorGate, "--prompt", prompt], {
-      encoding: "utf8",
-      timeout: 15000,
-      stdio: ["pipe", "pipe", "pipe"],
-      cwd: projectRoot,
-    })
-    return parseSensorGateOutput(output)
-  } catch (e) {
-    // Sensor gate failed — return null, don't block the response
-    return null
+  const tryRun = (timeoutMs: number): SensorGateResult | null => {
+    try {
+      const output = execFileSync("python3", [sensorGate, "--prompt", prompt], {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: projectRoot,
+      })
+      return parseSensorGateOutput(output)
+    } catch (e) {
+      return null
+    }
   }
+
+  // First attempt with 200s timeout
+  const result = tryRun(200_000)
+  if (result) return result
+
+  // Auto-retry with 400s timeout if first attempt failed
+  return tryRun(400_000)
 }
 
 function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): string | null {
@@ -121,40 +185,48 @@ function runNeuroHarness(prompt: string, projectRoot: string, scanType: string):
 
   if (!fs.existsSync(neuroHarness)) return null
 
-  try {
-    // Build prompt using TypeScript prompt engine
-    const promptResult = buildPrompt({
-      scanType,
-      files: [{ path: "user_prompt", content: prompt }],
-      context: prompt.slice(0, 500),
-    })
+  const tryRun = (timeoutMs: number): string | null => {
+    try {
+      // Build prompt using TypeScript prompt engine
+      const promptResult = buildPrompt({
+        scanType,
+        files: [{ path: "user_prompt", content: prompt }],
+        context: prompt.slice(0, 500),
+      })
 
-    // Create a temp file with a unique name to avoid race conditions
-    const tmpDir = path.join(projectRoot, ".dreamcode", "tmp")
-    fs.mkdirSync(tmpDir, { recursive: true })
-    const tmpFile = path.join(tmpDir, `prompt_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`)
-    fs.writeFileSync(tmpFile, promptResult.userPrompt)
+      // Create a temp file with a unique name to avoid race conditions
+      const tmpDir = path.join(projectRoot, ".dreamcode", "tmp")
+      fs.mkdirSync(tmpDir, { recursive: true })
+      const tmpFile = path.join(tmpDir, `prompt_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`)
+      fs.writeFileSync(tmpFile, promptResult.userPrompt)
 
-    const output = execFileSync("python3", [
-      neuroHarness,
-      "--scan-type", scanType,
-      "--file", tmpFile,
-      "--task", prompt.slice(0, 200),
-    ], {
-      encoding: "utf8",
-      timeout: 60000,
-      stdio: ["pipe", "pipe", "pipe"],
-      cwd: projectRoot,
-    })
+      const output = execFileSync("python3", [
+        neuroHarness,
+        "--scan-type", scanType,
+        "--file", tmpFile,
+        "--task", prompt.slice(0, 200),
+      ], {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: projectRoot,
+      })
 
-    // Clean up temp file
-    try { fs.unlinkSync(tmpFile) } catch {}
+      // Clean up temp file
+      try { fs.unlinkSync(tmpFile) } catch {}
 
-    return output
-  } catch (e) {
-    // Neuro harness failed — return null, don't block the response
-    return null
+      return output
+    } catch (e) {
+      return null
+    }
   }
+
+  // First attempt with 200s timeout
+  const result = tryRun(200_000)
+  if (result) return result
+
+  // Auto-retry with 400s timeout if first attempt failed
+  return tryRun(400_000)
 }
 
 export interface Interface {
@@ -179,6 +251,20 @@ export const layer = Layer.succeed(Service, Service.of({
       const neuroResult = runNeuroHarness(prompt, directory, scanType)
       if (neuroResult) {
         result.neuro_result = neuroResult
+      }
+    }
+
+    // Per-persona NEURO enrichment
+    if (result.personas.length > 0 && shouldRunNeuro) {
+      const maxEnriched = result.risk_level === "high" ? result.personas.length : Math.min(3, result.personas.length)
+      for (let i = 0; i < maxEnriched; i++) {
+        const persona = result.personas[i]
+        const scanType = PERSONA_SCAN_TYPE_MAP[persona.name] || "full_audit"
+        const personaTask = `${persona.role}: ${prompt}`
+        const neuroResult = runNeuroHarness(personaTask, directory, scanType)
+        if (neuroResult) {
+          persona.neuroResult = neuroResult
+        }
       }
     }
 

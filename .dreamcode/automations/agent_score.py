@@ -38,7 +38,7 @@ RUN_LOG = EVOLUTION_DIR / "run_log.jsonl"
 CHAIN_LOG = EVOLUTION_DIR / "chain_execution.jsonl"
 VIOLATIONS_LOG = EVOLUTION_DIR / "automation_violations.jsonl"
 
-sys.path.insert(0, str(PROJECT_ROOT / ".opencode" / "automations"))
+sys.path.insert(0, str(PROJECT_ROOT / ".dreamcode" / "automations"))
 from timezone import now_ist_iso, now_ist_time
 
 
