@@ -1,0 +1,47 @@
+{
+  "total": 45,
+  "history": [
+    {
+      "timestamp": "2026-06-14T14:46:01.081Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 10,
+      "details": "Sensor gate executed for skill: breakthrough-overdrive-innovation"
+    },
+    {
+      "timestamp": "2026-06-14T14:46:01.081Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 15,
+      "details": "Skill breakthrough-overdrive-innovation loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-14T14:46:15.523Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 25,
+      "details": "Sensor gate executed for skill: neuro"
+    },
+    {
+      "timestamp": "2026-06-14T14:46:15.524Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 30,
+      "details": "Skill neuro loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-14T14:46:23.546Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 40,
+      "details": "Sensor gate executed for skill: pieces-ltm"
+    },
+    {
+      "timestamp": "2026-06-14T14:46:23.546Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 45,
+      "details": "Skill pieces-ltm loaded from SKILL.md"
+    }
+  ]
+}

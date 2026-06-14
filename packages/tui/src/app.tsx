@@ -175,11 +175,34 @@ function isVersionGreater(left: string, right: string) {
   return a.prerelease.localeCompare(b.prerelease, undefined, { numeric: true }) > 0
 }
 
+let _originalStderrWrite: typeof process.stderr.write | undefined
+let _stderrIntercepted = false
+const _stderrBuffer: string[] = []
+
+function installStderrInterceptor() {
+  _originalStderrWrite = process.stderr.write.bind(process.stderr)
+  process.stderr.write = function (chunk: string | Buffer, ...args: any[]) {
+    if (_stderrIntercepted) {
+      _stderrBuffer.push(typeof chunk === "string" ? chunk : chunk.toString())
+      return true
+    }
+    return _originalStderrWrite!(chunk, ...args)
+  } as typeof process.stderr.write
+}
+
+function uninstallStderrInterceptor() {
+  if (_originalStderrWrite) {
+    process.stderr.write = _originalStderrWrite
+    _originalStderrWrite = undefined
+  }
+}
+
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const global = yield* Global.Service
   const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
+      installStderrInterceptor()
       const renderer = yield* Effect.acquireRelease(
         Effect.tryPromise(() =>
           createCliRenderer({
@@ -198,9 +221,12 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         ),
         (renderer) =>
           Effect.sync(() => {
+            _stderrIntercepted = false
             destroyRenderer(renderer)
+            uninstallStderrInterceptor()
           }),
       )
+      _stderrIntercepted = true
       win32DisableProcessedInput()
       const keymap = createDefaultOpenTuiKeymap(renderer)
       yield* Effect.acquireRelease(

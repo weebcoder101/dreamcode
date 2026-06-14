@@ -11,6 +11,15 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 
+// Suppress console output in Worker thread to prevent interleaving with TUI.
+// The Worker communicates via RPC, not console — silencing is safe here.
+const noop = () => {}
+console.log = noop
+console.warn = noop
+console.error = noop
+console.debug = noop
+console.info = noop
+
 Heap.start()
 
 // Subscribe to global events and forward them via RPC
