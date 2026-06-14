@@ -6,8 +6,10 @@
  */
 
 import { Effect } from "effect"
-import { MessageID, PartID } from "./schema"
+import { MessageID, PartID, SessionID } from "./schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { Session } from "./session"
 
 export interface PersonaResult {
@@ -28,7 +30,6 @@ export function create(sessionID: string, total: number): PersonaTracker {
   const results: PersonaResult[] = []
   let remaining = total
   let resolveWait: ((results: PersonaResult[]) => void) | null = null
-  let waitPromise: PersonaResult[] | null = null
 
   const complete = Effect.fn("PersonaTracker.complete")(function* (
     name: string,
@@ -47,7 +48,7 @@ export function create(sessionID: string, total: number): PersonaTracker {
   const waitForAll = Effect.fn("PersonaTracker.waitForAll")(function* () {
     if (remaining <= 0) return results
 
-    return yield* Effect.async<PersonaResult[]>((resume) => {
+    return yield* Effect.callback<PersonaResult[]>((resume) => {
       resolveWait = (r) => resume(Effect.succeed(r))
     })
   })
@@ -97,25 +98,34 @@ export function buildSynthesisPrompt(results: PersonaResult[]): string {
 export async function injectSynthesis(
   sessionID: string,
   results: PersonaResult[],
-  sessions: Session.Service,
+  sessions: Session.Interface,
+  providerID: string,
+  modelID: string,
 ): Promise<void> {
   const synthesisPrompt = buildSynthesisPrompt(results)
+  const brandedSID = SessionID.make(sessionID)
 
   const userMessage: SessionV1.User = {
     id: MessageID.ascending(),
-    sessionID,
+    sessionID: brandedSID,
     role: "user",
+    agent: "general",
+    model: {
+      providerID: ProviderV2.ID.make(providerID),
+      modelID: ModelV2.ID.make(modelID),
+      variant: undefined,
+    },
     time: { created: Date.now() },
   }
-  await sessions.updateMessage(userMessage)
+  await Effect.runPromise(sessions.updateMessage(userMessage))
 
   const textPart: SessionV1.TextPart = {
     id: PartID.ascending(),
     messageID: userMessage.id,
-    sessionID,
+    sessionID: brandedSID,
     type: "text",
     text: synthesisPrompt,
     synthetic: true,
   }
-  await sessions.updatePart(textPart)
+  await Effect.runPromise(sessions.updatePart(textPart))
 }

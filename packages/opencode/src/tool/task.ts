@@ -184,7 +184,15 @@ export const TaskTool = Tool.define(
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
-        const parts = yield* ops.resolvePromptParts(params.prompt)
+        let parts = yield* ops.resolvePromptParts(params.prompt)
+
+        // Prepend parent context if available, so subagents see the conversation history
+        if (ctx.messages?.length) {
+          const contextPrompt = buildContextPrompt(ctx.messages)
+          const contextParts = yield* ops.resolvePromptParts(contextPrompt)
+          parts = [...contextParts, ...parts]
+        }
+
         const result = yield* ops.prompt({
           messageID: MessageID.ascending(),
           sessionID: nextSession.id,
@@ -344,3 +352,24 @@ export const TaskTool = Tool.define(
     }
   }),
 )
+
+function buildContextPrompt(messages: SessionV1.WithParts[]): string {
+  const lines = [
+    "<active-context>",
+    "You have access to the parent session's conversation history for context.",
+    "Below are the recent messages from the parent session:",
+    "",
+  ]
+  for (const msg of messages.slice(-20)) {
+    const role = msg.info.role
+    const textParts = msg.parts
+      .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
+      .map((p) => p.text)
+    if (textParts.length > 0) {
+      lines.push(`[${role}]: ${textParts.join("\n")}`)
+      lines.push("")
+    }
+  }
+  lines.push("</active-context>")
+  return lines.join("\n")
+}

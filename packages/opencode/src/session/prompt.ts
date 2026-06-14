@@ -122,6 +122,7 @@ export const layer = Layer.effect(
     const state = yield* SessionRunState.Service
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
+    const sensorGate = yield* SensorGate.Service
     const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
     const events = yield* EventV2Bridge.Service
@@ -1342,7 +1343,6 @@ export const layer = Layer.effect(
             // Only on step 1 (first user message) to avoid re-classifying on tool loops.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
             if (step === 1 && !session.parentID) {
-              const sensorGate = yield* SensorGate.Service
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
@@ -1395,23 +1395,62 @@ export const layer = Layer.effect(
 
                     // ─── ENFORCEMENT: Spawn persona subagents ────────────
                     const { task: taskTool } = yield* registry.named()
-                    const agents = yield* Agent.Service
                     const generalAgent = yield* agents.get("general")
 
                     if (generalAgent) {
                       const subtaskOps = yield* ops()
                       const tracker = PersonaTracker.create(sessionID, gateResult.personas.length)
 
+                      // Create assistant message to hold persona tool parts
+                      const personaAssistantMsg: SessionV1.Assistant = yield* sessions.updateMessage({
+                        id: MessageID.ascending(),
+                        role: "assistant",
+                        parentID: lastUser.id,
+                        sessionID,
+                        mode: "general",
+                        agent: "general",
+                        variant: lastUser.model.variant,
+                        path: { cwd: ctx.directory, root: ctx.worktree },
+                        cost: 0,
+                        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                        providerID: model.providerID,
+                        modelID: model.id,
+                        time: { created: Date.now() },
+                      })
+
+                      // Create a tool part for each persona for TUI visibility
+                      const personaParts: SessionV1.ToolPart[] = yield* Effect.all(
+                        gateResult.personas.map((persona) =>
+                          sessions.updatePart({
+                            id: PartID.ascending(),
+                            messageID: personaAssistantMsg.id,
+                            sessionID: personaAssistantMsg.sessionID,
+                            type: "tool",
+                            callID: ulid(),
+                            tool: TaskTool.id,
+                            state: {
+                              status: "running",
+                              input: {
+                                prompt: persona.focus,
+                                description: `persona:${persona.name}`,
+                                subagent_type: "general",
+                              },
+                              time: { start: Date.now() },
+                            },
+                          } as SessionV1.ToolPart),
+                        ),
+                      )
+
                       // Run all persona subagents concurrently via Effect.all
                       const subagentAbort = new AbortController()
 
                       yield* Effect.all(
-                        gateResult.personas.map((persona) => {
+                        gateResult.personas.map((persona, i) => {
+                          const part = personaParts[i]
                           const personaPrompt = [
                             `You are "${persona.name}" — ${persona.role}.`,
                             `Your focus area: ${persona.focus}.`,
                             "",
-                            // Include NEURO enrichment if available
                             ...(persona.neuroResult ? [
                               "NEURO analysis for your domain:",
                               persona.neuroResult,
@@ -1427,27 +1466,49 @@ export const layer = Layer.effect(
                             "Be specific, cite code locations, and provide actionable recommendations.",
                           ].join("\n")
 
-                          return taskTool.execute(
-                            {
-                              prompt: personaPrompt,
-                              description: `persona:${persona.name}`,
-                              subagent_type: "general",
-                            },
-                            {
-                              agent: "general",
-                              sessionID,
-                              messageID: handle.message.id,
-                              messages: msgs,
-                              abort: subagentAbort.signal,
-                              callID: ulid(),
-                              extra: { bypassAgentCheck: true, promptOps: subtaskOps },
-                              metadata: () => Effect.void,
-                              ask: () => Effect.succeed({ status: "allow" as const }),
-                            },
-                          ).pipe(
-                            Effect.tap(() => tracker.complete(persona.name, persona.role, "completed", "completed")),
-                            Effect.catch(() => tracker.complete(persona.name, persona.role, "Subagent failed", "error")),
-                          )
+                          const markComplete = (status: "completed" | "error", output: string) =>
+                            Effect.gen(function* () {
+                              yield* tracker.complete(persona.name, persona.role, output, status)
+                              const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
+                              yield* sessions.updatePart({
+                                ...part,
+                                type: "tool",
+                                state: status === "completed"
+                                  ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                  : { ...st, status: "error" as const, error: output, metadata: { persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                              } as SessionV1.ToolPart)
+                            })
+
+                          return taskTool
+                            .execute(
+                              {
+                                prompt: personaPrompt,
+                                description: `persona:${persona.name}`,
+                                subagent_type: "general",
+                              },
+                              {
+                                agent: "general",
+                                sessionID,
+                                messageID: personaAssistantMsg.id,
+                                messages: msgs,
+                                abort: subagentAbort.signal,
+                                callID: (part as SessionV1.ToolPart).callID,
+                                extra: { bypassAgentCheck: true, promptOps: subtaskOps },
+                                metadata: (val: { title?: string; metadata?: Record<string, any> }) => {
+                                  const st = part.state as { status: string; input: Record<string, any>; time?: { start: number } }
+                                  return sessions.updatePart({
+                                    ...part,
+                                    type: "tool",
+                                    state: { ...st, status: "running" as const, ...val },
+                                  } as SessionV1.ToolPart)
+                                },
+                                ask: () => Effect.succeed({ status: "allow" as const }),
+                              },
+                            )
+                            .pipe(Effect.matchEffect({
+                              onSuccess: () => markComplete("completed", "completed"),
+                              onFailure: (err) => markComplete("error", String(err)),
+                            }))
                         }),
                         { concurrency: 3 },
                       ).pipe(
@@ -1459,7 +1520,7 @@ export const layer = Layer.effect(
                       // Inject synthesis after all complete
                       const results = yield* tracker.waitForAll()
                       yield* Effect.promise(() =>
-                        PersonaTracker.injectSynthesis(sessionID, results, sessions)
+                        PersonaTracker.injectSynthesis(sessionID, results, sessions, model.providerID, model.id)
                       )
                     }
                     // ─── End Enforcement ─────────────────────────────────
@@ -1829,6 +1890,8 @@ const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
 const placeholderRegex = /\$(\d+)/g
 const quoteTrimRegex = /^["']|["']$/g
 
+const sensorGateNode = LayerNode.make(SensorGate.defaultLayer, [])
+
 export const node = LayerNode.make(layer, [
   SessionStatus.node,
   Session.node,
@@ -1856,6 +1919,7 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   RuntimeFlags.node,
   Database.node,
+  sensorGateNode,
 ])
 
 export * as SessionPrompt from "./prompt"

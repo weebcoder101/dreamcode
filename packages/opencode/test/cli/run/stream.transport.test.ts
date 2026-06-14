@@ -2360,4 +2360,149 @@ describe("run stream transport", () => {
       await transport.close()
     }
   })
+
+  test("rejects the turn when promptAsync throws a network error", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async () => {
+          throw new Error("ECONNRESET")
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      await expect(
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "hello", parts: [] },
+          files: [],
+          includeFiles: false,
+        }),
+      ).rejects.toThrow("ECONNRESET")
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("rejects the turn when promptAsync throws an AbortError-like error", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async () => {
+          const err = new Error("The operation was aborted")
+          err.name = "AbortError"
+          throw err
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      await expect(
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "hello", parts: [] },
+          files: [],
+          includeFiles: false,
+        }),
+      ).rejects.toThrow("The operation was aborted")
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("rejects the turn when promptAsync returns an error tuple", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async () => ({
+          data: undefined,
+          error: { name: "TimeoutError", message: "request timed out" },
+          request: new Request("https://opencode.test"),
+          response: new Response(null, { status: 504 }),
+        }),
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      await expect(
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "hello", parts: [] },
+          files: [],
+          includeFiles: false,
+        }),
+      ).rejects.toThrow()
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("swallows promptAsync error when turn is already cancelled", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const sendStarted = defer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async () => {
+          sendStarted.resolve()
+          throw new Error("EPIPE")
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    const ctrl = new AbortController()
+
+    try {
+      const task = transport.runPromptTurn({
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        prompt: { text: "hello", parts: [] },
+        files: [],
+        includeFiles: false,
+        signal: ctrl.signal,
+      })
+
+      await sendStarted.promise
+      ctrl.abort()
+
+      await task
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
 })

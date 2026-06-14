@@ -1,5 +1,5 @@
 {
-  "total": 445,
+  "total": 695,
   "history": [
     {
       "timestamp": "2026-06-14T14:46:01.081Z",
@@ -322,12 +322,201 @@
       "points": 10,
       "total_after": 445,
       "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T02:47:28.859062+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 455,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T02:49:33.276724+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 465,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T21:19:36.451Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 475,
+      "details": "Sensor gate executed for skill: debugging"
+    },
+    {
+      "timestamp": "2026-06-14T21:19:36.452Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 480,
+      "details": "Skill debugging loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-15T02:50:15.635031+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 490,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T03:07:17.673366+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 500,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T03:09:16.132860+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 510,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T03:11:51.256299+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 520,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T03:13:50.868592+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 530,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T21:43:54.223Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 540,
+      "details": "Sensor gate executed for skill: debugging"
+    },
+    {
+      "timestamp": "2026-06-14T21:43:54.224Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 545,
+      "details": "Skill debugging loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-15T04:36:33.822122+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 555,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T04:36:53.648972+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 565,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T04:37:35.806504+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 575,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T04:39:23.398847+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 585,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T04:44:47.373745+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 595,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T04:45:11.183763+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 605,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T23:15:13.583Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 615,
+      "details": "Sensor gate executed for skill: breakthrough-overdrive-innovation"
+    },
+    {
+      "timestamp": "2026-06-14T23:15:13.584Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 620,
+      "details": "Skill breakthrough-overdrive-innovation loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-15T04:45:35.364133+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 630,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T04:48:50.925871+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 640,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:07:06.105502+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 650,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:07:57.998719+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 660,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:08:21.472343+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 670,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T23:38:23.966Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 680,
+      "details": "Sensor gate executed for skill: breakthrough-overdrive-innovation"
+    },
+    {
+      "timestamp": "2026-06-14T23:38:23.969Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 685,
+      "details": "Skill breakthrough-overdrive-innovation loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-15T05:08:56.362545+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 695,
+      "details": "Sensor gate executed"
     }
   ],
-  "current_streak": 40,
-  "best_streak": 40,
-  "total_runs": 40,
-  "successful_runs": 40,
+  "current_streak": 59,
+  "best_streak": 59,
+  "total_runs": 59,
+  "successful_runs": 59,
   "sensor_gate_violations": 0,
   "dream_violations": 0
 }
