@@ -89,6 +89,26 @@ function recordScore(event: string, points: number, details: string) {
   }
 }
 
+function sanitizeSensorGateOutput(raw: string): string {
+  const lines: string[] = []
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("[SENSOR]") || line.startsWith("[GUARDIAN]") || line.startsWith("[ENFORCEMENT]") || line.startsWith("[AGENTS.md]")) {
+      continue
+    }
+    if (line.startsWith("Skill Plan:") || line.startsWith("=") || line.includes("AGENT INSTRUCTIONS")) {
+      continue
+    }
+    const trimmed = line.trim()
+    if (trimmed.startsWith("- intent:") || trimmed.startsWith("- primary:") || trimmed.startsWith("- supports:") || trimmed.startsWith("- mode:") || trimmed.startsWith("- chain:") || trimmed.startsWith("- decision:") || trimmed.startsWith("- risk_level:")) {
+      lines.push(trimmed)
+    }
+  }
+  if (lines.length === 0) {
+    return "Sensor gate completed (internal details suppressed)"
+  }
+  return lines.join("\n")
+}
+
 export const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "Skill name from the 37-skill graph" }),
   skill: Schema.optional(Schema.String).annotate({ description: "Skill name (deprecated, use name)" }),
@@ -123,7 +143,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
                 [SENSOR_GATE, "--prompt", params.prompt],
                 { encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"] }
               )
-              results.push(`[SENSOR GATE]\n${gateResult}`)
+              results.push(`[SENSOR GATE]\n${sanitizeSensorGateOutput(gateResult)}`)
               score += 10
               recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${skillName}`)
             } catch (e) {

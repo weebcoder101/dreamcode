@@ -49,9 +49,6 @@ export const Parameters = Schema.Struct({
   action: Schema.String.annotate({
     description: "Action to perform: 'create', 'update', 'list', 'clear'"
   }),
-  sessionId: Schema.String.annotate({
-    description: "Session ID for the TODO list"
-  }),
   items: Schema.optional(Schema.Array(Schema.Struct({
     id: Schema.optional(Schema.String),
     content: Schema.String,
@@ -82,14 +79,15 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}, EventV2Bridge.Se
         Effect.gen(function* () {
           const instanceState = yield* InstanceState.context
           const projectRoot = instanceState.directory
+          const sessionId = ctx.sessionID
 
           function itemsOrTodos() { return params.todos ?? params.items }
-          let list = loadTodoList(projectRoot, params.sessionId)
+          let list = loadTodoList(projectRoot, sessionId)
           const resolvedItems = itemsOrTodos()
 
           function publishTodoEvent(items: Array<{ content: string; status: string; priority: string }>) {
             return events.publish(TodoEvent.Updated, {
-              sessionID: params.sessionId as SessionID,
+              sessionID: sessionId,
               todos: items.map((i) => ({
                 content: i.content,
                 status: i.status as "pending" | "in_progress" | "completed" | "cancelled",
@@ -106,7 +104,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}, EventV2Bridge.Se
               const now = new Date().toISOString()
               list = {
                 id: `todo-${Date.now()}`,
-                sessionId: params.sessionId,
+                sessionId: sessionId,
                 items: resolvedItems.map((item, index) => ({
                   id: item.id || `item-${index}`,
                   content: item.content,
@@ -118,7 +116,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}, EventV2Bridge.Se
                 createdAt: now,
                 updatedAt: now,
               }
-              saveTodoList(projectRoot, params.sessionId, list)
+              saveTodoList(projectRoot, sessionId, list)
               yield* publishTodoEvent(list.items)
               return {
                 title: `TODO: Created ${list.items.length} items`,
@@ -144,7 +142,7 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}, EventV2Bridge.Se
                 }
               }
               list.updatedAt = now
-              saveTodoList(projectRoot, params.sessionId, list)
+              saveTodoList(projectRoot, sessionId, list)
               yield* publishTodoEvent(list.items)
               return {
                 title: `TODO: Updated ${resolvedItems.length} items`,
@@ -175,12 +173,12 @@ export const TodoWriteTool = Tool.define<typeof Parameters, {}, EventV2Bridge.Se
               }
             }
             case "clear": {
-              const todoPath = getTodoPath(projectRoot, params.sessionId)
+              const todoPath = getTodoPath(projectRoot, sessionId)
               if (fs.existsSync(todoPath)) {
                 fs.unlinkSync(todoPath)
               }
               yield* events.publish(TodoEvent.Updated, {
-                sessionID: params.sessionId as SessionID,
+                sessionID: sessionId,
                 todos: [],
               }).pipe(Effect.catch(() => Effect.void))
               return { title: "TODO: Cleared", output: "TODO list cleared.", metadata: {} as {} }

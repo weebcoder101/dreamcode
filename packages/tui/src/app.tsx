@@ -175,30 +175,55 @@ function isVersionGreater(left: string, right: string) {
   return a.prerelease.localeCompare(b.prerelease, undefined, { numeric: true }) > 0
 }
 
+const _originalConsole = { log: console.log, warn: console.warn, error: console.error, debug: console.debug, info: console.info }
+
+function installConsoleInterceptor() {
+  const noop = () => {}
+  console.log = noop
+  console.warn = noop
+  console.error = noop
+  console.debug = noop
+  console.info = noop
+}
+
+function uninstallConsoleInterceptor() {
+  console.log = _originalConsole.log
+  console.warn = _originalConsole.warn
+  console.error = _originalConsole.error
+  console.debug = _originalConsole.debug
+  console.info = _originalConsole.info
+}
+
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const global = yield* Global.Service
   const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
       const renderer = yield* Effect.acquireRelease(
-        Effect.tryPromise(() =>
-          createCliRenderer({
-            externalOutputMode: "passthrough",
+        Effect.tryPromise(() => {
+          installConsoleInterceptor()
+          return createCliRenderer({
+            externalOutputMode: "capture-stdout",
             targetFps: 60,
             gatherStats: false,
             exitOnCtrlC: false,
             useKittyKeyboard: {},
             autoFocus: false,
             openConsoleOnError: false,
+            consoleMode: "disabled",
             useMouse: !Flag.OPENCODE_DISABLE_MOUSE && input.config.mouse,
             consoleOptions: {
               keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
             },
-          }),
-        ),
+          })
+        }),
         (renderer) =>
           Effect.sync(() => {
+            if (renderer.externalOutputMode === "capture-stdout") {
+              renderer.externalOutputMode = "passthrough"
+            }
             destroyRenderer(renderer)
+            uninstallConsoleInterceptor()
           }),
       )
       win32DisableProcessedInput()
@@ -211,8 +236,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         Effect.promise(async () => {
           try {
             await input.pluginHost.dispose()
-          } catch (error) {
-            console.error("Failed to dispose TUI plugins", error)
+          } catch {
+            // Silently ignore plugin disposal errors during shutdown
           }
         }),
       )
@@ -398,8 +423,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       runtime: pluginRuntime,
       dispose: () => attention.dispose(),
     })
-    .catch((error) => {
-      console.error("Failed to load TUI plugins", error)
+    .catch(() => {
+      // Plugin load errors are non-critical; suppressed by console interceptor
     })
     .finally(() => {
       setReady(true)
@@ -996,7 +1021,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   event.on("installation.update-available", async (evt) => {
-    console.log("installation.update-available", evt)
     const version = evt.properties.version
 
     const skipped = kv.get("skipped_version")

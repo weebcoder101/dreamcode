@@ -124,6 +124,9 @@ export const layer = Layer.effect(
       const msgDiffs = yield* computeDiff({ messages })
       target.info.summary = { ...target.info.summary, diffs: msgDiffs }
       yield* sessions.updateMessage(target.info)
+      if (msgDiffs.length > 0) {
+        yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: msgDiffs })
+      }
     })
 
     const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
