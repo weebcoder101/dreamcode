@@ -37,6 +37,7 @@ import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { Question } from "@/question"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
+import { ContextCompressor } from "@/session/context-compressor"
 import { LLM } from "@/session/llm"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
@@ -239,6 +240,8 @@ export function createRoutes(
       RuntimeFlags.defaultLayer,
       Session.defaultLayer,
       SessionCompaction.defaultLayer,
+      ContextCompressor.defaultLayer,
+      SensorGate.defaultLayer,
       SessionPrompt.defaultLayer,
       SessionRevert.defaultLayer,
       SessionShare.defaultLayer,

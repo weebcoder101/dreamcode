@@ -156,47 +156,42 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/ContextCompressor") {}
 
-export const layer = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const ctx = yield* InstanceState.context
+export const layer = Layer.succeed(Service, Service.of({
+  compress: Effect.fn("ContextCompressor.compress")(function* (context: string, maxTokens?: number) {
+    const pipeline = createPipeline()
+    let current = context
+    const stages: string[] = []
+    const originalTokens = countTokens(current)
 
-    return Service.of({
-      compress: Effect.fn("ContextCompressor.compress")(function* (context: string, maxTokens?: number) {
-        const pipeline = createPipeline()
-        let current = context
-        const stages: string[] = []
-        const originalTokens = countTokens(current)
+    for (const stage of pipeline) {
+      const before = current
+      current = stage.execute(current)
+      if (current !== before) {
+        stages.push(stage.name)
+      }
+    }
 
-        for (const stage of pipeline) {
-          const before = current
-          current = stage.execute(current)
-          if (current !== before) {
-            stages.push(stage.name)
-          }
-        }
+    const compressedTokens = countTokens(current)
+    const compressionRatio = originalTokens > 0 ? compressedTokens / originalTokens : 1
 
-        const compressedTokens = countTokens(current)
-        const compressionRatio = originalTokens > 0 ? compressedTokens / originalTokens : 1
+    const ctx = yield* InstanceState.contextOrNull
+    if (ctx) {
+      const cacheDir = path.join(ctx.directory, ".dreamcode", "context_cache")
+      fs.mkdirSync(cacheDir, { recursive: true })
+      const cacheFile = path.join(cacheDir, `compressed_${Date.now()}.md`)
+      fs.writeFileSync(cacheFile, current)
+    }
 
-        // Save compressed context
-        const cacheDir = path.join(ctx.directory, ".dreamcode", "context_cache")
-        fs.mkdirSync(cacheDir, { recursive: true })
-        const cacheFile = path.join(cacheDir, `compressed_${Date.now()}.md`)
-        fs.writeFileSync(cacheFile, current)
-
-        return {
-          compressed: current,
-          originalTokens,
-          compressedTokens,
-          compressionRatio,
-          fidelityScore: 0.98, // RIT fidelity estimate
-          stages,
-        }
-      }),
-    })
+    return {
+      compressed: current,
+      originalTokens,
+      compressedTokens,
+      compressionRatio,
+      fidelityScore: 0.98,
+      stages,
+    }
   }),
-)
+}))
 
 export const defaultLayer = layer
 

@@ -163,34 +163,28 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SensorGate") {}
 
-export const layer = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const ctx = yield* InstanceState.context
+export const layer = Layer.succeed(Service, Service.of({
+  classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
+    const ctx = yield* InstanceState.contextOrNull
+    const directory = ctx?.directory ?? process.cwd()
+    const result = runSensorGate(prompt, directory)
+    if (!result) return null
 
-    return Service.of({
-      classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
-        const result = runSensorGate(prompt, ctx.directory)
-        if (!result) return null
+    const shouldRunNeuro = result.risk_level === "high" ||
+      result.mode === "DREAM_INNOVATION" ||
+      result.chain.length > 3
 
-        // Run neuro harness for complex prompts (high risk or DREAM_INNOVATION mode)
-        const shouldRunNeuro = result.risk_level === "high" ||
-          result.mode === "DREAM_INNOVATION" ||
-          result.chain.length > 3
+    if (shouldRunNeuro) {
+      const scanType = result.risk_level === "high" ? "security" : "full_audit"
+      const neuroResult = runNeuroHarness(prompt, directory, scanType)
+      if (neuroResult) {
+        result.neuro_result = neuroResult
+      }
+    }
 
-        if (shouldRunNeuro) {
-          const scanType = result.risk_level === "high" ? "security" : "full_audit"
-          const neuroResult = runNeuroHarness(prompt, ctx.directory, scanType)
-          if (neuroResult) {
-            result.neuro_result = neuroResult
-          }
-        }
-
-        return result
-      }),
-    })
+    return result
   }),
-)
+}))
 
 export const defaultLayer = layer
 
