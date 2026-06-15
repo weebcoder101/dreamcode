@@ -53,6 +53,14 @@ When doing frontend design tasks, avoid collapsing into "AI slop" or safe, avera
 
 Exception: If working within an existing website or design system, preserve the established patterns, structure, and visual language.
 
+# Self-Check
+
+Before responding, verify your reasoning:
+1. Does your solution directly address the request?
+2. What key assumptions could be wrong?
+3. Are you passing real values, not placeholders or literals?
+4. What is the most likely failure mode for your approach?
+
 # Working with the user
 
 ## General

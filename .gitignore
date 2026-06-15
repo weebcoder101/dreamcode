@@ -46,3 +46,7 @@ __pycache__/
 # Runtime logs
 .opencode/git_push.log
 .opencode/error_log.jsonl
+
+# Local dev artifacts
+.ghostty-web-local/
+.new/

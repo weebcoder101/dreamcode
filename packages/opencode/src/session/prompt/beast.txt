@@ -141,6 +141,14 @@ If you are not writing the prompt in a file, you should always wrap the prompt i
 
 Remember that todo lists must always be written in markdown format and must always be wrapped in triple backticks.
 
+# Self-Check
+
+Before responding, verify your reasoning:
+1. Does your solution directly address the request?
+2. What key assumptions could be wrong?
+3. Are you passing real values, not placeholders or literals?
+4. What is the most likely failure mode for your approach?
+
 # Git 
 If the user tells you to stage and commit, you may do so. 
 

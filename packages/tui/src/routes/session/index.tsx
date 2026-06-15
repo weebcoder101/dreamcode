@@ -1708,6 +1708,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
+    if (props.part.tool === "task") return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -1891,13 +1892,17 @@ function InlineTool(props: {
       separateAfter={(id) => id !== undefined && ctx.userMessageIDs().has(id)}
       onMouseOver={() => clickable() && setHover(true)}
       onMouseOut={() => setHover(false)}
+      onMouseDown={() => {
+        if (renderer.getSelection()?.getSelectedText()) return
+        if (failed()) return
+        props.onClick?.()
+      }}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         if (failed()) {
           setErrorExpanded((value) => !value)
           return
         }
-        props.onClick?.()
       }}
     >
       {props.children}
@@ -1924,6 +1929,7 @@ export function InlineToolRow(props: {
   separateAfter?: (id: string | undefined) => boolean
   onMouseOver?: () => void
   onMouseOut?: () => void
+  onMouseDown?: () => void
   onMouseUp?: () => void
 }) {
   return (
@@ -1932,6 +1938,7 @@ export function InlineToolRow(props: {
       paddingLeft={3}
       onMouseOver={props.onMouseOver}
       onMouseOut={props.onMouseOut}
+      onMouseDown={props.onMouseDown}
       onMouseUp={props.onMouseUp}
       ref={(el: BoxRenderable) => {
         setPreLayoutSiblingMargin(el, (previous) => {
@@ -1963,7 +1970,11 @@ export function InlineToolRow(props: {
             }
             when={props.complete || props.failed}
           >
-            <box flexDirection="row">
+            <box
+              flexDirection="row"
+              onMouseDown={props.onMouseDown}
+              onMouseUp={props.onMouseUp}
+            >
               <text
                 width={INLINE_TOOL_ICON_WIDTH}
                 fg={props.failed ? props.errorColor : (props.iconColor ?? props.color)}
@@ -2219,11 +2230,15 @@ function Task(props: ToolProps) {
   const dialog = useDialog()
 
   onMount(() => {
-    const sessionID = stringValue(props.metadata.sessionId)
+    if (props.part.state.status === "pending") return
+    const sessionID = stringValue(props.part.state.metadata?.sessionId)
     if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
   })
 
-  const sessionID = createMemo(() => stringValue(props.metadata.sessionId))
+  const sessionID = createMemo(() => {
+    if (props.part.state.status === "pending") return undefined
+    return stringValue(props.part.state.metadata?.sessionId)
+  })
   const messages = createMemo(() => sync.data.message[sessionID() ?? ""] ?? [])
 
   const tools = createMemo(() => {
@@ -2255,8 +2270,12 @@ function Task(props: ToolProps) {
   const duration = createMemo(() => {
     const first = messages().find((x) => x.role === "user")?.time.created
     const assistant = messages().findLast((x) => x.role === "assistant")?.time.completed
-    if (!first || !assistant) return 0
-    return assistant - first
+    if (first && assistant) return assistant - first
+    const state = props.part.state
+    if (state.status === "completed" || state.status === "error") {
+      return state.time.end - state.time.start
+    }
+    return 0
   })
 
   const content = createMemo(() => {

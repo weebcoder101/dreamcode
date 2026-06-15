@@ -1135,6 +1135,14 @@ export const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
+    const SELF_CHECK = `# Self-Check Protocol
+
+Before every response, verify your reasoning:
+1. Does the plan directly address the user's request?
+2. What assumptions are you making that could be wrong?
+3. Are you passing real values, not placeholders or literals?
+4. What is the most likely failure mode for your approach?`
+
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
@@ -1334,7 +1342,7 @@ export const layer = Layer.effect(
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : [])]
+            const system = [...env, ...instructions, ...(skills ? [skills] : []), SELF_CHECK]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
@@ -1374,6 +1382,8 @@ export const layer = Layer.effect(
                   system.push(sensorBlock.join("\n"))
 
                   // ─── Persona System Injection ─────────────────────────
+                  // Cap at 3 to prevent oversaturation and redundant work
+                  if (gateResult.personas.length > 3) gateResult.personas = gateResult.personas.slice(0, 3)
                   if (gateResult.personas.length > 0) {
                     const personaLines = [
                       "<persona-system>",
@@ -1465,7 +1475,7 @@ export const layer = Layer.effect(
                             "Be specific, cite code locations, and provide actionable recommendations.",
                           ].join("\n")
 
-                          const markComplete = (status: "completed" | "error", output: string) =>
+                          const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
                             Effect.gen(function* () {
                               yield* tracker.complete(persona.name, persona.role, output, status)
                               const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
@@ -1473,8 +1483,8 @@ export const layer = Layer.effect(
                                 ...part,
                                 type: "tool",
                                 state: status === "completed"
-                                  ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
-                                  : { ...st, status: "error" as const, error: output, metadata: { persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                                  ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                  : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
                               } as SessionV1.ToolPart)
                             })
 
@@ -1505,7 +1515,7 @@ export const layer = Layer.effect(
                               },
                             )
                             .pipe(Effect.matchEffect({
-                              onSuccess: () => markComplete("completed", "completed"),
+                              onSuccess: (result) => markComplete("completed", result.output, result.metadata),
                               onFailure: (err) => markComplete("error", String(err)),
                             }))
                         }),
