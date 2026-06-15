@@ -4,6 +4,7 @@ import path from "path"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import os from "os"
 import { SessionID, MessageID, PartID } from "./schema"
+const gateDispatched = new Set<SessionID>()
 import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
@@ -1348,17 +1349,22 @@ Before every response, verify your reasoning:
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
-            // Runs classification + skill chain selection before every response.
-            // Only on step 1 (first user message) to avoid re-classifying on tool loops.
+            // Runs classification + skill chain selection once per session.
+            // step === 1 guards against re-classifying on tool loops within the same turn.
+            // Dispatched-sessions tracking prevents re-spawn across separate user messages.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
             // Also skip when the agent itself is a subagent (mode === "subagent").
             if (step === 1 && !session.parentID && session.mode !== "subagent") {
+              if (gateDispatched.has(sessionID)) {
+                synthesisText = undefined
+              } else {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
                 .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
                 .map((p) => p.text)
                 .join("\n")
+              gateDispatched.add(sessionID)
 
               if (userText.trim()) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
