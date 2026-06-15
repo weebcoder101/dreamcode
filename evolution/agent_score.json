@@ -1,5 +1,5 @@
 {
-  "total": 695,
+  "total": 785,
   "history": [
     {
       "timestamp": "2026-06-14T14:46:01.081Z",
@@ -511,12 +511,82 @@
       "points": 10,
       "total_after": 695,
       "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:13:05.150214+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 705,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:13:27.115573+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 715,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-14T23:43:30.536Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 725,
+      "details": "Sensor gate executed for skill: deep-research"
+    },
+    {
+      "timestamp": "2026-06-14T23:43:30.537Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 730,
+      "details": "Skill deep-research loaded from SKILL.md"
+    },
+    {
+      "timestamp": "2026-06-15T05:26:15.005308+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 740,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:26:41.613579+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 750,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:31:43.469158+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 760,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T05:32:06.788349+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 770,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T00:02:09.033Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 780,
+      "details": "Sensor gate executed for skill: breakthrough-overdrive-innovation"
+    },
+    {
+      "timestamp": "2026-06-15T00:02:09.033Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 785,
+      "details": "Skill breakthrough-overdrive-innovation loaded from SKILL.md"
     }
   ],
-  "current_streak": 59,
-  "best_streak": 59,
-  "total_runs": 59,
-  "successful_runs": 59,
+  "current_streak": 65,
+  "best_streak": 65,
+  "total_runs": 65,
+  "successful_runs": 65,
   "sensor_gate_violations": 0,
   "dream_violations": 0
 }

@@ -1441,9 +1441,8 @@ export const layer = Layer.effect(
                         ),
                       )
 
-                      // Run all persona subagents concurrently via Effect.all
-                      const subagentAbort = new AbortController()
-
+                      // Run all persona subagents concurrently
+                      const neverAbort = new AbortController()
                       yield* Effect.all(
                         gateResult.personas.map((persona, i) => {
                           const part = personaParts[i]
@@ -1491,7 +1490,7 @@ export const layer = Layer.effect(
                                 sessionID,
                                 messageID: personaAssistantMsg.id,
                                 messages: msgs,
-                                abort: subagentAbort.signal,
+                                abort: neverAbort.signal,
                                 callID: (part as SessionV1.ToolPart).callID,
                                 extra: { bypassAgentCheck: true, promptOps: subtaskOps },
                                 metadata: (val: { title?: string; metadata?: Record<string, any> }) => {
@@ -1511,10 +1510,6 @@ export const layer = Layer.effect(
                             }))
                         }),
                         { concurrency: 3 },
-                      ).pipe(
-                        Effect.timeout("120 seconds"),
-                        Effect.catch(() => Effect.void),
-                        Effect.ensuring(Effect.sync(() => subagentAbort.abort())),
                       )
 
                       // Inject synthesis after all complete
