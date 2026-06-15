@@ -652,7 +652,11 @@ export const layer = Layer.effect(
       })
       if (input.forkContext) {
         forkContexts.set(child.id, input.forkContext) // peer's actorID === child.id
-        yield* actorReg.persistForkContext(child.id, child.id, input.forkContext).pipe(Effect.ignore)
+        yield* actorReg.persistForkContext(child.id, child.id, input.forkContext).pipe(
+          Effect.catchAllCause((cause) =>
+            Effect.sync(() => console.warn("[spawn] persistForkContext failed", { actorID: child.id, cause: String(cause) }))
+          ),
+        )
       }
       const { fiber, outcome } = yield* forkWork({
         sessionID: child.id,
