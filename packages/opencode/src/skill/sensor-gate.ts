@@ -1,7 +1,7 @@
 import { Effect, Context, Layer } from "effect"
 import * as fs from "fs"
 import * as path from "path"
-import { execFile } from "child_process"
+import { execFileSync } from "child_process"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
 
@@ -26,6 +26,183 @@ const PERSONA_SCAN_TYPE_MAP: Record<string, string> = {
   "The Navigator": "full_audit",
   "The Chronicler": "full_audit",
   "The Analyst": "full_audit",
+  "The Strategist": "full_audit",
+  "The Integrator": "full_audit",
+}
+
+interface PersonaProfile {
+  name: string
+  role: string
+  focus: string
+  skills: string[]
+  tags: string[]
+  minComplexity: number
+}
+
+const PERSONA_PROFILES: PersonaProfile[] = [
+  {
+    name: "The Architect",
+    role: "System Design Specialist",
+    focus: "Architecture, data flow, system boundaries, and design patterns",
+    skills: ["architecture", "design", "system-thinking"],
+    tags: ["architecture", "design", "system", "planning", "refactoring"],
+    minComplexity: 1,
+  },
+  {
+    name: "The Artisan",
+    role: "Code Quality Specialist",
+    focus: "Implementation, code style, best practices, and idiomatic patterns",
+    skills: ["code-quality", "best-practices", "implementation"],
+    tags: ["implementation", "code", "quality", "refactoring", "python", "react", "frontend"],
+    minComplexity: 1,
+  },
+  {
+    name: "The Sentinel",
+    role: "Security & Edge Case Specialist",
+    focus: "Vulnerabilities, error handling, input validation, and safety",
+    skills: ["security", "edge-cases", "defensive-programming"],
+    tags: ["security", "safety", "edge-cases", "error-handling", "audit"],
+    minComplexity: 2,
+  },
+  {
+    name: "The Detective",
+    role: "Root Cause Analysis Specialist",
+    focus: "Bug causation, reproduction steps, and fault isolation",
+    skills: ["debugging", "root-cause", "investigation"],
+    tags: ["debugging", "fix", "bug", "error", "crash", "broken"],
+    minComplexity: 1,
+  },
+  {
+    name: "The Optimizer",
+    role: "Performance & Efficiency Specialist",
+    focus: "Benchmarking, latency, memory, and computational efficiency",
+    skills: ["performance", "optimization", "profiling"],
+    tags: ["performance", "optimize", "speed", "latency", "slow"],
+    minComplexity: 2,
+  },
+  {
+    name: "The Navigator",
+    role: "Project Structure Specialist",
+    focus: "Dependency graph, module boundaries, build system, and file layout",
+    skills: ["project-structure", "dependencies", "build"],
+    tags: ["planning", "architecture", "structure", "build", "devops"],
+    minComplexity: 2,
+  },
+  {
+    name: "The Analyst",
+    role: "Code Review & Standards Specialist",
+    focus: "Standards compliance, diff analysis, and regression detection",
+    skills: ["review", "standards", "compliance"],
+    tags: ["review", "audit", "examine", "inspect", "refactoring"],
+    minComplexity: 1,
+  },
+  {
+    name: "The Examiner",
+    role: "Test Coverage Specialist",
+    focus: "Test gaps, test quality, edge coverage, and assertion strength",
+    skills: ["testing", "coverage", "quality-assurance"],
+    tags: ["testing", "test", "coverage", "quality"],
+    minComplexity: 2,
+  },
+  {
+    name: "The Cartographer",
+    role: "Documentation & API Surface Specialist",
+    focus: "API contracts, documentation, type definitions, and public interfaces",
+    skills: ["documentation", "api-design", "interfaces"],
+    tags: ["documentation", "api", "design", "communication"],
+    minComplexity: 2,
+  },
+  {
+    name: "The Chronicler",
+    role: "Process & Automation Specialist",
+    focus: "CI/CD, workflows, automation pipelines, and tooling",
+    skills: ["automation", "devops", "tooling"],
+    tags: ["automation", "devops", "ci", "cd", "pipeline", "deploy"],
+    minComplexity: 2,
+  },
+  {
+    name: "The Diplomat",
+    role: "Product & Requirements Specialist",
+    focus: "Stakeholder needs, trade-off analysis, and requirement clarity",
+    skills: ["product", "requirements", "communication"],
+    tags: ["product", "feature", "user", "requirement", "planning"],
+    minComplexity: 2,
+  },
+  {
+    name: "The Sculptor",
+    role: "Refactoring & Cleanup Specialist",
+    focus: "Dead code elimination, simplification, and technical debt reduction",
+    skills: ["refactoring", "cleanup", "simplification"],
+    tags: ["refactoring", "cleanup", "restructure", "improve", "enhance"],
+    minComplexity: 1,
+  },
+  {
+    name: "The Strategist",
+    role: "Innovation & Breakthrough Specialist",
+    focus: "Novel approaches, alternative solutions, and creative problem-solving",
+    skills: ["innovation", "creativity", "research"],
+    tags: ["innovation", "breakthrough", "novel", "research", "explore"],
+    minComplexity: 3,
+  },
+  {
+    name: "The Integrator",
+    role: "System Integration Specialist",
+    focus: "Cross-module integration, data flow between components, and compatibility",
+    skills: ["integration", "compatibility", "coordination"],
+    tags: ["architecture", "integration", "api", "system"],
+    minComplexity: 3,
+  },
+]
+
+function selectPersonas(result: SensorGateResult): Persona[] {
+  const tags = new Set(result.domain_tags.map((t) => t.trim().toLowerCase()))
+  const chain = new Set(result.chain.map((s) => s.trim().toLowerCase()))
+  const allTags = new Set([...tags, ...chain])
+
+  const mode = result.mode
+  const complexityScore = result.risk_level === "high" ? 3 : result.risk_level === "medium" ? 2 : 1
+
+  // Score each profile by relevance
+  const scored = PERSONA_PROFILES.map((profile) => {
+    let score = 0
+    for (const tag of profile.tags) {
+      if (allTags.has(tag)) score += 2
+      else if (chain.has(tag)) score += 1
+    }
+    // Penalize if below complexity threshold
+    if (complexityScore < profile.minComplexity) score -= 3
+    // Boost for DREAM_INNOVATION mode
+    if (mode === "DREAM_INNOVATION") score += 1
+    return { profile, score }
+  })
+
+  // Sort by score descending, filter out negatives
+  const eligible = scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score)
+
+  // Determine count based on mode and complexity
+  let count: number
+  if (mode === "DREAM_INNOVATION") {
+    count = Math.min(7, Math.max(4, Math.ceil(complexityScore * 2)))
+  } else if (mode === "TRIVIAL") {
+    count = Math.min(2, eligible.length)
+  } else {
+    count = Math.min(5, Math.max(2, complexityScore * 2))
+  }
+  count = Math.min(count, eligible.length, 7)
+
+  if (count === 0) {
+    // Fallback: include at least 2 default personas
+    const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
+    const picked = defaults.slice(0, Math.min(2, defaults.length))
+    return picked.map((p) => ({ name: p.name, role: p.role, focus: p.focus, skills: p.skills }))
+  }
+
+  return eligible.slice(0, count).map((s) => ({
+    name: s.profile.name,
+    role: s.profile.role,
+    focus: s.profile.focus,
+    skills: s.profile.skills,
+  }))
 }
 
 export interface SensorGateResult {
@@ -151,78 +328,77 @@ function parseSensorGateOutput(output: string): SensorGateResult {
   return result
 }
 
-function runSensorGate(prompt: string, projectRoot: string): Effect.Effect<SensorGateResult | null> {
+function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | null {
   const skillsDir = path.join(projectRoot, ".dreamcode", "skills")
   const sensorGate = path.join(skillsDir, "chain-orchestrator", "scripts", "sensor_gate.py")
 
-  if (!fs.existsSync(sensorGate)) return Effect.succeed(null)
+  if (!fs.existsSync(sensorGate)) return null
 
-  const tryRun = (timeoutMs: number): Effect.Effect<SensorGateResult | null> =>
-    Effect.tryPromise(() =>
-      new Promise<SensorGateResult | null>((resolve) => {
-        execFile("python3", [sensorGate, "--prompt", prompt], {
-          encoding: "utf8",
-          timeout: timeoutMs,
-          cwd: projectRoot,
-        }, (error: Error | null, stdout: string) => {
-          if (error || !stdout) return resolve(null)
-          resolve(parseSensorGateOutput(stdout))
-        })
+  const tryRun = (timeoutMs: number): SensorGateResult | null => {
+    try {
+      const output = execFileSync("python3", [sensorGate, "--prompt", prompt], {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: projectRoot,
       })
-    ).pipe(Effect.catch(() => Effect.succeed(null)))
+      return parseSensorGateOutput(output)
+    } catch (e) {
+      return null
+    }
+  }
 
-  return tryRun(15_000).pipe(
-    Effect.flatMap((result) =>
-      result ? Effect.succeed(result) : tryRun(30_000)
-    ),
-  )
+  const result = tryRun(200_000)
+  if (result) return result
+  return tryRun(400_000)
 }
 
-function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): Effect.Effect<string | null> {
+function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): string | null {
   const skillsDir = path.join(projectRoot, ".dreamcode", "skills")
   const neuroHarness = path.join(skillsDir, "neuro", "scripts", "neuro_harness.py")
 
-  if (!fs.existsSync(neuroHarness)) return Effect.succeed(null)
+  if (!fs.existsSync(neuroHarness)) return null
 
-  const tryRun = (timeoutMs: number): Effect.Effect<string | null> =>
-    Effect.tryPromise(() =>
-      new Promise<string | null>((resolve) => {
-        // Build prompt using TypeScript prompt engine
-        const promptResult = buildPrompt({
-          scanType,
-          files: [{ path: "user_prompt", content: prompt }],
-          context: prompt.slice(0, 500),
-        })
-
-        // Create a temp file with a unique name to avoid race conditions
-        const tmpDir = path.join(projectRoot, ".dreamcode", "tmp")
-        fs.mkdirSync(tmpDir, { recursive: true })
-        const tmpFile = path.join(tmpDir, `prompt_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`)
-        fs.writeFileSync(tmpFile, promptResult.userPrompt)
-
-        execFile("python3", [
-          neuroHarness,
-          "--scan-type", scanType,
-          "--file", tmpFile,
-          "--task", prompt.slice(0, 200),
-        ], {
-          encoding: "utf8",
-          timeout: timeoutMs,
-          cwd: projectRoot,
-        }, (error: Error | null, stdout: string) => {
-          // Clean up temp file
-          try { fs.unlinkSync(tmpFile) } catch {}
-          if (error || !stdout) return resolve(null)
-          resolve(stdout)
-        })
+  const tryRun = (timeoutMs: number): string | null => {
+      // Create a temp file with a unique name to avoid race conditions
+    const tmpDir = path.join(projectRoot, ".dreamcode", "tmp")
+    fs.mkdirSync(tmpDir, { recursive: true })
+    const tmpFile = path.join(tmpDir, `prompt_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`)
+    try {
+      // Build prompt using TypeScript prompt engine
+      const promptResult = buildPrompt({
+        scanType,
+        files: [{ path: "user_prompt", content: prompt }],
+        context: prompt.slice(0, 500),
       })
-    ).pipe(Effect.catch(() => Effect.succeed(null)))
 
-  return tryRun(30_000).pipe(
-    Effect.flatMap((result) =>
-      result ? Effect.succeed(result) : tryRun(60_000)
-    ),
-  )
+      fs.writeFileSync(tmpFile, promptResult.userPrompt)
+
+      const output = execFileSync("python3", [
+        neuroHarness,
+        "--scan-type", scanType,
+        "--file", tmpFile,
+        "--task", prompt.slice(0, 200),
+      ], {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: projectRoot,
+      })
+
+      // Clean up temp file
+      try { fs.unlinkSync(tmpFile) } catch {}
+      return output
+    } catch (e) {
+      // Clean up temp file
+      try { fs.unlinkSync(tmpFile) } catch {}
+      return null
+    }
+  }
+
+  const result = tryRun(200_000)
+  if (result) return result
+  return tryRun(400_000)
 }
 
 export interface Interface {
@@ -235,8 +411,15 @@ export const layer = Layer.succeed(Service, Service.of({
   classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
     const ctx = yield* InstanceState.contextOrNull
     const directory = ctx?.directory ?? process.cwd()
-    const result = yield* runSensorGate(prompt, directory)
+    const result = runSensorGate(prompt, directory)
     if (!result) return null
+
+    // Generate personas from TypeScript when Python script doesn't output them
+    if (result.personas.length === 0) {
+      result.personas = selectPersonas(result)
+    } else if (result.personas.length > 7) {
+      result.personas = result.personas.slice(0, 7)
+    }
 
     const shouldRunNeuro = result.risk_level === "high" ||
       result.mode === "DREAM_INNOVATION" ||
@@ -244,7 +427,7 @@ export const layer = Layer.succeed(Service, Service.of({
 
     if (shouldRunNeuro) {
       const scanType = result.risk_level === "high" ? "security" : "full_audit"
-      const neuroResult = yield* runNeuroHarness(prompt, directory, scanType)
+      const neuroResult = runNeuroHarness(prompt, directory, scanType)
       if (neuroResult) {
         result.neuro_result = neuroResult
       }
@@ -257,7 +440,7 @@ export const layer = Layer.succeed(Service, Service.of({
         const persona = result.personas[i]
         const scanType = PERSONA_SCAN_TYPE_MAP[persona.name] || "full_audit"
         const personaTask = `${persona.role}: ${prompt}`
-        const neuroResult = yield* runNeuroHarness(personaTask, directory, scanType)
+        const neuroResult = runNeuroHarness(personaTask, directory, scanType)
         if (neuroResult) {
           persona.neuroResult = neuroResult
         }

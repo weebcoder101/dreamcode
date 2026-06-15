@@ -151,5 +151,8 @@
   },
   "overrides": {
     "drizzle-orm": "catalog:"
+  },
+  "optionalDependencies": {
+    "opencode-linux-x64": "1.16.2"
   }
 }

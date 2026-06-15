@@ -1,0 +1,46 @@
+{
+  "total": 50,
+  "history": [
+    {
+      "timestamp": "2026-06-15T10:58:29.837002+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 10,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T10:58:35.747961+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 20,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T10:59:16.388608+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 30,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T10:59:24.681941+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 40,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T10:59:44.032470+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 50,
+      "details": "Sensor gate executed"
+    }
+  ],
+  "current_streak": 5,
+  "best_streak": 5,
+  "total_runs": 5,
+  "successful_runs": 5,
+  "sensor_gate_violations": 0,
+  "dream_violations": 0
+}

@@ -1148,6 +1148,7 @@ Before every response, verify your reasoning:
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let synthesisText: string | undefined
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1382,8 +1383,8 @@ Before every response, verify your reasoning:
                   system.push(sensorBlock.join("\n"))
 
                   // ─── Persona System Injection ─────────────────────────
-                  // Cap at 3 to prevent oversaturation and redundant work
-                  if (gateResult.personas.length > 3) gateResult.personas = gateResult.personas.slice(0, 3)
+                  // Cap at 7 to prevent oversaturation and redundant work
+                  if (gateResult.personas.length > 7) gateResult.personas = gateResult.personas.slice(0, 7)
                   if (gateResult.personas.length > 0) {
                     const personaLines = [
                       "<persona-system>",
@@ -1406,7 +1407,6 @@ Before every response, verify your reasoning:
                     // ─── ENFORCEMENT: Spawn persona subagents ────────────
                     const { task: taskTool } = yield* registry.named()
                     const generalAgent = yield* agents.get("general")
-
                     if (generalAgent) {
                       const subtaskOps = yield* ops()
                       const tracker = PersonaTracker.create(sessionID, gateResult.personas.length)
@@ -1451,11 +1451,25 @@ Before every response, verify your reasoning:
                         ),
                       )
 
-                      // Run all persona subagents concurrently
+                      // ─── Connected Persona Context ─────────────────────
+                      // Each persona sees the roles of other personas so they
+                      // coordinate and avoid overlapping work. The full active
+                      // context (parent messages) is forwarded by TaskTool.
                       const neverAbort = new AbortController()
+                      const personaTeam = gateResult.personas
                       yield* Effect.all(
-                        gateResult.personas.map((persona, i) => {
+                        personaTeam.map((persona, i) => {
                           const part = personaParts[i]
+                          const others = personaTeam.filter((_, j) => j !== i)
+                          const otherContext = others.length > 0
+                            ? [
+                                "",
+                                "Other specialists on this task:",
+                                ...others.map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
+                                "",
+                                "Do NOT duplicate work. Cover ONLY your assigned focus area.",
+                              ].join("\n")
+                            : ""
                           const personaPrompt = [
                             `You are "${persona.name}" — ${persona.role}.`,
                             `Your focus area: ${persona.focus}.`,
@@ -1467,12 +1481,14 @@ Before every response, verify your reasoning:
                               "Use this analysis to inform your findings.",
                               "",
                             ] : []),
+                            otherContext,
                             `Analyze the following task from your specialized perspective:`,
                             userText.trim(),
                             "",
                             "Provide your findings as a structured analysis.",
                             "Focus ONLY on your area of expertise.",
                             "Be specific, cite code locations, and provide actionable recommendations.",
+                            "Do not attempt to produce a final answer — produce a focused specialist report.",
                           ].join("\n")
 
                           const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
@@ -1519,13 +1535,14 @@ Before every response, verify your reasoning:
                               onFailure: (err) => markComplete("error", String(err)),
                             }))
                         }),
-                        { concurrency: 3 },
+                        { concurrency: 7 },
                       )
 
                       // Inject synthesis after all complete
-                      const results = yield* tracker.waitForAll()
+                      const personaResults = yield* tracker.waitForAll()
+                      synthesisText = PersonaTracker.buildSynthesisPrompt(personaResults)
                       yield* Effect.promise(() =>
-                        PersonaTracker.injectSynthesis(sessionID, results, sessions, model.providerID, model.id)
+                        PersonaTracker.injectSynthesis(sessionID, personaResults, sessions, model.providerID, model.id)
                       )
                     }
                     // ─── End Enforcement ─────────────────────────────────
@@ -1536,6 +1553,9 @@ Before every response, verify your reasoning:
             }
             // ─── End Sensor Gate ────────────────────────────────────────
 
+            const extraMsgs = synthesisText
+              ? [{ role: "user" as const, content: synthesisText }]
+              : []
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1543,7 +1563,7 @@ Before every response, verify your reasoning:
               sessionID,
               parentSessionID: session.parentID,
               system,
-              messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
+              messages: [...modelMsgs, ...extraMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
