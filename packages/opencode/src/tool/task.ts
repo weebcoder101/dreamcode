@@ -14,6 +14,10 @@ import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { GlobalBus } from "@/bus/global"
+import { Log } from "@/util"
+
+const log = Log.create({ service: "tool.task" })
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -89,6 +93,23 @@ export const TaskTool = Tool.define(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
 
+    const computeSessionDepth = Effect.fn("TaskTool.computeDepth")(function* (id: SessionID) {
+      let depth = 0
+      let current: SessionID | undefined = id
+      while (current) {
+        const s = yield* sessions.get(current).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        if (!s?.parentID) break
+        depth++
+        current = s.parentID
+      }
+      return depth
+    })
+
+    const activeSubagents = Effect.fn("TaskTool.activeSubagents")(function* (parentID: SessionID) {
+      const children = yield* sessions.children(parentID)
+      return children.length
+    })
+
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
       ctx: Tool.Context,
@@ -116,6 +137,58 @@ export const TaskTool = Tool.define(
       const next = yield* agent.get(params.subagent_type)
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
+      }
+
+      const maxDepth = cfg.experimental?.max_subagent_depth ?? 4
+      const currentDepth = yield* computeSessionDepth(ctx.sessionID)
+      if (currentDepth >= maxDepth) {
+        yield* Effect.sync(() =>
+          GlobalBus.emit("event", {
+            payload: {
+              type: "task.subagent_depth_rejected",
+              sessionID: ctx.sessionID,
+              depth: currentDepth,
+              maxDepth,
+              agentType: params.subagent_type,
+              description: params.description,
+            },
+          }),
+        ).pipe(Effect.ignore)
+        log.warn("subagent depth exceeded", {
+          sessionID: ctx.sessionID,
+          depth: currentDepth,
+          max: maxDepth,
+          subagentType: params.subagent_type,
+        })
+        return yield* Effect.fail(
+          new Error(`Subagent nesting exceeds max depth (${maxDepth}). Session ${ctx.sessionID} is at depth ${currentDepth}.`),
+        )
+      }
+
+      const maxConcurrent = cfg.experimental?.max_subagents_per_parent ?? 8
+      const currentSubagents = yield* activeSubagents(ctx.sessionID)
+      if (currentSubagents >= maxConcurrent) {
+        yield* Effect.sync(() =>
+          GlobalBus.emit("event", {
+            payload: {
+              type: "task.subagent_concurrency_throttled",
+              sessionID: ctx.sessionID,
+              count: currentSubagents,
+              max: maxConcurrent,
+              agentType: params.subagent_type,
+              description: params.description,
+            },
+          }),
+        ).pipe(Effect.ignore)
+        log.warn("too many active subagents", {
+          sessionID: ctx.sessionID,
+          count: currentSubagents,
+          max: maxConcurrent,
+          subagentType: params.subagent_type,
+        })
+        return yield* Effect.fail(
+          new Error(`Too many active subagents (${currentSubagents}) for parent session. Max is ${maxConcurrent}.`),
+        )
       }
 
       const session = params.task_id

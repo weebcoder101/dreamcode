@@ -36,6 +36,7 @@ export const Actor = z
     tools: ToolWhitelist.optional(),
     lastTurnTime: z.number(),
     turnCount: z.number(),
+    gateReactCount: z.number().optional(),
     lastError: z.string().optional(),
     time: z.object({
       created: z.number(),

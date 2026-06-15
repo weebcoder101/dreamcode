@@ -1,0 +1,64 @@
+{
+  "id": "todo-1781505738857",
+  "sessionId": "ses_1360fc740ffeDG0Ll5tAQUgi42",
+  "items": [
+    {
+      "id": "P0-a",
+      "content": "Depth guard + concurrency limit in task.ts",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-15T06:42:18.856Z",
+      "updatedAt": "2026-06-15T06:42:18.856Z"
+    },
+    {
+      "id": "P0-b",
+      "content": "PiecesLTM Effect Service + config",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-15T06:42:18.856Z",
+      "updatedAt": "2026-06-15T06:42:18.856Z"
+    },
+    {
+      "id": "P1-a",
+      "content": "ForkContext persistence (DB table + registry methods + spawn.ts calls)",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-15T06:42:18.856Z",
+      "updatedAt": "2026-06-15T06:42:18.856Z"
+    },
+    {
+      "id": "P2-a",
+      "content": "Permission inheritance: include allow rules",
+      "status": "pending",
+      "priority": "medium",
+      "createdAt": "2026-06-15T06:42:18.856Z",
+      "updatedAt": "2026-06-15T06:42:18.856Z"
+    },
+    {
+      "id": "P2-b",
+      "content": "gateIter persistence in ActorRegistry",
+      "status": "pending",
+      "priority": "medium",
+      "createdAt": "2026-06-15T06:42:18.856Z",
+      "updatedAt": "2026-06-15T06:42:18.856Z"
+    },
+    {
+      "id": "P2-c",
+      "content": "Per-plugin preStop iteration guard",
+      "status": "pending",
+      "priority": "medium",
+      "createdAt": "2026-06-15T06:42:18.856Z",
+      "updatedAt": "2026-06-15T06:42:18.856Z"
+    },
+    {
+      "id": "verify",
+      "content": "Typecheck and verify all changes",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-15T06:42:18.856Z",
+      "updatedAt": "2026-06-15T06:42:18.856Z"
+    }
+  ],
+  "createdAt": "2026-06-15T06:42:18.856Z",
+  "updatedAt": "2026-06-15T06:42:18.856Z"
+}

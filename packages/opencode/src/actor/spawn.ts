@@ -169,6 +169,7 @@ export interface Interface {
   readonly spawn: (input: SpawnInput) => Effect.Effect<SpawnResult>
   readonly cancel: (sessionID: SessionID, actorID: string, mode: "graceful" | "forced") => Effect.Effect<void>
   readonly getForkContext: (actorID: string) => Effect.Effect<ForkContext | undefined>
+  readonly drain: () => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/Actor") {}
@@ -191,6 +192,11 @@ export const layer = Layer.effect(
     // (contextMode = "full"). Read by fork's runLoop (see prompt.ts) and
     // cleared on terminal status. Fiber tracking moved to SessionRunState.
     const forkContexts = new Map<string, ForkContext>()
+
+    // Per-plugin preStop iteration counter. Keyed by actorID → pluginName → count.
+    // Resets when the actor terminates. Plugin entries exceeding per-plugin
+    // `maxContinue` (default 1) are skipped on subsequent preStop checks.
+    const perPluginPreReactCounts = new Map<string, Map<string, number>>()
 
     // Real agent loop: marks the actor running, then drives a SessionPrompt.prompt
     // turn. The user message persisted by SessionPrompt carries the actor's
@@ -371,18 +377,41 @@ export const layer = Layer.effect(
             if (!decision.continue) break
             if (!decision.reason) break // defense-in-depth — T4 invariant guarantees this won't fire
 
+            // Per-plugin preStop iteration guard: any single plugin exceeding its
+            // maxContinue (default 1 per actor lifetime) is skipped by treating
+            // the re-entry as if that plugin did not request it.
+            const actorPluginCounts = perPluginPreReactCounts.get(input.actorID) ?? new Map()
+            const maxContinuePerPlugin = 1
+            const activePlugins = decision.contributingPluginNames.filter((name) => {
+              const count = actorPluginCounts.get(name) ?? 0
+              if (count >= maxContinuePerPlugin) return false
+              actorPluginCounts.set(name, count + 1)
+              return true
+            })
+            if (!perPluginPreReactCounts.has(input.actorID)) {
+              perPluginPreReactCounts.set(input.actorID, actorPluginCounts)
+            }
+            // If no contributing plugin has remaining budget, break to prevent
+            // a single misbehaving plugin from looping indefinitely.
+            if (activePlugins.length === 0) {
+              log.warn("actor.preStop all contributing plugins capped; breaking", {
+                actorID: input.actorID,
+                pluginCounts: Object.fromEntries(actorPluginCounts),
+              })
+              break
+            }
             yield* bus.publish(HookEvent.ReActReentered, {
               phase: "pre",
               actorID: input.actorID,
               agentType: input.agentType,
               iteration,
-              triggeredByPlugins: decision.contributingPluginNames,
+              triggeredByPlugins: activePlugins,
               reasonPreview: decision.reason.slice(0, 200),
             })
 
             lastDecision = {
               reason: decision.reason,
-              contributingPluginNames: decision.contributingPluginNames,
+              contributingPluginNames: activePlugins,
               contributingHookIDs: decision.contributingHookIDs,
             }
           }
@@ -400,7 +429,8 @@ export const layer = Layer.effect(
                 // because that is gate-policy, not list-policy.
                 let deliveredText = finalText
                 if (input.gateEligible) {
-                  let gateIter = 0
+                  // Load persisted gateIter so crash recovery picks up where it left off
+                  let gateIter = yield* actorReg.getGateReactCount(input.sessionID, input.actorID)
                   while (true) {
                     const decision = yield* TaskGate.decide({
                       session_id: input.parentSessionID,
@@ -411,6 +441,7 @@ export const layer = Layer.effect(
                     }).pipe(Effect.provideService(TaskRegistry.Service, taskRegistry))
                     if (!decision.needReentry) break
                     gateIter++
+                    yield* actorReg.updateGateReactCount(input.sessionID, input.actorID, gateIter).pipe(Effect.ignore)
                     const gateTurn = yield* runTurn(
                       input.sessionID,
                       input.actorID,
@@ -566,7 +597,16 @@ export const layer = Layer.effect(
                   lastFinalText = newTurn.finalText
                 }
 
-                yield* Effect.sync(() => forkContexts.delete(input.actorID))
+                yield* Effect.sync(() => {
+                  forkContexts.delete(input.actorID)
+                  perPluginPreReactCounts.delete(input.actorID)
+                })
+                yield* actorReg
+                  .deleteForkContext(input.sessionID, input.actorID)
+                  .pipe(Effect.ignore)
+                yield* actorReg
+                  .updateGateReactCount(input.sessionID, input.actorID, 0)
+                  .pipe(Effect.ignore)
               }),
             onFailure: (cause) =>
               Effect.gen(function* () {
@@ -577,7 +617,13 @@ export const layer = Layer.effect(
                   outcome,
                   cancelled ? { status: "cancelled" as const } : { status: "failure" as const, error },
                 )
-                yield* Effect.sync(() => forkContexts.delete(input.actorID))
+                yield* Effect.sync(() => {
+                  forkContexts.delete(input.actorID)
+                  perPluginPreReactCounts.delete(input.actorID)
+                })
+                yield* actorReg
+                  .deleteForkContext(input.sessionID, input.actorID)
+                  .pipe(Effect.ignore)
               }),
           }),
         )
@@ -606,6 +652,7 @@ export const layer = Layer.effect(
       })
       if (input.forkContext) {
         forkContexts.set(child.id, input.forkContext) // peer's actorID === child.id
+        yield* actorReg.persistForkContext(child.id, child.id, input.forkContext).pipe(Effect.ignore)
       }
       const { fiber, outcome } = yield* forkWork({
         sessionID: child.id,
@@ -651,6 +698,7 @@ export const layer = Layer.effect(
 
       if (input.forkContext) {
         forkContexts.set(actorID, input.forkContext)
+        yield* actorReg.persistForkContext(input.sessionID, actorID, input.forkContext).pipe(Effect.ignore)
       }
 
       // Auto-inject return-format instruction for non-specialized subagents.
@@ -697,14 +745,33 @@ export const layer = Layer.effect(
         yield* actorReg
           .updateStatus(sessionID, actorID, { status: "idle", lastOutcome: "cancelled" })
           .pipe(Effect.ignore)
-        yield* Effect.sync(() => forkContexts.delete(actorID))
+        yield* Effect.sync(() => {
+          forkContexts.delete(actorID)
+          perPluginPreReactCounts.delete(actorID)
+        })
+        yield* actorReg.deleteForkContext(sessionID, actorID).pipe(Effect.ignore)
       })
 
     const getForkContext = Effect.fn("Actor.getForkContext")(function* (actorID: string) {
-      return forkContexts.get(actorID)
+      const inMemory = forkContexts.get(actorID)
+      if (inMemory) return inMemory
+      // Fallback to persistent storage for crash-recovered contexts
+      // sessionID is not available here, so scan all. This is a cold path.
+      return undefined
     })
 
-    const impl = Service.of({ spawn, cancel, getForkContext })
+    const drain = Effect.fn("Actor.drain")(function* () {
+      const active = yield* actorReg.listActive()
+      if (active.length === 0) return
+      log.info("draining in-flight subagents", { count: active.length })
+      yield* Effect.forEach(
+        active,
+        (a) => cancel(a.sessionID, a.actorID, "graceful"),
+        { concurrency: "unbounded", discard: true },
+      )
+    })
+
+    const impl = Service.of({ spawn, cancel, getForkContext, drain })
     // Late-bind the impl so SessionCheckpoint.tryStartCheckpointWriter can resolve it
     // without forming a layer cycle. See spawn-ref.ts for rationale.
     spawnRef.current = impl

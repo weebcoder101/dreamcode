@@ -621,7 +621,9 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
 
     lines.extend([
         "FINAL STEP: Persist results to Pieces LTM.",
-        "  Run: python3 .opencode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
+        "  Primary: Use the PiecesLTM Service (inside opencode runtime):",
+        "    PiecesLTM.Service.persist({ chainName: '...', taskDescription: '...', outcome: 'success' })",
+        "  Fallback: Run: python3 .opencode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
         f"    --chain \"{', '.join(chain)}\" --task \"{prompt[:80]}\" --outcome success",
         "",
         "After ALL steps complete, respond to the user with:",

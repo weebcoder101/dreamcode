@@ -3,7 +3,7 @@ import { Database } from "@/storage/storage"
 import { inArray, eq, and, lte, sql } from "drizzle-orm"
 import { GlobalBus } from "@/bus/global"
 import type { SessionID, MessageID } from "@/session/schema"
-import { ActorRegistryTable } from "./actor.sql"
+import { ActorRegistryTable, ActorForkContextTable } from "./actor.sql"
 import type { Actor, ActorStatus, ActorOutcome, ContextMode, Lifecycle, SpawnMode, ToolWhitelist } from "./schema"
 import * as Events from "./events"
 
@@ -32,6 +32,7 @@ function fromRow(row: ActorRow): Actor {
     tools: row.tools ?? undefined,
     lastTurnTime: row.last_turn_time,
     turnCount: row.turn_count,
+    gateReactCount: row.gate_react_count,
     lastError: row.last_error ?? undefined,
     time: {
       created: row.time_created,
@@ -74,6 +75,11 @@ export interface Interface {
   readonly agentTypeFor: (sessionID: SessionID, actorID: string) => Effect.Effect<string>
   readonly isSystemSpawned: (sessionID: SessionID, actorID: string) => Effect.Effect<boolean>
   readonly allocateActorID: (sessionID: SessionID, agentType: string) => Effect.Effect<string>
+  readonly updateGateReactCount: (sessionID: SessionID, actorID: string, count: number) => Effect.Effect<void>
+  readonly getGateReactCount: (sessionID: SessionID, actorID: string) => Effect.Effect<number>
+  readonly persistForkContext: (sessionID: SessionID, actorID: string, context: unknown) => Effect.Effect<void>
+  readonly loadForkContext: (sessionID: SessionID, actorID: string) => Effect.Effect<unknown | undefined>
+  readonly deleteForkContext: (sessionID: SessionID, actorID: string) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/ActorRegistry") {}
@@ -311,6 +317,102 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
       return SYSTEM_SPAWNED_AGENT_TYPES.has(actor.agent)
     })
 
+    const updateGateReactCount = Effect.fn("ActorRegistry.updateGateReactCount")(function* (
+      sessionID: SessionID,
+      actorID: string,
+      count: number,
+    ) {
+      yield* Effect.sync(() =>
+        Database.use((db) =>
+          db
+            .update(ActorRegistryTable)
+            .set({ gate_react_count: count, time_updated: Date.now() })
+            .where(
+              and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
+            )
+            .run(),
+        ),
+      )
+    })
+
+    const getGateReactCount = Effect.fn("ActorRegistry.getGateReactCount")(function* (
+      sessionID: SessionID,
+      actorID: string,
+    ) {
+      const row = yield* Effect.sync(() =>
+        Database.use((db) =>
+          db
+            .select({ gate_react_count: ActorRegistryTable.gate_react_count })
+            .from(ActorRegistryTable)
+            .where(
+              and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
+            )
+            .get(),
+        ),
+      )
+      return row?.gate_react_count ?? 0
+    })
+
+    const persistForkContext = Effect.fn("ActorRegistry.persistForkContext")(function* (
+      sessionID: SessionID,
+      actorID: string,
+      context: unknown,
+    ) {
+      const now = Date.now()
+      yield* Effect.sync(() =>
+        Database.use((db) =>
+          db
+            .insert(ActorForkContextTable)
+            .values({
+              session_id: sessionID,
+              actor_id: actorID,
+              context,
+              time_created: now,
+              time_updated: now,
+            })
+            .onConflictDoUpdate({
+              target: [ActorForkContextTable.session_id, ActorForkContextTable.actor_id],
+              set: { context, time_updated: now },
+            })
+            .run(),
+        ),
+      )
+    })
+
+    const loadForkContext = Effect.fn("ActorRegistry.loadForkContext")(function* (
+      sessionID: SessionID,
+      actorID: string,
+    ) {
+      const row = yield* Effect.sync(() =>
+        Database.use((db) =>
+          db
+            .select({ context: ActorForkContextTable.context })
+            .from(ActorForkContextTable)
+            .where(
+              and(eq(ActorForkContextTable.session_id, sessionID), eq(ActorForkContextTable.actor_id, actorID)),
+            )
+            .get(),
+        ),
+      )
+      return row?.context as unknown | undefined
+    })
+
+    const deleteForkContext = Effect.fn("ActorRegistry.deleteForkContext")(function* (
+      sessionID: SessionID,
+      actorID: string,
+    ) {
+      yield* Effect.sync(() =>
+        Database.use((db) =>
+          db
+            .delete(ActorForkContextTable)
+            .where(
+              and(eq(ActorForkContextTable.session_id, sessionID), eq(ActorForkContextTable.actor_id, actorID)),
+            )
+            .run(),
+        ),
+      )
+    })
+
     const allocateActorID = Effect.fn("ActorRegistry.allocateActorID")(function* (
       sessionID: SessionID,
       agentType: string,
@@ -403,6 +505,11 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
       agentTypeFor,
       isSystemSpawned,
       allocateActorID,
+      updateGateReactCount,
+      getGateReactCount,
+      persistForkContext,
+      loadForkContext,
+      deleteForkContext,
     })
   }),
 )

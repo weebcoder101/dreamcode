@@ -301,37 +301,87 @@ def step_lint_fixer(files: list[str]) -> ChainStep:
 
 
 def step_pieces_ltm(prompt: str, files: list[str], chain_result: dict) -> ChainStep:
-    """Step 6: Persist results to Pieces LTM."""
+    """Step 6: Persist results to Pieces LTM.
+
+    Prefers the PiecesLTM Effect service via MCP endpoint directly.
+    Falls back to the legacy pieces_persist.py Python script.
+    """
     step = ChainStep(name="pieces_ltm")
     log(f"\n{'─'*50}")
     log("STEP 6/7: Pieces LTM (Persist Results)")
     log(f"{'─'*50}")
-
-    persist_script = SKILLS_DIR / "pieces-ltm" / "scripts" / "pieces_persist.py"
-    if not persist_script.exists():
-        step.status = "skipped"
-        step.output = "pieces_persist.py not found"
-        log("  → Skipped (persist script not found)")
-        return step
 
     decisions = []
     for s in chain_result.get("steps", []):
         if s.get("status") == "success" and s.get("name") != "pieces_ltm":
             decisions.append(f"{s['name']}: completed successfully")
 
-    r = run_cmd(
-        [sys.executable, str(persist_script), "persist",
-         "--chain", "chain_executor",
-         "--task", prompt[:200],
-         "--outcome", "success",
-         "--files"] + files + [
-         "--decisions", "; ".join(decisions) if decisions else "chain completed"],
-        timeout=30, label="pieces_persist",
+    # Try primary path: direct MCP HTTP call (same endpoint as PiecesLTM.Service)
+    mcp_url = os.environ.get(
+        "PIECES_MCP_URL",
+        "http://localhost:39302/model_context_protocol/2024-11-05",
     )
-    step.status = "success" if r["success"] else "failed"
-    step.output = r["stdout"]
-    step.error = r["stderr"]
-    step.elapsed = r["elapsed"]
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "create_pieces_memory",
+                "arguments": {
+                    "summary": (
+                        f"## Chain: chain_executor\n\n"
+                        f"**Prompt:** {prompt[:200]}\n"
+                        f"**Outcome:** success\n"
+                        f"**Files:** {', '.join(files)}\n"
+                        f"**Decisions:** {'; '.join(decisions[:5])}"
+                    ),
+                    "summary_description": f"[CHAIN] {prompt[:80]}",
+                    "project": str(PROJECT_ROOT),
+                    "files": [str(PROJECT_ROOT / f) if not f.startswith("/") else f for f in files],
+                    "connected_client": "opencode",
+                },
+            },
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{mcp_url}/messages",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urllib.request.urlopen(req, timeout=10)
+        body = resp.read().decode("utf-8")
+        step.status = "success"
+        step.output = f"MCP persist succeeded: {body[:200]}"
+        step.elapsed = 0.0
+        log("  → Persisted via MCP endpoint (primary path)")
+        return step
+    except Exception as mcp_err:
+        log(f"  → MCP primary path failed ({mcp_err}), trying Python fallback...")
+
+        # Fallback: legacy pieces_persist.py script
+        persist_script = SKILLS_DIR / "pieces-ltm" / "scripts" / "pieces_persist.py"
+        if not persist_script.exists():
+            step.status = "skipped"
+            step.output = "pieces_persist.py not found (MCP also unavailable)"
+            log("  → Skipped (no persistence path available)")
+            return step
+
+        r = run_cmd(
+            [sys.executable, str(persist_script), "persist",
+             "--chain", "chain_executor",
+             "--task", prompt[:200],
+             "--outcome", "success",
+             "--files"] + files + [
+             "--decisions", "; ".join(decisions) if decisions else "chain completed"],
+            timeout=30, label="pieces_persist",
+        )
+        step.status = "success" if r["success"] else "failed"
+        step.output = r["stdout"]
+        step.error = r["stderr"]
+        step.elapsed = r["elapsed"]
+        return step
 
     return step
 

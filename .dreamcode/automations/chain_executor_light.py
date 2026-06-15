@@ -6,7 +6,7 @@ Unlike the full chain_executor.py, this is optimized for speed (30s timeout)
 and focuses on the steps that matter for every prompt:
 
   1. Extract guidance from SKILL.md for each skill in the chain
-  2. Run pieces_persist.py to persist results
+   2. Run PiecesLTM.Service.persist() (or pieces_persist.py fallback) to persist results
 
 Usage:
     python3 chain_executor_light.py --chain "dream,neuro,code-hardener,lint-fixer,pieces-ltm" --prompt "fix the bug"

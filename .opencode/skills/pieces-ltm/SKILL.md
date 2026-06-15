@@ -39,7 +39,35 @@ Skill Chain Output → pieces-ltm → Pieces MCP → LTM Storage
 
 **Enforcement:** Every non-trivial chain (4+ skills fired, 1+ files modified) MUST persist to Pieces LTM. Analysis of 74 chain executions shows only 6 writes — this is a critical gap.
 
-After EVERY skill chain completes, run:
+### Primary: TypeScript Effect Service (recommended)
+
+The opencode runtime provides `PiecesLTM.Service` (`@dreamcode/PiecesLTM`) with:
+- `persist(input)` — structured memory write with retry + timeout
+- `query(input)` — semantic LTM search with 60s TTL cache
+- `health()` — health check probe for `localhost:39302`
+
+This service replaces the Python subprocess approach. It uses `HttpClient` with:
+- Exponential backoff retry (500ms base, 2 attempts)
+- 30-second request timeout
+- Graceful degradation when Pieces is unavailable
+
+```typescript
+import { PiecesLTM } from "@/pieces-ltm"
+
+yield* PiecesLTM.Service.persist({
+  chainName: "neuro → code-hardener → lint-fixer",
+  taskDescription: "Fixed numpy bool_ serialization in Monte Carlo",
+  outcome: "success",
+  filesChanged: ["src/project_q/monte_carlo.py"],
+  keyDecisions: ["Added custom JSON encoder for numpy types"],
+  metrics: { tokens_used: 12000, iterations: 10 },
+  memoryType: "bugfix",
+})
+```
+
+### Fallback: Python Script (legacy)
+
+When the Effect service is unavailable, the Python `pieces_persist.py` script provides equivalent functionality:
 
 ```python
 from scripts.pieces_persist import persist_chain_result
@@ -53,6 +81,8 @@ persist_chain_result(
     metrics={"tokens_used": 12000, "iterations": 10},
 )
 ```
+
+Note: The Python path uses raw `urllib.request` — no retry, no timeout, no circuit breaker. Prefer the Effect service when running inside the opencode runtime.
 
 **Mandatory Persistence Check (in automated-learning post-step):**
 The Learning Note MUST include `"pieces_written": true | false`. If false, flag it as a violation in `evolution/violations.log` and append a corrective entry to `evolution/pieces_writes.jsonl` explaining why persistence was skipped.

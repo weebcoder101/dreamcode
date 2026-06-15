@@ -1,4 +1,4 @@
-import { Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { attach } from "./run-service"
 import * as Observability from "@opencode-ai/core/observability"
 
@@ -53,6 +53,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SensorGate } from "@/skill/sensor-gate"
 import { ContextCompressor } from "@/session/context-compressor"
+import { PiecesLTM } from "@/pieces-ltm"
+import { Actor } from "@/actor/spawn"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -103,6 +105,7 @@ export const AppLayer = Layer.mergeAll(
   SessionShare.defaultLayer,
   SensorGate.defaultLayer,
   ContextCompressor.defaultLayer,
+  PiecesLTM.defaultLayer,
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(InstanceLayer.layer),
@@ -115,6 +118,23 @@ type Runtime = Pick<typeof rt, "runSync" | "runPromise" | "runPromiseExit" | "ru
 /** Services provided by AppRuntime — i.e. what an Effect run via AppRuntime.runPromise can yield. */
 export type AppServices = ManagedRuntime.ManagedRuntime.Services<typeof rt>
 const wrap = (effect: Parameters<typeof rt.runSync>[0]) => attach(effect as never) as never
+
+// Graceful shutdown: drain in-flight subagents on SIGTERM/SIGINT
+function setupSignalHandlers() {
+  const shutdown = async () => {
+    await rt.runPromise(
+      Effect.gen(function* () {
+        const actor = yield* Actor.Service
+        yield* actor.drain()
+      }),
+    ).catch(() => {})
+    await rt.dispose().catch(() => {})
+    process.exit(0)
+  }
+  process.on("SIGTERM", shutdown)
+  process.on("SIGINT", shutdown)
+}
+setupSignalHandlers()
 
 export const AppRuntime: Runtime = {
   runSync(effect) {

@@ -176,6 +176,9 @@ researcher = DeepResearcher(query="...", mode="standard")
 report = researcher.research()
 
 # Auto-persist to Pieces LTM
+# Primary: TypeScript Effect service (when running inside opencode runtime)
+#   PiecesLTM.Service.persist({ chainName: "deep-research", ... })
+# Fallback: Python pieces_persist.py
 import sys
 sys.path.insert(0, ".opencode/skills/pieces-ltm/scripts")
 from pieces_persist import persist_chain_result

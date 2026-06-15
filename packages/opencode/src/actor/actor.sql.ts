@@ -3,6 +3,23 @@ import { SessionTable } from "../session/session.sql"
 import type { SessionID, MessageID } from "../session/schema"
 import { Timestamps } from "../storage/schema.sql"
 
+export const ActorForkContextTable = sqliteTable(
+  "actor_fork_context",
+  {
+    session_id: text()
+      .$type<SessionID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    actor_id: text().notNull(),
+    context: text({ mode: "json" }).notNull(),
+    time_created: integer().notNull(),
+    time_updated: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.session_id, table.actor_id] }),
+  ],
+)
+
 export const ActorRegistryTable = sqliteTable(
   "actor_registry",
   {
@@ -24,6 +41,7 @@ export const ActorRegistryTable = sqliteTable(
     tools: text({ mode: "json" }).$type<readonly string[] | "INHERIT">(),
     last_turn_time: integer().notNull(),
     turn_count: integer().notNull().default(0),
+    gate_react_count: integer().notNull().default(0),
     last_error: text(),
     time_completed: integer(),
     ...Timestamps,

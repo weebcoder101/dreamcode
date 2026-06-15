@@ -182,6 +182,12 @@ export const Info = Schema.Struct({
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
+      max_subagent_depth: Schema.optional(NonNegativeInt).annotate({
+        description: "Maximum nesting depth for subagent spawns via the task tool (default: 4)",
+      }),
+      max_subagents_per_parent: Schema.optional(NonNegativeInt).annotate({
+        description: "Maximum concurrent subagents per parent session via the task tool (default: 8)",
+      }),
     }),
   ),
 }).annotate({ identifier: "Config" })

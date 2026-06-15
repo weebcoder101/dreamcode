@@ -862,7 +862,8 @@ pieces_annotations_full_text_search --query "security audit"
 ### Manual persist
 
 ```bash
-python3 .opencode/skills/pieces-ltm/scripts/pieces_persist.py persist \
+# Primary (opencode runtime): PiecesLTM.Service.persist({ ... })
+# Fallback: python3 .opencode/skills/pieces-ltm/scripts/pieces_persist.py persist \
   --chain "neuro → code-hardener" \
   --task "Fixed authentication bug" \
   --outcome success \
