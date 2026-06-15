@@ -17,6 +17,9 @@ export interface PersonaResult {
   role: string
   output: string
   status: "completed" | "error"
+  task?: string
+  goals?: string[]
+  synthesisGuide?: string
 }
 
 export interface PersonaTracker {
@@ -36,8 +39,9 @@ export function create(sessionID: string, total: number): PersonaTracker {
     role: string,
     output: string,
     status: "completed" | "error",
+    extra?: { task?: string; goals?: string[]; synthesisGuide?: string },
   ) {
-    results.push({ name, role, output, status })
+    results.push({ name, role, output, status, ...extra })
     remaining--
 
     if (remaining <= 0 && resolveWait) {
@@ -74,22 +78,29 @@ export function buildSynthesisPrompt(results: PersonaResult[]): string {
     const r = results[i]
     const statusIcon = r.status === "completed" ? "[OK]" : "[FAIL]"
     lines.push(`### ${i + 1}. "${r.name}" (${r.role}) ${statusIcon}`)
+    if (r.task) lines.push(`Task: ${r.task}`)
+    if (r.goals?.length) lines.push(`Goals: ${r.goals.join("; ")}`)
     lines.push("")
     if (r.status === "completed") {
       lines.push(r.output)
     } else {
       lines.push(`*Analysis failed: ${r.output}*`)
     }
+    if (r.synthesisGuide) {
+      lines.push("")
+      lines.push(`Synthesis note: ${r.synthesisGuide}`)
+    }
     lines.push("")
   }
 
   lines.push(`---`)
   lines.push(`SYNTHESIS INSTRUCTIONS:`)
-  lines.push(`1. Review all specialist findings above`)
-  lines.push(`2. Identify common themes and disagreements`)
-  lines.push(`3. Prioritize findings by severity and confidence`)
-  lines.push(`4. Produce a unified, actionable response`)
-  lines.push(`5. Include specific code references where applicable`)
+  lines.push(`1. Review all specialist findings above, noting each specialist's task and goals`)
+  lines.push(`2. Identify common themes and disagreements across findings`)
+  lines.push(`3. Cross-reference findings against each specialist's synthesis guide`)
+  lines.push(`4. Prioritize by severity, confidence, and relevance`)
+  lines.push(`5. Produce a unified, actionable response with specific code references`)
+  lines.push(`6. If any findings conflict, note the disagreement and propose resolution`)
   lines.push(`</synthesis-request>`)
 
   return lines.join("\n")

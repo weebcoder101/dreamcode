@@ -21,7 +21,7 @@ export type ToolWhitelist = z.infer<typeof ToolWhitelist>
 
 export const Actor = z
   .object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     actorID: z.string(),
     mode: SpawnMode,
     parentActorID: z.string().optional(),
@@ -31,7 +31,7 @@ export const Actor = z
     agent: z.string(),
     description: z.string(),
     contextMode: ContextMode,
-    contextWatermark: MessageID.zod.optional(),
+    contextWatermark: z.string().optional(),
     background: z.boolean(),
     tools: ToolWhitelist.optional(),
     lastTurnTime: z.number(),

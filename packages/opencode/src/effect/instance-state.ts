@@ -1,4 +1,4 @@
-import { Effect, ScopedCache, Scope } from "effect"
+import { Duration, Effect, Exit, ScopedCache, Scope } from "effect"
 import type { InstanceContext } from "@/project/instance-context"
 import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import { registerDisposer } from "./instance-registry"
@@ -47,7 +47,7 @@ export const make = <A, E = never, R = never>(
   init: (ctx: InstanceContext) => Effect.Effect<A, E, R | Scope.Scope>,
 ): Effect.Effect<InstanceState<A, E, Exclude<R, Scope.Scope>>, never, R | Scope.Scope> =>
   Effect.gen(function* () {
-    const cache = yield* ScopedCache.make<string, A, E, R>({
+    const cache = yield* ScopedCache.makeWith<string, A, E, R>({
       capacity: Number.POSITIVE_INFINITY,
       lookup: () =>
         Effect.gen(function* () {
@@ -55,6 +55,11 @@ export const make = <A, E = never, R = never>(
           if (!ctx) return yield* init(FallbackContext)
           return yield* init(ctx)
         }),
+      timeToLive: (exit) => {
+        if (Exit.isSuccess(exit)) return Duration.hours(1)
+        return Duration.seconds(30)
+      },
+      requireServicesAt: "lookup",
     })
 
     const off = registerDisposer((directory) => Effect.runPromise(ScopedCache.invalidate(cache, directory)))

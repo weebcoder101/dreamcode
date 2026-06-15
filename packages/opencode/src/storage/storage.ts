@@ -326,4 +326,6 @@ export const defaultLayer = layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer
 
 export const node = LayerNode.make(layer, [FSUtil.node, Git.node])
 
+export { Database } from "@opencode-ai/core/database/database"
+
 export * as Storage from "./storage"

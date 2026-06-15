@@ -10,6 +10,10 @@ export interface Persona {
   role: string
   focus: string
   skills: string[]
+  task: string
+  goals: string[]
+  synthesisGuide: string
+  tools?: string[]
   neuroResult?: string
 }
 
@@ -154,6 +158,52 @@ const PERSONA_PROFILES: PersonaProfile[] = [
   },
 ]
 
+function dynamicTaskFor(persona: { name: string; role: string; focus: string }, intent: string): string {
+  const t: Record<string, string> = {
+    "The Architect": `Review the architecture, data flow, system boundaries, and design patterns relevant to: ${intent}. Focus on module boundaries, dependency direction, extensibility, and architectural risks.`,
+    "The Artisan": `Review code quality, style, best practices, and idiomatic patterns for: ${intent}. Focus on implementation clarity, code organization, maintainability, and adherence to project conventions.`,
+    "The Sentinel": `Audit security vulnerabilities, error handling, input validation, and safety for: ${intent}. Focus on OWASP Top 10, credential exposure, injection risks, and edge case robustness.`,
+    "The Detective": `Perform root cause analysis for bugs and issues related to: ${intent}. Focus on fault isolation, reproduction steps, error chain analysis, and identifying systemic failures.`,
+    "The Optimizer": `Analyze performance, efficiency, and resource usage for: ${intent}. Focus on algorithmic complexity, memory/CPU bottlenecks, caching strategy, and latency optimization.`,
+    "The Navigator": `Map project structure, dependencies, build system, and file layout for: ${intent}. Focus on module boundaries, import cycles, build configuration, and dependency management.`,
+    "The Analyst": `Perform code review and standards compliance check for: ${intent}. Focus on diff analysis, regression detection, style consistency, and adherence to project standards.`,
+    "The Examiner": `Identify testing gaps, coverage deficiencies, and quality risks for: ${intent}. Focus on missing test cases, edge coverage, assertion quality, and test architecture.`,
+    "The Cartographer": `Document API surfaces, interfaces, type definitions, and public contracts for: ${intent}. Focus on API completeness, documentation clarity, type safety, and backward compatibility.`,
+    "The Chronicler": `Review CI/CD pipelines, workflows, automation, and tooling for: ${intent}. Focus on pipeline efficiency, reliability gaps, deployment safety, and automation opportunities.`,
+    "The Diplomat": `Analyze stakeholder needs, trade-offs, and requirement clarity for: ${intent}. Focus on requirement completeness, conflicting goals, priority alignment, and communication gaps.`,
+    "The Sculptor": `Identify refactoring opportunities, dead code, simplification, and technical debt for: ${intent}. Focus on code duplication, complex logic that needs decomposition, and cleanup candidates.`,
+    "The Strategist": `Explore novel approaches, alternative solutions, and creative improvements for: ${intent}. Focus on breakthrough ideas, technology choices, architectural pivots, and innovation opportunities.`,
+    "The Integrator": `Evaluate cross-module integration, data flow, and compatibility for: ${intent}. Focus on interface contracts, data format consistency, error propagation across boundaries, and system cohesion.`,
+  }
+  return t[persona.name] ?? `Analyze from ${persona.role} perspective for: ${intent}.`
+}
+
+function dynamicGoalsFor(persona: { name: string; role: string; focus: string }, intent: string): string[] {
+  const base = `Analyze ${intent} from ${persona.role} perspective`
+  return [
+    `Identify all ${persona.focus} aspects relevant to the task`,
+    `Provide specific, actionable findings with code/file references`,
+    `Flag any blocking issues or high-priority concerns`,
+    `Ensure no overlap with other specialists — stay within ${persona.focus}`,
+    `Produce a structured report suitable for synthesis`,
+  ]
+}
+
+function dynamicSynthesisFor(persona: { name: string; role: string; focus: string }): string {
+  return `When synthesizing, include ${persona.name}'s findings on ${persona.focus}. Prioritize actionable ${persona.role} recommendations, flag any blocking issues, and note confidence levels for each finding.`
+}
+
+function overlapCheck(personas: Persona[]): Persona[] {
+  // For any two personas whose tasks share significant overlap, merge or split them
+  const seen = new Set<string>()
+  return personas.filter((p) => {
+    const key = p.task.slice(0, 60) // compare first 60 chars as a fingerprint
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 function selectPersonas(result: SensorGateResult): Persona[] {
   const tags = new Set(result.domain_tags.map((t) => t.trim().toLowerCase()))
   const chain = new Set(result.chain.map((s) => s.trim().toLowerCase()))
@@ -169,9 +219,7 @@ function selectPersonas(result: SensorGateResult): Persona[] {
       if (allTags.has(tag)) score += 2
       else if (chain.has(tag)) score += 1
     }
-    // Penalize if below complexity threshold
     if (complexityScore < profile.minComplexity) score -= 3
-    // Boost for DREAM_INNOVATION mode
     if (mode === "DREAM_INNOVATION") score += 1
     return { profile, score }
   })
@@ -179,7 +227,6 @@ function selectPersonas(result: SensorGateResult): Persona[] {
   // Sort by score descending, filter out negatives
   const eligible = scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score)
 
-  // Determine count based on mode and complexity
   let count: number
   if (mode === "DREAM_INNOVATION") {
     count = Math.min(7, Math.max(4, Math.ceil(complexityScore * 2)))
@@ -191,18 +238,28 @@ function selectPersonas(result: SensorGateResult): Persona[] {
   count = Math.min(count, eligible.length, 7)
 
   if (count === 0) {
-    // Fallback: include at least 2 default personas
     const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
     const picked = defaults.slice(0, Math.min(2, defaults.length))
-    return picked.map((p) => ({ name: p.name, role: p.role, focus: p.focus, skills: p.skills }))
+    return overlapCheck(picked.map((p) => ({
+      name: p.name,
+      role: p.role,
+      focus: p.focus,
+      skills: p.skills,
+      task: dynamicTaskFor(p, result.intent),
+      goals: dynamicGoalsFor(p, result.intent),
+      synthesisGuide: dynamicSynthesisFor(p),
+    })))
   }
 
-  return eligible.slice(0, count).map((s) => ({
+  return overlapCheck(eligible.slice(0, count).map((s) => ({
     name: s.profile.name,
     role: s.profile.role,
     focus: s.profile.focus,
     skills: s.profile.skills,
-  }))
+    task: dynamicTaskFor(s.profile, result.intent),
+    goals: dynamicGoalsFor(s.profile, result.intent),
+    synthesisGuide: dynamicSynthesisFor(s.profile),
+  })))
 }
 
 export interface SensorGateResult {
@@ -417,8 +474,20 @@ export const layer = Layer.succeed(Service, Service.of({
     // Generate personas from TypeScript when Python script doesn't output them
     if (result.personas.length === 0) {
       result.personas = selectPersonas(result)
-    } else if (result.personas.length > 7) {
-      result.personas = result.personas.slice(0, 7)
+    } else {
+      // Fill in dynamic task/goals/synthesisGuide for Python-provided personas
+      result.personas = result.personas.map((p) => {
+        const profile = PERSONA_PROFILES.find((pp) => pp.name === p.name)
+        const name = p.name
+        const role = p.role
+        const focus = p.focus
+        return {
+          ...p,
+          task: p.task || (profile ? dynamicTaskFor(profile, result.intent) : `Analyze from ${role} perspective for: ${result.intent}.`),
+          goals: p.goals?.length ? p.goals : (profile ? dynamicGoalsFor(profile, result.intent) : [`Identify all ${focus} aspects`, `Provide actionable findings`]),
+          synthesisGuide: p.synthesisGuide || (profile ? dynamicSynthesisFor(profile) : `Include ${name} findings on ${focus}.`),
+        }
+      }).slice(0, 7)
     }
 
     const shouldRunNeuro = result.risk_level === "high" ||

@@ -1,26 +1,25 @@
 import { BusEvent } from "@/bus/bus-event"
-import { SessionID } from "@/session/schema"
 import z from "zod"
 
 export const WorkflowPhase = BusEvent.define(
   "workflow.phase",
-  z.object({ sessionID: SessionID.zod, runID: z.string(), title: z.string() }),
+  z.object({ sessionID: z.string(), runID: z.string(), title: z.string() }),
 )
 
 export const WorkflowLog = BusEvent.define(
   "workflow.log",
-  z.object({ sessionID: SessionID.zod, runID: z.string(), message: z.string() }),
+  z.object({ sessionID: z.string(), runID: z.string(), message: z.string() }),
 )
 
 export const WorkflowStarted = BusEvent.define(
   "workflow.started",
-  z.object({ sessionID: SessionID.zod, runID: z.string(), name: z.string() }),
+  z.object({ sessionID: z.string(), runID: z.string(), name: z.string() }),
 )
 
 export const WorkflowFinished = BusEvent.define(
   "workflow.finished",
   z.object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     runID: z.string(),
     status: z.enum(["completed", "failed", "cancelled"]),
     error: z.string().optional(),
@@ -36,7 +35,7 @@ export const WorkflowFinished = BusEvent.define(
 export const WorkflowAgentFailed = BusEvent.define(
   "workflow.agent_failed",
   z.object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     runID: z.string(),
     /** The child actor's id; absent when no spawn happened (over-cap path). */
     actorID: z.string().optional(),
@@ -62,7 +61,7 @@ export const WorkflowAgentFailed = BusEvent.define(
 export const WorkflowChildFailed = BusEvent.define(
   "workflow.child_failed",
   z.object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     runID: z.string(), // the PARENT (orchestrator) run
     childRunID: z.string(),
     name: z.string(), // the child workflow name, or "inline"

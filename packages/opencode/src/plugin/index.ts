@@ -310,4 +310,11 @@ export const defaultLayer = layer.pipe(
 
 export const node = LayerNode.make(layer, [EventV2Bridge.node, Config.node, RuntimeFlags.node])
 
-export * as Plugin from "."
+export { HookEvent } from "./hook-event"
+
+export const Plugin = {
+  Service,
+  layer,
+  defaultLayer,
+  node,
+}

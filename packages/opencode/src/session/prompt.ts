@@ -1351,7 +1351,8 @@ Before every response, verify your reasoning:
             // Runs classification + skill chain selection before every response.
             // Only on step 1 (first user message) to avoid re-classifying on tool loops.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
-            if (step === 1 && !session.parentID) {
+            // Also skip when the agent itself is a subagent (mode === "subagent").
+            if (step === 1 && !session.parentID && session.mode !== "subagent") {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
@@ -1393,13 +1394,27 @@ Before every response, verify your reasoning:
                     ]
                     for (let i = 0; i < gateResult.personas.length; i++) {
                       const p = gateResult.personas[i]
-                      personaLines.push(`${i + 1}. "${p.name}" (${p.role}) — analyzing ${p.focus}`)
+                      personaLines.push(`${i + 1}. "${p.name}" (${p.role})`)
+                      personaLines.push(`   Task: ${p.task?.slice(0, 120) || `Analyzing ${p.focus}`}`)
+                      if (p.goals?.length) {
+                        personaLines.push(`   Goals: ${p.goals.join("; ")}`)
+                      }
+                      personaLines.push("")
                     }
-                    personaLines.push("")
-                    personaLines.push("Each specialist will provide findings asynchronously.")
+                    personaLines.push("Each specialist provides findings asynchronously.")
                     personaLines.push("Continue your own analysis while waiting.")
                     personaLines.push("When all results arrive, synthesize into a unified response.")
                     personaLines.push("")
+                    personaLines.push("SYNTHESIS INSTRUCTIONS:")
+                    personaLines.push("1. Each specialist produces a focused report in their domain")
+                    personaLines.push("2. Review all findings for common themes and disagreements")
+                    personaLines.push("3. Prioritize by severity, confidence, and relevance")
+                    personaLines.push("4. Produce a unified, actionable response")
+                    for (const p of gateResult.personas) {
+                      if (p.synthesisGuide) {
+                        personaLines.push(`5. ${p.synthesisGuide}`)
+                      }
+                    }
                     personaLines.push("MANDATORY: Execute the full skill chain for your own analysis.")
                     personaLines.push("</persona-system>")
                     system.push(personaLines.join("\n"))
@@ -1453,8 +1468,8 @@ Before every response, verify your reasoning:
 
                       // ─── Connected Persona Context ─────────────────────
                       // Each persona sees the roles of other personas so they
-                      // coordinate and avoid overlapping work. The full active
-                      // context (parent messages) is forwarded by TaskTool.
+                      // coordinate and avoid overlapping work. Summarized context
+                      // is constructed per-persona to prevent overlap.
                       const neverAbort = new AbortController()
                       const personaTeam = gateResult.personas
                       yield* Effect.all(
@@ -1470,30 +1485,47 @@ Before every response, verify your reasoning:
                                 "Do NOT duplicate work. Cover ONLY your assigned focus area.",
                               ].join("\n")
                             : ""
+
+                          const goalsBlock = persona.goals?.length
+                            ? ["", "## Goals", ...persona.goals.map((g) => `- ${g}`)].join("\n")
+                            : ""
+
                           const personaPrompt = [
                             `You are "${persona.name}" — ${persona.role}.`,
                             `Your focus area: ${persona.focus}.`,
                             "",
+                            `## Task`,
+                            persona.task || `Analyze the following task from your ${persona.role} perspective.`,
+                            goalsBlock,
+                            "",
                             ...(persona.neuroResult ? [
-                              "NEURO analysis for your domain:",
+                              "## NEURO Analysis",
                               persona.neuroResult,
                               "",
                               "Use this analysis to inform your findings.",
                               "",
                             ] : []),
                             otherContext,
-                            `Analyze the following task from your specialized perspective:`,
+                            `## User Prompt`,
                             userText.trim(),
                             "",
+                            "## Output Requirements",
                             "Provide your findings as a structured analysis.",
                             "Focus ONLY on your area of expertise.",
                             "Be specific, cite code locations, and provide actionable recommendations.",
                             "Do not attempt to produce a final answer — produce a focused specialist report.",
+                            "",
+                            `## Synthesis Guide`,
+                            persona.synthesisGuide || `When synthesizing, include your findings on ${persona.focus}.`,
                           ].join("\n")
 
                           const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
                             Effect.gen(function* () {
-                              yield* tracker.complete(persona.name, persona.role, output, status)
+                              yield* tracker.complete(persona.name, persona.role, output, status, {
+                                task: persona.task,
+                                goals: persona.goals,
+                                synthesisGuide: persona.synthesisGuide,
+                              })
                               const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
                               yield* sessions.updatePart({
                                 ...part,

@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import path from "path"
-import { Database, eq } from "../storage"
+import { Database } from "../storage/storage"
+import { eq } from "drizzle-orm"
 import { Log } from "../util"
 import { MemoryFtsTable } from "./fts.sql"
 import { parsePath, parseCcPath, parseCcFrontmatterType, type MemoryLocator } from "./paths"

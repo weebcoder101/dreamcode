@@ -1,12 +1,11 @@
 import { BusEvent } from "@/bus/bus-event"
-import { SessionID } from "@/session/schema"
 import { ActorStatus, ActorOutcome, SpawnMode } from "./schema"
 import z from "zod"
 
 export const ActorRegistered = BusEvent.define(
   "actor.registered",
   z.object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     actorID: z.string(),
     mode: SpawnMode,
     parentActorID: z.string().optional(),
@@ -19,7 +18,7 @@ export const ActorRegistered = BusEvent.define(
 export const ActorStatusChanged = BusEvent.define(
   "actor.status",
   z.object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     actorID: z.string(),
     status: ActorStatus,
     lastOutcome: ActorOutcome.optional(),
@@ -32,7 +31,7 @@ export const ActorStatusChanged = BusEvent.define(
 export const ActorStuck = BusEvent.define(
   "actor.stuck",
   z.object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     actorID: z.string(),
     description: z.string(),
     lastTurnTime: z.number(),
@@ -43,7 +42,7 @@ export const ActorStuck = BusEvent.define(
 export const WriterCachePerf = BusEvent.define(
   "writer.cache_perf",
   z.object({
-    sessionID: SessionID.zod,
+    sessionID: z.string(),
     writerActorID: z.string(),
     status: z.enum(["completed", "failed"]),
     total_input_tokens: z.number(),
@@ -57,9 +56,9 @@ export const WriterCachePerf = BusEvent.define(
 export const InboxArrived = BusEvent.define(
   "inbox.arrived",
   z.object({
-    receiverSessionID: SessionID.zod,
+    receiverSessionID: z.string(),
     receiverActorID: z.string(),
-    senderSessionID: SessionID.zod.optional(),
+    senderSessionID: z.string().optional(),
     senderActorID: z.string().optional(),
     inboxID: z.string(),
     type: z.string(),
