@@ -1,27 +1,6 @@
 {
-  "total": 1320,
+  "total": 1345,
   "history": [
-    {
-      "timestamp": "2026-06-15T01:21:38.853315+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 405,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T01:22:16.728766+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 415,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T01:22:45.907771+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 425,
-      "details": "Sensor gate executed"
-    },
     {
       "timestamp": "2026-06-15T02:10:40.423501+05:30",
       "event": "sensor_gate_run",
@@ -700,12 +679,33 @@
       "points": 10,
       "total_after": 1320,
       "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T23:05:03.905858+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1330,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-15T17:35:06.751Z",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1340,
+      "details": "Sensor gate executed for skill: automated-learning"
+    },
+    {
+      "timestamp": "2026-06-15T17:35:06.751Z",
+      "event": "skill_executed",
+      "points": 5,
+      "total_after": 1345,
+      "details": "Skill automated-learning loaded from SKILL.md"
     }
   ],
-  "current_streak": 105,
-  "best_streak": 105,
-  "total_runs": 105,
-  "successful_runs": 105,
+  "current_streak": 106,
+  "best_streak": 106,
+  "total_runs": 106,
+  "successful_runs": 106,
   "sensor_gate_violations": 0,
   "dream_violations": 0
 }
