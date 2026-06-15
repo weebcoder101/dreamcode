@@ -194,14 +194,23 @@ function dynamicSynthesisFor(persona: { name: string; role: string; focus: strin
 }
 
 function overlapCheck(personas: Persona[]): Persona[] {
-  // For any two personas whose tasks share significant overlap, merge or split them
   const seen = new Set<string>()
   return personas.filter((p) => {
-    const key = p.task.slice(0, 60) // compare first 60 chars as a fingerprint
+    const key = p.name
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
+}
+
+function depthScore(result: SensorGateResult): number {
+  // Compute task depth from multiple signals on a 1-5 scale
+  const tags = result.domain_tags.filter(Boolean).length
+  const chainLen = result.chain.filter(Boolean).length
+  const risk = result.risk_level === "high" ? 3 : result.risk_level === "medium" ? 2 : 1
+  const tagDiversity = Math.min(tags, 5)
+  const chainDepth = Math.min(chainLen, 4)
+  return Math.max(1, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
 }
 
 function selectPersonas(result: SensorGateResult): Persona[] {
@@ -227,20 +236,30 @@ function selectPersonas(result: SensorGateResult): Persona[] {
   // Sort by score descending, filter out negatives
   const eligible = scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score)
 
+  // Dynamic depth-based count: floor of 2, then scale by depth + mode
+  const dd = depthScore(result)
   let count: number
   if (mode === "DREAM_INNOVATION") {
-    count = Math.min(7, Math.max(4, Math.ceil(complexityScore * 2)))
+    count = Math.min(7, Math.max(4, Math.ceil(dd * 1.3)))
   } else if (mode === "TRIVIAL") {
-    count = Math.min(2, eligible.length)
+    count = 2
   } else {
-    count = Math.min(5, Math.max(2, complexityScore * 2))
+    count = Math.min(5, Math.max(2, Math.ceil(dd * 1.2)))
   }
   count = Math.min(count, eligible.length, 7)
 
-  if (count === 0) {
+  // Floor of 2: if count < 2 after eligibility cap, pad with defaults
+  if (count < 2) {
     const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
-    const picked = defaults.slice(0, Math.min(2, defaults.length))
-    return overlapCheck(picked.map((p) => ({
+    const picked = eligible.map((s) => s.profile)
+    const padCount = 2 - picked.length
+    for (const d of defaults) {
+      if (padCount <= 0) break
+      if (!picked.find((p) => p.name === d.name)) {
+        picked.push(d)
+      }
+    }
+    return overlapCheck(picked.slice(0, 2).map((p) => ({
       name: p.name,
       role: p.role,
       focus: p.focus,
@@ -337,8 +356,15 @@ function parseSensorGateOutput(output: string): SensorGateResult {
 
     // Guardian AI
     if (trimmed.startsWith("- decision:")) result.guardian_decision = trimmed.slice(11).trim()
-    if (trimmed.startsWith("- risk_level:") && lines.indexOf(line) > lines.findIndex((l) => l.includes("[GUARDIAN]"))) {
-      result.guardian_risk = trimmed.slice(13).trim()
+  }
+  const guardianHeaderIndex = lines.findIndex((l) => l.includes("[GUARDIAN]"))
+  if (guardianHeaderIndex >= 0) {
+    for (const line of lines.slice(guardianHeaderIndex)) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith("- risk_level:")) {
+        result.guardian_risk = trimmed.slice(13).trim()
+        break
+      }
     }
   }
 
@@ -401,6 +427,7 @@ function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | 
       })
       return parseSensorGateOutput(output)
     } catch (e) {
+      console.warn("[sensor-gate] runSensorGate subprocess failed", { error: String(e), timeoutMs })
       return null
     }
   }
@@ -488,6 +515,21 @@ export const layer = Layer.succeed(Service, Service.of({
           synthesisGuide: p.synthesisGuide || (profile ? dynamicSynthesisFor(profile) : `Include ${name} findings on ${focus}.`),
         }
       }).slice(0, 7)
+      // Enforce floor of 2 when Python provides < 2 personas
+      if (result.personas.length < 2) {
+        const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
+        for (const d of defaults) {
+          if (result.personas.length >= 2) break
+          if (!result.personas.find((pp) => pp.name === d.name)) {
+            result.personas.push({
+              name: d.name, role: d.role, focus: d.focus, skills: d.skills,
+              task: dynamicTaskFor(d, result.intent),
+              goals: dynamicGoalsFor(d, result.intent),
+              synthesisGuide: dynamicSynthesisFor(d),
+            })
+          }
+        }
+      }
     }
 
     const shouldRunNeuro = result.risk_level === "high" ||

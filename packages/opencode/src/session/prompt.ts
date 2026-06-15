@@ -1472,106 +1472,111 @@ Before every response, verify your reasoning:
                       // is constructed per-persona to prevent overlap.
                       const neverAbort = new AbortController()
                       const personaTeam = gateResult.personas
-                      yield* Effect.all(
-                        personaTeam.map((persona, i) => {
-                          const part = personaParts[i]
-                          const others = personaTeam.filter((_, j) => j !== i)
-                          const otherContext = others.length > 0
-                            ? [
-                                "",
-                                "Other specialists on this task:",
-                                ...others.map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
-                                "",
-                                "Do NOT duplicate work. Cover ONLY your assigned focus area.",
-                              ].join("\n")
-                            : ""
+                      // Fork personas into background so the main loop continues
+                      // immediately instead of blocking on Effect.all
+                      const personaFiber = yield* Effect.forkIn(
+                        Effect.all(
+                          personaTeam.map((persona, i) => {
+                            const part = personaParts[i]
+                            const others = personaTeam.filter((_, j) => j !== i)
+                            const otherContext = others.length > 0
+                              ? [
+                                  "",
+                                  "Other specialists on this task:",
+                                  ...others.map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
+                                  "",
+                                  "Do NOT duplicate work. Cover ONLY your assigned focus area.",
+                                ].join("\n")
+                              : ""
 
-                          const goalsBlock = persona.goals?.length
-                            ? ["", "## Goals", ...persona.goals.map((g) => `- ${g}`)].join("\n")
-                            : ""
+                            const goalsBlock = persona.goals?.length
+                              ? ["", "## Goals", ...persona.goals.map((g) => `- ${g}`)].join("\n")
+                              : ""
 
-                          const personaPrompt = [
-                            `You are "${persona.name}" — ${persona.role}.`,
-                            `Your focus area: ${persona.focus}.`,
-                            "",
-                            `## Task`,
-                            persona.task || `Analyze the following task from your ${persona.role} perspective.`,
-                            goalsBlock,
-                            "",
-                            ...(persona.neuroResult ? [
-                              "## NEURO Analysis",
-                              persona.neuroResult,
+                            const personaPrompt = [
+                              `You are "${persona.name}" — ${persona.role}.`,
+                              `Your focus area: ${persona.focus}.`,
                               "",
-                              "Use this analysis to inform your findings.",
+                              `## Task`,
+                              persona.task || `Analyze the following task from your ${persona.role} perspective.`,
+                              goalsBlock,
                               "",
-                            ] : []),
-                            otherContext,
-                            `## User Prompt`,
-                            userText.trim(),
-                            "",
-                            "## Output Requirements",
-                            "Provide your findings as a structured analysis.",
-                            "Focus ONLY on your area of expertise.",
-                            "Be specific, cite code locations, and provide actionable recommendations.",
-                            "Do not attempt to produce a final answer — produce a focused specialist report.",
-                            "",
-                            `## Synthesis Guide`,
-                            persona.synthesisGuide || `When synthesizing, include your findings on ${persona.focus}.`,
-                          ].join("\n")
+                              ...(persona.neuroResult ? [
+                                "## NEURO Analysis",
+                                persona.neuroResult,
+                                "",
+                                "Use this analysis to inform your findings.",
+                                "",
+                              ] : []),
+                              otherContext,
+                              `## User Prompt`,
+                              userText.trim(),
+                              "",
+                              "## Output Requirements",
+                              "Provide your findings as a structured analysis.",
+                              "Focus ONLY on your area of expertise.",
+                              "Be specific, cite code locations, and provide actionable recommendations.",
+                              "Do not attempt to produce a final answer — produce a focused specialist report.",
+                              "",
+                              `## Synthesis Guide`,
+                              persona.synthesisGuide || `When synthesizing, include your findings on ${persona.focus}.`,
+                            ].join("\n")
 
-                          const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
-                            Effect.gen(function* () {
-                              yield* tracker.complete(persona.name, persona.role, output, status, {
-                                task: persona.task,
-                                goals: persona.goals,
-                                synthesisGuide: persona.synthesisGuide,
+                            const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
+                              Effect.gen(function* () {
+                                yield* tracker.complete(persona.name, persona.role, output, status, {
+                                  task: persona.task,
+                                  goals: persona.goals,
+                                  synthesisGuide: persona.synthesisGuide,
+                                })
+                                const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
+                                yield* sessions.updatePart({
+                                  ...part,
+                                  type: "tool",
+                                  state: status === "completed"
+                                    ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                    : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                                } as SessionV1.ToolPart)
                               })
-                              const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
-                              yield* sessions.updatePart({
-                                ...part,
-                                type: "tool",
-                                state: status === "completed"
-                                  ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
-                                  : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
-                              } as SessionV1.ToolPart)
-                            })
 
-                          return taskTool
-                            .execute(
-                              {
-                                prompt: personaPrompt,
-                                description: `persona:${persona.name}`,
-                                subagent_type: "general",
-                              },
-                              {
-                                agent: "general",
-                                sessionID,
-                                messageID: personaAssistantMsg.id,
-                                messages: msgs,
-                                abort: neverAbort.signal,
-                                callID: (part as SessionV1.ToolPart).callID,
-                                extra: { bypassAgentCheck: true, promptOps: subtaskOps },
-                                metadata: (val: { title?: string; metadata?: Record<string, any> }) => {
-                                  const st = part.state as { status: string; input: Record<string, any>; time?: { start: number } }
-                                  return sessions.updatePart({
-                                    ...part,
-                                    type: "tool",
-                                    state: { ...st, status: "running" as const, ...val },
-                                  } as SessionV1.ToolPart)
+                            return taskTool
+                              .execute(
+                                {
+                                  prompt: personaPrompt,
+                                  description: `persona:${persona.name}`,
+                                  subagent_type: "general",
                                 },
-                                ask: () => Effect.succeed({ status: "allow" as const }),
-                              },
-                            )
-                            .pipe(Effect.matchEffect({
-                              onSuccess: (result) => markComplete("completed", result.output, result.metadata),
-                              onFailure: (err) => markComplete("error", String(err)),
-                            }))
-                        }),
-                        { concurrency: 7 },
+                                {
+                                  agent: "general",
+                                  sessionID,
+                                  messageID: personaAssistantMsg.id,
+                                  messages: msgs,
+                                  abort: neverAbort.signal,
+                                  callID: (part as SessionV1.ToolPart).callID,
+                                  extra: { bypassAgentCheck: true, promptOps: subtaskOps },
+                                  metadata: (val: { title?: string; metadata?: Record<string, any> }) => {
+                                    const st = part.state as { status: string; input: Record<string, any>; time?: { start: number } }
+                                    return sessions.updatePart({
+                                      ...part,
+                                      type: "tool",
+                                      state: { ...st, status: "running" as const, ...val },
+                                    } as SessionV1.ToolPart)
+                                  },
+                                  ask: () => Effect.succeed({ status: "allow" as const }),
+                                },
+                              )
+                              .pipe(Effect.matchEffect({
+                                onSuccess: (result) => markComplete("completed", result.output, result.metadata),
+                                onFailure: (err) => markComplete("error", String(err)),
+                              }))
+                          }),
+                          { concurrency: 7 },
+                        ),
+                        scope,
                       )
 
-                      // Inject synthesis after all complete
-                      const personaResults = yield* tracker.waitForAll()
+                      // Join persona fiber — results are available from tracker
+                      const personaResults = yield* Fiber.join(personaFiber)
                       synthesisText = PersonaTracker.buildSynthesisPrompt(personaResults)
                       yield* Effect.promise(() =>
                         PersonaTracker.injectSynthesis(sessionID, personaResults, sessions, model.providerID, model.id)
