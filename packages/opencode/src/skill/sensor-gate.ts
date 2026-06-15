@@ -411,6 +411,8 @@ function parseSensorGateOutput(output: string): SensorGateResult {
   return result
 }
 
+const VALID_SCAN_TYPES = new Set(["security", "full_audit", "bug_hunt", "test_gap"])
+
 function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | null {
   const skillsDir = path.join(projectRoot, ".dreamcode", "skills")
   const sensorGate = path.join(skillsDir, "chain-orchestrator", "scripts", "sensor_gate.py")
@@ -444,19 +446,17 @@ function runNeuroHarness(prompt: string, projectRoot: string, scanType: string):
   if (!fs.existsSync(neuroHarness)) return null
 
   const tryRun = (timeoutMs: number): string | null => {
-      // Create a temp file with a unique name to avoid race conditions
-    const tmpDir = path.join(projectRoot, ".dreamcode", "tmp")
-    fs.mkdirSync(tmpDir, { recursive: true })
-    const tmpFile = path.join(tmpDir, `prompt_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`)
+    const tmpDir = fs.mkdtempSync(path.join(projectRoot, ".dreamcode", "tmp", "neuro-"))
+    fs.chmodSync(tmpDir, 0o700)
+    const tmpFile = path.join(tmpDir, "prompt.txt")
     try {
-      // Build prompt using TypeScript prompt engine
       const promptResult = buildPrompt({
         scanType,
         files: [{ path: "user_prompt", content: prompt }],
         context: prompt.slice(0, 500),
       })
 
-      fs.writeFileSync(tmpFile, promptResult.userPrompt)
+      fs.writeFileSync(tmpFile, promptResult.userPrompt, { mode: 0o600 })
 
       const output = execFileSync("python3", [
         neuroHarness,
@@ -470,13 +470,12 @@ function runNeuroHarness(prompt: string, projectRoot: string, scanType: string):
         cwd: projectRoot,
       })
 
-      // Clean up temp file
-      try { fs.unlinkSync(tmpFile) } catch {}
       return output
     } catch (e) {
-      // Clean up temp file
-      try { fs.unlinkSync(tmpFile) } catch {}
+      console.warn("[sensor-gate] runNeuroHarness subprocess failed", { error: String(e), timeoutMs })
       return null
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
     }
   }
 
@@ -494,7 +493,8 @@ export class Service extends Context.Service<Service, Interface>()("@dreamcode/S
 export const layer = Layer.succeed(Service, Service.of({
   classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
     const ctx = yield* InstanceState.contextOrNull
-    const directory = ctx?.directory ?? process.cwd()
+    if (!ctx?.directory) return null
+    const directory = ctx.directory
     const result = runSensorGate(prompt, directory)
     if (!result) return null
 
