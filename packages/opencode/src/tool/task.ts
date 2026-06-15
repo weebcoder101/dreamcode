@@ -93,22 +93,24 @@ export const TaskTool = Tool.define(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
 
-    const computeSessionDepth = Effect.fn("TaskTool.computeDepth")(function* (id: SessionID) {
-      let depth = 0
-      let current: SessionID | undefined = id
-      while (current) {
-        const s = yield* sessions.get(current).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-        if (!s?.parentID) break
-        depth++
-        current = s.parentID
-      }
-      return depth
-    })
+    const computeSessionDepth = (id: SessionID): Effect.Effect<number> =>
+      Effect.gen(function* () {
+        let depth = 0
+        let current: SessionID | undefined = id
+        while (current) {
+          const s = yield* sessions.get(current).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          if (!s?.parentID) break
+          depth++
+          current = s.parentID
+        }
+        return depth
+      })
 
-    const activeSubagents = Effect.fn("TaskTool.activeSubagents")(function* (parentID: SessionID) {
-      const children = yield* sessions.children(parentID)
-      return children.length
-    })
+    const activeSubagents = (parentID: SessionID): Effect.Effect<number> =>
+      Effect.gen(function* () {
+        const children = yield* sessions.children(parentID)
+        return children.length
+      })
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
