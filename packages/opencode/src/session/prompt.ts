@@ -1521,22 +1521,22 @@ Before every response, verify your reasoning:
                             persona.synthesisGuide || `When synthesizing, include your findings on ${persona.focus}.`,
                           ].join("\n")
 
-                          const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
-                            Effect.gen(function* () {
-                              yield* tracker.complete(persona.name, persona.role, output, status, {
-                                task: persona.task,
-                                goals: persona.goals,
-                                synthesisGuide: persona.synthesisGuide,
-                              })
-                              const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
-                              yield* sessions.updatePart({
-                                ...part,
-                                type: "tool",
-                                state: status === "completed"
-                                  ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
-                                  : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
-                              } as SessionV1.ToolPart)
-                            })
+                           const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
+                             Effect.gen(function* () {
+                               yield* tracker.complete(persona.name, persona.role, output, status, {
+                                 task: persona.task,
+                                 goals: persona.goals,
+                                 synthesisGuide: persona.synthesisGuide,
+                               })
+                               const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
+                               yield* sessions.updatePart({
+                                 ...part,
+                                 type: "tool",
+                                 state: status === "completed"
+                                   ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                   : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                               } as SessionV1.ToolPart)
+                             }).pipe(Effect.catchCause((cause) => Effect.logWarning("markComplete failed", { cause })))
 
                           yield* Effect.all([
                             taskTool
@@ -1563,13 +1563,14 @@ Before every response, verify your reasoning:
                                         metadata: { ...(part.state as any).metadata, ...meta },
                                       },
                                     } as SessionV1.ToolPart)
-                                  }),
+                                  }).pipe(Effect.catchCause((cause) => Effect.void)),
                                   ask: () => Effect.succeed({ status: "allow" as const }),
                                 },
                               )
                               .pipe(
                                 Effect.tap((result) => markComplete("completed", result.output, result.metadata)),
                                 Effect.catchCause((cause) => markComplete("error", `persona died: ${Cause.pretty(cause)}`)),
+                                Effect.catchCause((cause) => Effect.logWarning("persona execution fatality", { cause })),
                               ),
                           ])
                         }),
@@ -1580,7 +1581,7 @@ Before every response, verify your reasoning:
                       synthesisText = PersonaTracker.buildSynthesisPrompt(personaResults)
                       yield* Effect.promise(() =>
                         PersonaTracker.injectSynthesis(sessionID, personaResults, sessions, model.providerID, model.id)
-                      )
+                      ).pipe(Effect.catchCause((cause) => Effect.void))
                     }
                     // ─── End Enforcement ─────────────────────────────────
                   }
