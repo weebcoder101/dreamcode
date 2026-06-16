@@ -544,4 +544,75 @@ describe("run subagent data", () => {
       }),
     ])
   })
+
+  test("bootstraps error-status task tabs", () => {
+    const data = createSubagentData()
+
+    bootstrapSubagentData({
+      data,
+      messages: [taskMessage("child-1", "interrupted")],
+      children: [{ id: "child-1" }],
+      permissions: [],
+      questions: [],
+    })
+
+    const snapshot = snapshotSubagentData(data)
+    expect(snapshot.tabs).toEqual([
+      expect.objectContaining({
+        sessionID: "child-1",
+        status: "cancelled",
+      }),
+    ])
+  })
+
+  test("ignores events for unknown child session IDs", () => {
+    const data = createSubagentData()
+
+    bootstrapSubagentData({
+      data,
+      messages: [taskMessage("child-1", "running")],
+      children: [{ id: "child-1" }],
+      permissions: [],
+      questions: [],
+    })
+
+    const before = snapshotSubagentData(data)
+    reduce(data, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "txt-unknown",
+          messageID: "msg-unknown",
+          sessionID: "unknown-session",
+          type: "text",
+          text: "should be ignored",
+        },
+      },
+    })
+    const after = snapshotSubagentData(data)
+    expect(after.tabs).toEqual(before.tabs)
+    expect(after.details).toEqual(before.details)
+  })
+
+  test("tolerates out-of-order events (completion before start)", () => {
+    const data = createSubagentData()
+
+    reduce(data, {
+      type: "message.updated",
+      properties: {
+        sessionID: "child-unknown",
+        info: {
+          id: "msg-before-start",
+          sessionID: "child-unknown",
+          role: "assistant",
+          time: { created: 1, completed: 2 },
+          finish: "stop",
+        },
+      },
+    })
+
+    const snapshot = snapshotSubagentData(data)
+    expect(snapshot.tabs).toEqual([])
+    expect(snapshot.details).toEqual({})
+  })
 })

@@ -190,8 +190,14 @@ export const layer = Layer.effect(
 
     // ForkContext snapshot per actor, captured at spawn for fork agents
     // (contextMode = "full"). Read by fork's runLoop (see prompt.ts) and
-    // cleared on terminal status. Fiber tracking moved to SessionRunState.
+    // cleared on terminal status.
     const forkContexts = new Map<string, ForkContext>()
+
+    // Actor fibers keyed by actorID. Stored at fork time so the cancel path
+    // can interrupt them directly (subagents share the parent sessionID so
+    // SessionRunState.cancel(sessionID) would kill the parent too). Cleaned
+    // up on terminal status or during drain.
+    const actorFibers = new Map<string, Fiber.Fiber<unknown>>()
 
     // Per-plugin preStop iteration counter. Keyed by actorID → pluginName → count.
     // Resets when the actor terminates. Plugin entries exceeding per-plugin
@@ -275,7 +281,18 @@ export const layer = Layer.effect(
         if (input.task_id) {
           yield* taskRegistry
             .start({ session_id: input.parentSessionID, id: input.task_id, owner: input.actorID })
-            .pipe(Effect.ignoreCause({ log: "Warn", message: `auto-start of task ${input.task_id} failed` }))
+            .pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.sync(() =>
+                  log.error("auto-start of task failed", {
+                    task_id: input.task_id,
+                    actorID: input.actorID,
+                    agentType: input.agentType,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              ),
+            )
         }
         const notify = (
           status: "completed" | "failed" | "cancelled",
@@ -600,7 +617,11 @@ export const layer = Layer.effect(
                 yield* Effect.sync(() => {
                   forkContexts.delete(input.actorID)
                   perPluginPreReactCounts.delete(input.actorID)
+                  actorFibers.delete(input.actorID)
                 })
+                yield* actorReg
+                  .updateStatus(input.sessionID, input.actorID, { status: "idle", lastOutcome: "success" })
+                  .pipe(Effect.ignore)
                 yield* actorReg
                   .deleteForkContext(input.sessionID, input.actorID)
                   .pipe(Effect.ignore)
@@ -612,6 +633,22 @@ export const layer = Layer.effect(
               Effect.gen(function* () {
                 const cancelled = Cause.hasInterruptsOnly(cause)
                 const error = Cause.pretty(cause)
+                // Log errors that notify skips (e.g. checkpoint-writer notifies are dropped)
+                if (input.agentType === "checkpoint-writer" && !cancelled) {
+                  log.error("checkpoint-writer spawn failed", {
+                    actorID: input.actorID,
+                    agentType: input.agentType,
+                    error,
+                  })
+                }
+                // Recursively clean up any child actors this actor spawned
+                const orphans = yield* actorReg.listByParent(input.sessionID, input.actorID)
+                if (orphans.length > 0) {
+                  yield* Effect.forEach(orphans, (c) => cancel(input.sessionID, c.actorID, "graceful"), {
+                    concurrency: "unbounded",
+                    discard: true,
+                  })
+                }
                 yield* notify(cancelled ? "cancelled" : "failed", cancelled ? {} : { error })
                 yield* Deferred.succeed(
                   outcome,
@@ -620,7 +657,12 @@ export const layer = Layer.effect(
                 yield* Effect.sync(() => {
                   forkContexts.delete(input.actorID)
                   perPluginPreReactCounts.delete(input.actorID)
+                  actorFibers.delete(input.actorID)
                 })
+                const outcomeStatus = cancelled ? "cancelled" : "failure"
+                yield* actorReg
+                  .updateStatus(input.sessionID, input.actorID, { status: "idle", lastOutcome: outcomeStatus })
+                  .pipe(Effect.ignore)
                 yield* actorReg
                   .deleteForkContext(input.sessionID, input.actorID)
                   .pipe(Effect.ignore)
@@ -628,6 +670,8 @@ export const layer = Layer.effect(
           }),
         )
         const fiber = yield* work.pipe(Effect.forkIn(scope))
+        actorFibers.set(input.actorID, fiber)
+        yield* Effect.addFinalizer(() => Effect.sync(() => actorFibers.delete(input.actorID)))
         return { fiber, outcome }
       })
 
@@ -745,7 +789,11 @@ export const layer = Layer.effect(
           concurrency: "unbounded",
           discard: true,
         })
-        yield* state.cancelActor(sessionID, actorID)
+        const fiber = actorFibers.get(actorID)
+        if (fiber) {
+          yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+          actorFibers.delete(actorID)
+        }
         yield* actorReg
           .updateStatus(sessionID, actorID, { status: "idle", lastOutcome: "cancelled" })
           .pipe(Effect.ignore)

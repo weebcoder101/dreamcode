@@ -25,8 +25,9 @@ export interface PersonaResult {
 export interface PersonaTracker {
   readonly sessionID: string
   readonly remaining: () => number
-  readonly complete: (name: string, role: string, output: string, status: "completed" | "error") => Effect.Effect<void>
+  readonly complete: (name: string, role: string, output: string, status: "completed" | "error", extra?: { task?: string; goals?: string[]; synthesisGuide?: string }) => Effect.Effect<void>
   readonly waitForAll: () => Effect.Effect<PersonaResult[]>
+  readonly getAll: () => PersonaResult[]
 }
 
 export function create(sessionID: string, total: number): PersonaTracker {
@@ -57,11 +58,14 @@ export function create(sessionID: string, total: number): PersonaTracker {
     })
   })
 
+  const getAll = (): PersonaResult[] => results.slice()
+
   return {
     sessionID,
     remaining: () => remaining,
     complete,
     waitForAll,
+    getAll,
   }
 }
 

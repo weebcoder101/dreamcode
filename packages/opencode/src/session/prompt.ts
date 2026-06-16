@@ -4,7 +4,6 @@ import path from "path"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import os from "os"
 import { SessionID, MessageID, PartID } from "./schema"
-const gateDispatched = new Set<SessionID>()
 import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
@@ -1150,6 +1149,8 @@ Before every response, verify your reasoning:
         let structured: unknown
         let step = 0
         let synthesisText: string | undefined
+        let prevUserMessageID: string | undefined
+        let titleGenerated = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1163,6 +1164,11 @@ Before every response, verify your reasoning:
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+
+          if (prevUserMessageID !== lastUser.id) {
+            step = 0
+            prevUserMessageID = lastUser.id
+          }
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1197,13 +1203,15 @@ Before every response, verify your reasoning:
           }
 
           step++
-          if (step === 1)
+          if (step === 1 && !titleGenerated) {
+            titleGenerated = true
             yield* title({
               session,
               modelID: lastUser.model.modelID,
               providerID: lastUser.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
+          }
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const task = tasks.pop()
@@ -1349,22 +1357,16 @@ Before every response, verify your reasoning:
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
-            // Runs classification + skill chain selection once per session.
-            // step === 1 guards against re-classifying on tool loops within the same turn.
-            // Dispatched-sessions tracking prevents re-spawn across separate user messages.
+            // Runs classification + skill chain selection on every user message.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
             // Also skip when the agent itself is a subagent (mode === "subagent").
-            if (step === 1 && !session.parentID && session.mode !== "subagent") {
-              if (gateDispatched.has(sessionID)) {
-                synthesisText = undefined
-              } else {
+            if (step === 1 && !session.parentID) {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
                 .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
                 .map((p) => p.text)
                 .join("\n")
-              gateDispatched.add(sessionID)
 
               if (userText.trim()) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
@@ -1427,12 +1429,12 @@ Before every response, verify your reasoning:
 
                     // ─── ENFORCEMENT: Spawn persona subagents ────────────
                     const { task: taskTool } = yield* registry.named()
+                    const subtaskOps = yield* ops()
                     const generalAgent = yield* agents.get("general")
                     if (generalAgent) {
-                      const subtaskOps = yield* ops()
                       const tracker = PersonaTracker.create(sessionID, gateResult.personas.length)
+                      const personaTeam = gateResult.personas
 
-                      // Create assistant message to hold persona tool parts
                       const personaAssistantMsg: SessionV1.Assistant = yield* sessions.updateMessage({
                         id: MessageID.ascending(),
                         role: "assistant",
@@ -1449,13 +1451,12 @@ Before every response, verify your reasoning:
                         time: { created: Date.now() },
                       })
 
-                      // Create a tool part for each persona for TUI visibility
                       const personaParts: SessionV1.ToolPart[] = yield* Effect.all(
-                        gateResult.personas.map((persona) =>
+                        personaTeam.map((persona) =>
                           sessions.updatePart({
                             id: PartID.ascending(),
                             messageID: personaAssistantMsg.id,
-                            sessionID: personaAssistantMsg.sessionID,
+                            sessionID,
                             type: "tool",
                             callID: ulid(),
                             tool: TaskTool.id,
@@ -1472,80 +1473,73 @@ Before every response, verify your reasoning:
                         ),
                       )
 
-                      // ─── Connected Persona Context ─────────────────────
-                      // Each persona sees the roles of other personas so they
-                      // coordinate and avoid overlapping work. Summarized context
-                      // is constructed per-persona to prevent overlap.
-                      const neverAbort = new AbortController()
-                      const personaTeam = gateResult.personas
-                      // Fork personas into background so the main loop continues
-                      // immediately instead of blocking on Effect.all
-                      const personaFiber = yield* Effect.forkIn(
-                        Effect.all(
-                          personaTeam.map((persona, i) => {
-                            const part = personaParts[i]
-                            const others = personaTeam.filter((_, j) => j !== i)
-                            const otherContext = others.length > 0
-                              ? [
-                                  "",
-                                  "Other specialists on this task:",
-                                  ...others.map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
-                                  "",
-                                  "Do NOT duplicate work. Cover ONLY your assigned focus area.",
-                                ].join("\n")
-                              : ""
-
-                            const goalsBlock = persona.goals?.length
-                              ? ["", "## Goals", ...persona.goals.map((g) => `- ${g}`)].join("\n")
-                              : ""
-
-                            const personaPrompt = [
-                              `You are "${persona.name}" — ${persona.role}.`,
-                              `Your focus area: ${persona.focus}.`,
-                              "",
-                              `## Task`,
-                              persona.task || `Analyze the following task from your ${persona.role} perspective.`,
-                              goalsBlock,
-                              "",
-                              ...(persona.neuroResult ? [
-                                "## NEURO Analysis",
-                                persona.neuroResult,
+                      yield* Effect.forEach(
+                        personaTeam,
+                        Effect.fnUntraced(function* (persona, i) {
+                          const part = personaParts[i]
+                          const others = personaTeam.filter((_, j) => j !== i)
+                          const otherContext = others.length > 0
+                            ? [
                                 "",
-                                "Use this analysis to inform your findings.",
+                                "Other specialists on this task:",
+                                ...others.map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
                                 "",
-                              ] : []),
-                              otherContext,
-                              `## User Prompt`,
-                              userText.trim(),
-                              "",
-                              "## Output Requirements",
-                              "Provide your findings as a structured analysis.",
-                              "Focus ONLY on your area of expertise.",
-                              "Be specific, cite code locations, and provide actionable recommendations.",
-                              "Do not attempt to produce a final answer — produce a focused specialist report.",
-                              "",
-                              `## Synthesis Guide`,
-                              persona.synthesisGuide || `When synthesizing, include your findings on ${persona.focus}.`,
-                            ].join("\n")
+                                "Do NOT duplicate work. Cover ONLY your assigned focus area.",
+                              ].join("\n")
+                            : ""
 
-                            const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
-                              Effect.gen(function* () {
-                                yield* tracker.complete(persona.name, persona.role, output, status, {
-                                  task: persona.task,
-                                  goals: persona.goals,
-                                  synthesisGuide: persona.synthesisGuide,
-                                })
-                                const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
-                                yield* sessions.updatePart({
-                                  ...part,
-                                  type: "tool",
-                                  state: status === "completed"
-                                    ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
-                                    : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
-                                } as SessionV1.ToolPart)
+                          const goalsBlock = persona.goals?.length
+                            ? ["", "## Goals", ...persona.goals.map((g) => `- ${g}`)].join("\n")
+                            : ""
+
+                          const personaPrompt = [
+                            `You are "${persona.name}" — ${persona.role}.`,
+                            `Your focus area: ${persona.focus}.`,
+                            "",
+                            `## Task`,
+                            persona.task || `Analyze the following task from your ${persona.role} perspective.`,
+                            goalsBlock,
+                            "",
+                            ...(persona.neuroResult ? [
+                              "## NEURO Analysis",
+                              persona.neuroResult,
+                              "",
+                              "Use this analysis to inform your findings.",
+                              "",
+                            ] : []),
+                            otherContext,
+                            `## User Prompt`,
+                            userText.trim(),
+                            "",
+                            "## Output Requirements",
+                            "Provide your findings as a structured analysis.",
+                            "Focus ONLY on your area of expertise.",
+                            "Be specific, cite code locations, and provide actionable recommendations.",
+                            "Do not attempt to produce a final answer — produce a focused specialist report.",
+                            "",
+                            `## Synthesis Guide`,
+                            persona.synthesisGuide || `When synthesizing, include your findings on ${persona.focus}.`,
+                          ].join("\n")
+
+                          const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>
+                            Effect.gen(function* () {
+                              yield* tracker.complete(persona.name, persona.role, output, status, {
+                                task: persona.task,
+                                goals: persona.goals,
+                                synthesisGuide: persona.synthesisGuide,
                               })
+                              const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
+                              yield* sessions.updatePart({
+                                ...part,
+                                type: "tool",
+                                state: status === "completed"
+                                  ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                  : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                              } as SessionV1.ToolPart)
+                            })
 
-                            return taskTool
+                          yield* Effect.all([
+                            taskTool
                               .execute(
                                 {
                                   prompt: personaPrompt,
@@ -1557,32 +1551,32 @@ Before every response, verify your reasoning:
                                   sessionID,
                                   messageID: personaAssistantMsg.id,
                                   messages: msgs,
-                                  abort: neverAbort.signal,
+                                  abort: new AbortController().signal,
                                   callID: (part as SessionV1.ToolPart).callID,
                                   extra: { bypassAgentCheck: true, promptOps: subtaskOps },
-                                  metadata: (val: { title?: string; metadata?: Record<string, any> }) => {
-                                    const st = part.state as { status: string; input: Record<string, any>; time?: { start: number } }
-                                    return sessions.updatePart({
+                                  metadata: (meta) => Effect.gen(function* () {
+                                    yield* sessions.updatePart({
                                       ...part,
                                       type: "tool",
-                                      state: { ...st, status: "running" as const, ...val },
+                                      state: {
+                                        ...part.state,
+                                        metadata: { ...(part.state as any).metadata, ...meta },
+                                      },
                                     } as SessionV1.ToolPart)
-                                  },
+                                  }),
                                   ask: () => Effect.succeed({ status: "allow" as const }),
                                 },
                               )
-                              .pipe(Effect.matchEffect({
-                                onSuccess: (result) => markComplete("completed", result.output, result.metadata),
-                                onFailure: (err) => markComplete("error", String(err)),
-                              }))
-                          }),
-                          { concurrency: 7 },
-                        ),
-                        scope,
+                              .pipe(
+                                Effect.tap((result) => markComplete("completed", result.output, result.metadata)),
+                                Effect.catchCause((cause) => markComplete("error", `persona died: ${Cause.pretty(cause)}`)),
+                              ),
+                          ])
+                        }),
+                        { concurrency: 5 },
                       )
 
-                      // Join persona fiber — results are available from tracker
-                      const personaResults = yield* Fiber.join(personaFiber)
+                      const personaResults = tracker.getAll()
                       synthesisText = PersonaTracker.buildSynthesisPrompt(personaResults)
                       yield* Effect.promise(() =>
                         PersonaTracker.injectSynthesis(sessionID, personaResults, sessions, model.providerID, model.id)

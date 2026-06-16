@@ -117,7 +117,6 @@ const cancelBackgroundJobs = Effect.fn("SessionRunState.cancelBackgroundJobs")(f
   background: BackgroundJob.Interface,
   sessionID: SessionID,
 ) {
-  const jobs = yield* background.list()
   const pending = new Set<string>([sessionID])
   const cancelled = new Set<string>()
   const matches = (job: BackgroundJob.Info) => {
@@ -127,7 +126,9 @@ const cancelBackgroundJobs = Effect.fn("SessionRunState.cancelBackgroundJobs")(f
     if (typeof job.metadata?.sessionId === "string" && pending.has(job.metadata.sessionId)) return true
     return typeof job.metadata?.parentSessionId === "string" && pending.has(job.metadata.parentSessionId)
   }
-  let batch = jobs.filter(matches)
+  // Re-read jobs list on each iteration so newly-spawned jobs that match
+  // an id added to pending during the loop don't escape cancellation.
+  let batch = (yield* background.list()).filter(matches)
   while (batch.length > 0) {
     yield* Effect.forEach(
       batch,
@@ -143,7 +144,7 @@ const cancelBackgroundJobs = Effect.fn("SessionRunState.cancelBackgroundJobs")(f
         ),
       { concurrency: "unbounded", discard: true },
     )
-    batch = jobs.filter(matches)
+    batch = (yield* background.list()).filter(matches)
   }
 })
 

@@ -1903,6 +1903,7 @@ function InlineTool(props: {
           setErrorExpanded((value) => !value)
           return
         }
+        props.onClick?.()
       }}
     >
       {props.children}
@@ -2231,13 +2232,12 @@ function Task(props: ToolProps) {
 
   onMount(() => {
     if (props.part.state.status === "pending") return
-    const sessionID = stringValue(props.part.state.metadata?.sessionId)
+    const sessionID = stringValue(props.part.metadata?.sessionId)
     if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
   })
 
   const sessionID = createMemo(() => {
-    if (props.part.state.status === "pending") return undefined
-    return stringValue(props.part.state.metadata?.sessionId)
+    return stringValue(props.part.metadata?.sessionId)
   })
   const messages = createMemo(() => sync.data.message[sessionID() ?? ""] ?? [])
 
@@ -2248,10 +2248,6 @@ function Task(props: ToolProps) {
         .map((part) => ({ tool: part.tool, state: part.state })),
     )
   })
-
-  const current = createMemo(() =>
-    tools().findLast((x) => (x.state.status === "running" || x.state.status === "completed") && x.state.title),
-  )
 
   const status = createMemo(() => sync.data.session_status[sessionID() ?? ""])
   const isRunning = createMemo(() => {
@@ -2293,11 +2289,14 @@ function Task(props: ToolProps) {
     if (isRunning() && retrying) {
       content.push(`↳ ${formatSubagentRetry(retrying.attempt, Locale.truncate(retrying.message, 80))}`)
     } else if (isRunning() && tools().length > 0) {
-      if (current()) {
-        const state = current()!.state
-        const title = state.status === "running" || state.status === "completed" ? state.title : undefined
-        content.push(`↳ ${Locale.titlecase(current()!.tool)} ${title}`)
-      } else content.push(`↳ ${formatSubagentToolcalls(tools().length)}`)
+      const recentTools = tools().slice(-3)
+      for (const t of recentTools) {
+        const title = t.state.status === "running" || t.state.status === "completed" ? t.state.title : undefined
+        content.push(`↳ ${Locale.titlecase(t.tool)} ${title ?? ""}`)
+      }
+      if (tools().length > 3) {
+        content.push(`↳ ... and ${tools().length - 3} more`)
+      }
     }
 
     if (!isRunning() && props.part.state.status === "completed") {
