@@ -1,13 +1,6 @@
 {
-  "total": 3240,
+  "total": 3250,
   "history": [
-    {
-      "timestamp": "2026-06-16T08:22:43.889554+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 2290,
-      "details": "Sensor gate executed"
-    },
     {
       "timestamp": "2026-06-16T08:23:22.875252+05:30",
       "event": "sensor_gate_run",
@@ -700,12 +693,19 @@
       "points": 10,
       "total_after": 3240,
       "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T16:49:01.378444+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 3250,
+      "details": "Sensor gate executed"
     }
   ],
-  "current_streak": 279,
-  "best_streak": 279,
-  "total_runs": 279,
-  "successful_runs": 279,
+  "current_streak": 280,
+  "best_streak": 280,
+  "total_runs": 280,
+  "successful_runs": 280,
   "sensor_gate_violations": 0,
   "dream_violations": 0
 }
