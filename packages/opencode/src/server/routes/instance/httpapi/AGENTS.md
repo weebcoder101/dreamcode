@@ -37,3 +37,20 @@ Use `Effect.provideService(...)` in middleware only for request-derived context,
 Public JSON errors should be explicit `Schema.ErrorClass` contracts declared on each endpoint. Use built-in `HttpApiError.*` classes only when their empty/tagged body is the intended wire shape; for SDK-visible errors with messages, define an API error schema such as `ApiNotFoundError` and fail with that exact declared error. Keep domain and storage services free of HttpApi types, and translate expected domain errors at the handler boundary.
 
 When adding middleware, declare endpoint-contract middleware on the owning `HttpApiGroup` and provide its implementation layer at the assembly boundary in `server.ts`. Keep router middleware for truly raw fallback routes or global transport policy.
+
+## WebHandler vs Listener initialization
+
+`createRoutes()` is used by both the `serve` command (via `listenerLayer`) and the in-process server (via `Server.Default()` / `webHandler`). These paths have different initialization:
+
+- **`listenerLayer`** (`server.ts:100`): wraps `createRoutes()` with `HttpRouter.serve(...)` and provides `ConfigProvider.layer(ConfigProvider.fromEnv())`, real HTTP server layers, and WebSocket tracking.
+- **`webHandler`** (`server.ts:279`): wraps `createRoutes(undefined, { serveUI: false })` with `HttpRouter.toWebHandler(...)`. No `ConfigProvider` override, no HTTP server.
+
+`HttpRouter.toWebHandler` and `HttpRouter.serve` both merge `HttpRouter.layer` internally, but the additional services provided by `listenerLayer` (ConfigProvider, HttpServer, WebSocketTracker) are NOT available in the webHandler path. This means `Config.string(...)` calls use the default (cached) ConfigProvider, and services that depend on real HTTP server infrastructure fail silently.
+
+## UI catch-all route in in-process server
+
+The `/*` catch-all in `uiRoute` is a `HttpRouter.use` layer that registers a wildcard route on the shared router. When the webHandler is used (in-process server), ALL requests (including API routes like `/session`, `/doc`) are intercepted by this catch-all, which proxies to `https://app.dreamcode.ai` when embedded UI is unavailable.
+
+**Fix**: `createRoutes()` accepts `options.serveUI` (default `true`) to control whether the UI route is included. The `webHandler` passes `{ serveUI: false }`. The `listenerLayer` uses the default (includes UI route).
+
+The specific route (`/session`) vs catch-all (`/*`) matching depends on find-my-way's internal priority. Under normal conditions, specific routes take priority, but when the catch-all is registered on the same router instance as API routes from `Layer.mergeAll`, the catch-all can intercept incorrectly.

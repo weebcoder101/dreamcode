@@ -1,6 +1,5 @@
 import { Effect } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { Context, Random } from "effect"
 
 const SECURITY_HEADERS: Record<string, string> = {
   "x-content-type-options": "nosniff",
@@ -20,8 +19,7 @@ export const securityHeaders = HttpRouter.middleware(
         Effect.map((req) => req.headers["x-request-id"] as string | undefined),
       )
       if (!requestId) {
-        const id = yield* Random.nextUUID
-        response = HttpServerResponse.setHeader(response, "x-request-id", id)
+        response = HttpServerResponse.setHeader(response, "x-request-id", crypto.randomUUID())
       }
       return response
     }),

@@ -248,6 +248,22 @@ entire dreamcode session lifetime.
 - **TODO**: Implement AES-256-GCM encryption with OS keychain-derived key
 - Tracked as CRITICAL security issue in architecture synthesis
 
+## Effect HTTP error handling
+
+### `isRespondable` does NOT mean "declared in endpoint schema"
+
+`HttpServerRespondable.isRespondable(error)` checks only whether the error type implements the `Respondable` interface (has a `[Respondable.symbol]()` method). It does NOT check whether the error is declared in the endpoint's HttpApi schema.
+
+When a Respondable error (like `ApiNotFoundError` with `httpApiStatus: 404`) is thrown but NOT listed in the endpoint's `error: [...]` schema, the framework's `causeResponse` produces `internalServerError()` (empty 500 body). The error was "Respondable by type" but "undeclared on endpoint" — the framework has no codec for it.
+
+**Fix**: Error-catching middleware should NOT use `isRespondable` as a guard for typed fail errors. Always catch all fail reasons and produce a JSON response with the error message and an appropriate status code.
+
+### Layer lifecycle: `handlerPromise` caches failures permanently
+
+`HttpEffect.toWebHandlerLayerWith` caches the layer build result in a `handlerPromise` via `??=`. Once this promise rejects (layer build failure), it is NEVER retried. Every subsequent request sees the same failure. There is no heal-after-failure path. Process restart is required.
+
+Layer build errors are raw JS exceptions (not HTTP responses). Request handler errors go through `causeResponse` (HTTP response). These are two separate error domains.
+
 ## Build Commands
 
 ### Build opencode binary

@@ -68,3 +68,10 @@
 - `github-copilot/responses/openai-error.ts` uses z.any() for provider errors
 - **FIXED**: Replaced with z.unknown() + type guards
 - Malformed or malicious provider responses bypass all type checking
+
+## Effect patterns
+
+### InstanceState FallbackContext
+- `effect/instance-state.ts:23` defines `FallbackContext` used when `InstanceRef` is not available in the context (`yield* InstanceRef` returns null/undefined).
+- Services using `InstanceState.make` (Config, Env, etc.) get `FallbackContext` (based on `process.cwd()`) when `InstanceRef` is not provided. This can silently activate during layer build or in contexts where `InstanceRef` hasn't been scoped yet.
+- `ScopedCache.makeWith({ requireServicesAt: "lookup" })` defers the `InstanceRef` read until the cache's `lookup` function is called, but that first call uses `FallbackContext` if no `InstanceRef` is in scope.
