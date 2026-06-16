@@ -1,40 +1,32 @@
 {
-  "id": "todo-1781569394114",
+  "id": "todo-1781570776428",
   "sessionId": "ses_13266df12ffeTLhR1KamstC70o",
   "items": [
     {
       "id": "item-0",
-      "content": "Fix .husky/pre-push to avoid OOM",
+      "content": "Rebuild binary from main",
       "status": "in_progress",
       "priority": "high",
-      "createdAt": "2026-06-16T00:23:14.114Z",
-      "updatedAt": "2026-06-16T00:23:14.114Z"
+      "createdAt": "2026-06-16T00:46:16.428Z",
+      "updatedAt": "2026-06-16T00:46:16.428Z"
     },
     {
       "id": "item-1",
-      "content": "Build binary",
+      "content": "Test persona spawning with a prompt",
       "status": "pending",
       "priority": "high",
-      "createdAt": "2026-06-16T00:23:14.114Z",
-      "updatedAt": "2026-06-16T00:23:14.114Z"
+      "createdAt": "2026-06-16T00:46:16.428Z",
+      "updatedAt": "2026-06-16T00:46:16.428Z"
     },
     {
       "id": "item-2",
-      "content": "Delete ~/.dreamcode",
+      "content": "Verify TUI subagent interaction",
       "status": "pending",
       "priority": "medium",
-      "createdAt": "2026-06-16T00:23:14.114Z",
-      "updatedAt": "2026-06-16T00:23:14.114Z"
-    },
-    {
-      "id": "item-3",
-      "content": "Commit all changes",
-      "status": "pending",
-      "priority": "high",
-      "createdAt": "2026-06-16T00:23:14.114Z",
-      "updatedAt": "2026-06-16T00:23:14.114Z"
+      "createdAt": "2026-06-16T00:46:16.428Z",
+      "updatedAt": "2026-06-16T00:46:16.428Z"
     }
   ],
-  "createdAt": "2026-06-16T00:23:14.114Z",
-  "updatedAt": "2026-06-16T00:33:23.043Z"
+  "createdAt": "2026-06-16T00:46:16.428Z",
+  "updatedAt": "2026-06-16T00:49:43.728Z"
 }

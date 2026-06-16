@@ -1,139 +1,6 @@
 {
-  "total": 1840,
+  "total": 2030,
   "history": [
-    {
-      "timestamp": "2026-06-15T06:55:34.192064+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 970,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:04:40.710686+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 980,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:06:50.726804+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 990,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T01:36:54.266Z",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1000,
-      "details": "Sensor gate executed for skill: architecture"
-    },
-    {
-      "timestamp": "2026-06-15T01:36:54.266Z",
-      "event": "skill_executed",
-      "points": 5,
-      "total_after": 1005,
-      "details": "Skill architecture loaded from SKILL.md"
-    },
-    {
-      "timestamp": "2026-06-15T07:13:56.042580+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1015,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:20:38.152686+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1025,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:20:53.688813+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1035,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T01:50:56.303Z",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1045,
-      "details": "Sensor gate executed for skill: pieces-ltm"
-    },
-    {
-      "timestamp": "2026-06-15T01:50:56.304Z",
-      "event": "skill_executed",
-      "points": 5,
-      "total_after": 1050,
-      "details": "Skill pieces-ltm loaded from SKILL.md"
-    },
-    {
-      "timestamp": "2026-06-15T07:25:44.320993+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1060,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:33:47.946981+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1070,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:36:47.866688+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1080,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:40:09.311034+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1090,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:47:21.795382+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1100,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T02:17:24.083Z",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1110,
-      "details": "Sensor gate executed for skill: deep-research"
-    },
-    {
-      "timestamp": "2026-06-15T02:17:24.084Z",
-      "event": "skill_executed",
-      "points": 5,
-      "total_after": 1115,
-      "details": "Skill deep-research loaded from SKILL.md"
-    },
-    {
-      "timestamp": "2026-06-15T07:52:32.425407+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1125,
-      "details": "Sensor gate executed"
-    },
-    {
-      "timestamp": "2026-06-15T07:54:04.696458+05:30",
-      "event": "sensor_gate_run",
-      "points": 10,
-      "total_after": 1135,
-      "details": "Sensor gate executed"
-    },
     {
       "timestamp": "2026-06-15T02:24:08.749Z",
       "event": "sensor_gate_run",
@@ -700,12 +567,145 @@
       "points": -15,
       "total_after": 1840,
       "details": "Skill git-workflow not found"
+    },
+    {
+      "timestamp": "2026-06-16T06:20:26.329385+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1850,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:21:36.166315+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1860,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:22:59.016769+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1870,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:44:01.497693+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1880,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:44:34.801971+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1890,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:45:02.060319+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1900,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:45:39.454076+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1910,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:46:03.637687+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1920,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:46:21.334010+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1930,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:51:01.289539+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1940,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:51:30.591799+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1950,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T06:52:46.795960+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1960,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T07:00:16.686184+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1970,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T07:02:31.529074+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1980,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T07:04:28.757012+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 1990,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T07:05:57.756719+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 2000,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T07:08:42.821600+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 2010,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T07:11:39.445792+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 2020,
+      "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-16T07:13:04.047748+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 2030,
+      "details": "Sensor gate executed"
     }
   ],
-  "current_streak": 148,
-  "best_streak": 148,
-  "total_runs": 148,
-  "successful_runs": 148,
+  "current_streak": 167,
+  "best_streak": 167,
+  "total_runs": 167,
+  "successful_runs": 167,
   "sensor_gate_violations": 0,
   "dream_violations": 0
 }
