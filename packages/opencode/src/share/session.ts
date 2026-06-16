@@ -39,9 +39,15 @@ export const layer = Layer.effect(
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
       const result = yield* session.create(input)
       if (result.parentID) return result
-      const conf = yield* cfg.get()
-      if (!(flags.autoShare || conf.share === "auto")) return result
-      yield* share(result.id).pipe(Effect.ignore, Effect.forkIn(scope))
+      // Auto-share is best-effort: if config lookup fails (e.g. missing InstanceRef
+      // in the in-process server path), the session is still returned successfully.
+      yield* cfg.get().pipe(
+        Effect.flatMap((conf) => {
+          if (!(flags.autoShare || conf.share === "auto")) return Effect.void
+          return share(result.id).pipe(Effect.ignore, Effect.forkIn(scope))
+        }),
+        Effect.catch(() => Effect.void),
+      )
       return result
     })
 
