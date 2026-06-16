@@ -57,3 +57,16 @@ Producer capture limits are separate. For example, Bash keeps `AppProcess.maxOut
 - Plugin boot has not been redesigned to register canonical tools through `Tools.Service`; do not redesign it as part of leaf migrations.
 - MCP and future Session-scoped registrations still need an explicit canonical registration design.
 - The public Session result shape currently exposes managed `outputPaths`; full storage encapsulation requires a future opaque managed-output reference design.
+
+## Security
+
+### Dynamic npm Loading
+- `plugin/provider/dynamic.ts` accepts arbitrary npm packages for AI SDK providers
+- **ALLOWLIST**: Set `AI_SDK_ALLOWED_PACKAGES` env var (comma-separated) to restrict
+- Default allowlist: @ai-sdk/openai, @ai-sdk/anthropic, @ai-sdk/google, @ai-sdk/mistral, @ai-sdk/deepseek, @ai-sdk/togetherai, @ai-sdk/groq
+- Packages NOT in allowlist will be rejected with error
+
+### Credential Storage
+- `credential/sql.ts` stores OAuth tokens/API keys as unencrypted JSON in SQLite
+- Any process with filesystem access can extract all credentials
+- **TODO**: Implement AES-256-GCM encryption with OS keychain-derived key

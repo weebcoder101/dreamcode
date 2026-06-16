@@ -19,7 +19,7 @@ import type { DeepMutable } from "../schema"
 type DatabaseService = Database.Interface["db"]
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
-const encodeMessage = Schema.encodeSync(SessionMessage.Message)
+const encodeMessage = Schema.encode(SessionMessage.Message)
 
 class PromptAlreadyProjected extends Error {}
 export class SessionAlreadyProjected extends Error {}
@@ -116,19 +116,21 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
       decodeMessage({ ...row.data, id: row.id, type: row.type })
     const updateMessage = (message: SessionMessage.Message) => {
       if (event.seq === undefined) return Effect.die(new Error("Synchronized Session event is missing aggregate sequence"))
-      const encoded = encodeMessage(message)
-      const { id, type, ...data } = encoded
-      return db
-        .update(SessionMessageTable)
-        .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
-        .where(
-          and(
-            eq(SessionMessageTable.id, SessionMessage.ID.make(id)),
-            eq(SessionMessageTable.session_id, event.data.sessionID),
-          ),
-        )
-        .run()
-        .pipe(Effect.orDie)
+      return Effect.gen(function* () {
+        const encoded = yield* encodeMessage(message)
+        const { id, type, ...data } = encoded
+        return yield* db
+          .update(SessionMessageTable)
+          .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
+          .where(
+            and(
+              eq(SessionMessageTable.id, SessionMessage.ID.make(id)),
+              eq(SessionMessageTable.session_id, event.data.sessionID),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+      })
     }
     const appendMessage = (message: SessionMessage.Message) => insertMessage(db, event, message)
     const adapter: SessionMessageUpdater.Adapter = {
@@ -193,20 +195,22 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
 
 function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: SessionMessage.Message) {
   if (event.seq === undefined) return Effect.die(new Error("Synchronized Session event is missing aggregate sequence"))
-  const encoded = encodeMessage(message)
-  const { id, type, ...data } = encoded
-  return db
-    .insert(SessionMessageTable)
-    .values({
-      id: SessionMessage.ID.make(id),
-      session_id: event.data.sessionID,
-      type,
-      seq: event.seq,
-      time_created: DateTime.toEpochMillis(message.time.created),
-      data,
-    })
-    .run()
-    .pipe(Effect.orDie)
+  return Effect.gen(function* () {
+    const encoded = yield* encodeMessage(message)
+    const { id, type, ...data } = encoded
+    return yield* db
+      .insert(SessionMessageTable)
+      .values({
+        id: SessionMessage.ID.make(id),
+        session_id: event.data.sessionID,
+        type,
+        seq: event.seq,
+        time_created: DateTime.toEpochMillis(message.time.created),
+        data,
+      })
+      .run()
+      .pipe(Effect.orDie)
+  })
 }
 
 export const layer = Layer.effectDiscard(

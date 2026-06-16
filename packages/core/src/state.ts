@@ -2,6 +2,7 @@ export * as State from "./state"
 
 import { Effect, Scope, Semaphore } from "effect"
 import type { Draft, Objectish } from "immer"
+import * as EventV2 from "./event"
 
 /**
  * A replayable transform applied to an editor during rebuild.
@@ -25,7 +26,7 @@ export interface Options<State extends Objectish, Editor> {
    * after the current state has already been edited. The optional reason is
    * caller-defined metadata for exceptional update origins.
    */
-  readonly finalize?: (editor: Editor, reason?: string) => Effect.Effect<void>
+  readonly finalize?: (editor: Editor, reason?: string) => Effect.Effect<void, EventV2.InvalidSyncEventError>
 }
 
 export interface Interface<State extends Objectish, Editor> {

@@ -210,3 +210,58 @@ cd packages/opencode && bun run typecheck 2>&1 | tail -20
 
 This is non-negotiable. No exceptions. The typecheck ban applies for the
 entire dreamcode session lifetime.
+
+## Security Boundaries
+
+### Dynamic npm Loading (packages/core/src/plugin/provider/dynamic.ts)
+- Plugin accepts arbitrary npm package specifiers for AI SDK providers
+- **ALLOWLIST**: Set `AI_SDK_ALLOWED_PACKAGES` env var (comma-separated) to restrict
+- Default allowlist: @ai-sdk/openai, @ai-sdk/anthropic, @ai-sdk/google, @ai-sdk/mistral, @ai-sdk/deepseek, @ai-sdk/togetherai, @ai-sdk/groq
+- Packages NOT in allowlist will be rejected with error
+- This prevents arbitrary code execution via malicious provider config
+
+### Core Wildcard Exports (packages/core/package.json)
+- `./*": "./src/*.ts"` exposes ALL internal files as public API
+- 45+ consumer subpaths bypass the intended `public/index.ts` boundary
+- **DEPRECATED**: Will be removed in future major version
+- Migrate consumers to `@opencode-ai/core/public` or `@opencode-ai/core/internal`
+- Internal subpath: `@opencode-ai/core/internal` (packages/core/src/internal/index.ts)
+
+### V1 Deprecation (packages/core/src/v1/)
+- V1 session/permission schemas are DEPRECATED but still active
+- Used by projector bridge (session/projector.ts) for backward compatibility
+- Session creation at session.ts:212 calls V1 SessionInfo.make() for V2 sessions
+- Do NOT remove V1 until projector bridge is migrated to pure V2
+
+## Architecture Anti-Patterns
+
+### Effect.die for Control Flow (packages/core/src/session/runner/llm.ts)
+- TurnTransitionError uses `Effect.die` for internal control flow
+- This defeats Effect-TS error tracking (uncatchable by upstream handlers)
+- `retryAgentMismatch` uses `Effect.catchDefect` which won't catch error-channel values
+- **TODO**: Convert to `Effect.fail` with proper tagged errors when refactoring
+- Documented in ADR-006 (Session Run Coordinator Durability Gap)
+
+### Credential Storage (packages/core/src/credential/sql.ts)
+- OAuth tokens/API keys stored as unencrypted JSON in SQLite
+- Any process with filesystem access can extract all credentials
+- **TODO**: Implement AES-256-GCM encryption with OS keychain-derived key
+- Tracked as CRITICAL security issue in architecture synthesis
+
+## Build Commands
+
+### Build opencode binary
+```bash
+cd packages/opencode && OPENCODE_VERSION=1.2.1 bun run build --skip-embed-web-ui --skip-install --single
+```
+
+### Typecheck single package
+```bash
+cd packages/opencode && bun run typecheck
+cd packages/core && bun run typecheck
+```
+
+### Run tests
+```bash
+cd packages/opencode && bun test --timeout 30000
+```

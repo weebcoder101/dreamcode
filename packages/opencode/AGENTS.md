@@ -129,3 +129,25 @@ Use `Effect.cached` when multiple concurrent callers should share a single in-fl
 Use `EffectBridge` for native or external callbacks (`@parcel/watcher`, `node-pty`, native `fs.watch`, plugin callbacks, etc.) that need to re-enter Effect services with instance/workspace context.
 
 Plain async code should pass explicit context or stay inside an Effect fiber; do not add ambient instance context shims.
+
+## Persona System
+
+### Configuration
+- `MAX_PERSONA_ROUNDS = 3` (src/session/prompt.ts:150) - Maximum rounds of specialist analysis
+- Max personas capped at 5 (src/session/prompt.ts:1404) - Prevents oversaturation
+- `personaRoundMap` tracks rounds per session
+- `sensorGateFiredMap` persists across messages
+
+### Efficiency Rules
+- Agent should complete analysis in ONE round if possible
+- Only spawn additional specialists if CRITICAL gaps exist
+- Each round of spawning costs time and money
+- Most tasks should complete in 1 round
+- Use round 2 only for critical gaps
+- Round 3 is FINAL - task tool gets disabled
+
+### Subagent Behavior
+- Persona subagents get `disableTaskTool: true` via `subtaskOps`
+- They CANNOT spawn their own subagents
+- Background subagents have `neverAbort` flag
+- Foreground subagents are NOT cancelled on parent interrupt

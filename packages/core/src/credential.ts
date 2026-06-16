@@ -41,16 +41,16 @@ export class Stored extends Schema.Class<Stored>("Credential.Stored")({
   value: Info,
 }) {}
 
-class CredentialDecodeError extends Schema.TaggedErrorClass<CredentialDecodeError>()(
+export class CredentialDecodeError extends Schema.TaggedErrorClass<CredentialDecodeError>()(
   "CredentialDecodeError",
   { message: Schema.String },
 ) {}
 
 export interface Interface {
   /** Returns every stored credential. */
-  readonly all: () => Effect.Effect<Stored[]>
+  readonly all: () => Effect.Effect<Stored[], CredentialDecodeError>
   /** Returns stored credentials belonging to one integration. */
-  readonly list: (integrationID: IntegrationSchema.ID) => Effect.Effect<Stored[]>
+  readonly list: (integrationID: IntegrationSchema.ID) => Effect.Effect<Stored[], CredentialDecodeError>
   /** Replaces any credential for an integration and returns the new record. */
   readonly create: (input: {
     readonly integrationID: IntegrationSchema.ID
@@ -70,7 +70,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const decodeValue = Schema.decodeUnknownEffect(Info)
-    const stored = (row: typeof CredentialTable.$inferSelect): Effect.Effect<Stored | undefined> => {
+    const stored = (row: typeof CredentialTable.$inferSelect): Effect.Effect<Stored | undefined, CredentialDecodeError> => {
       if (row.integration_id == null) return Effect.succeed(undefined)
       return decodeValue(row.value).pipe(
         Effect.map((value) =>
@@ -81,7 +81,7 @@ export const layer = Layer.effect(
             value,
           }),
         ),
-        Effect.orDie,
+        Effect.mapError((e) => new CredentialDecodeError({ message: `Failed to decode credential: ${e}` })),
       )
     }
 

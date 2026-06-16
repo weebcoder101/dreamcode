@@ -72,7 +72,7 @@ export interface Interface {
   readonly add: (input: {
     id: ID
     effect: Effect.Effect<void | HookFunctions, never, Scope.Scope>
-  }) => Effect.Effect<void, never, never>
+  }) => Effect.Effect<void, EventV2.InvalidSyncEventError>
   readonly remove: (id: ID) => Effect.Effect<void>
   readonly triggerFor: <Name extends keyof Hooks>(
     id: ID,

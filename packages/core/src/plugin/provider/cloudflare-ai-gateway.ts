@@ -65,11 +65,11 @@ function gatewayMetadata(options: Record<string, unknown>) {
 
 function gatewayOptions(options: Record<string, unknown>, metadata: unknown) {
   return {
-    metadata,
-    cacheTtl: options.cacheTtl,
-    cacheKey: options.cacheKey,
-    skipCache: options.skipCache,
-    collectLog: options.collectLog,
+    metadata: typeof metadata === "object" && metadata !== null ? metadata as Record<string, string | number | bigint | boolean | null> : undefined,
+    cacheTtl: typeof options.cacheTtl === "number" ? options.cacheTtl : undefined,
+    cacheKey: typeof options.cacheKey === "string" ? options.cacheKey : undefined,
+    skipCache: typeof options.skipCache === "boolean" ? options.skipCache : undefined,
+    collectLog: typeof options.collectLog === "boolean" ? options.collectLog : undefined,
     headers: {
       "User-Agent": `opencode/${InstallationVersion} cloudflare-ai-gateway (${os.platform()} ${os.release()}; ${os.arch()})`,
     },

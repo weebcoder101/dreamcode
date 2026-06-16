@@ -56,19 +56,18 @@ function hasWorkersEndpoint(api: ProviderV2.Api) {
 
 function sdkOptions(options: Record<string, unknown>) {
   return {
-    ...options,
-    baseURL: expandAccountId(options.baseURL),
-    apiKey: process.env.CLOUDFLARE_API_KEY ?? options.apiKey,
+    baseURL: expandAccountId(typeof options.baseURL === "string" ? options.baseURL : undefined) ?? "",
+    apiKey: process.env.CLOUDFLARE_API_KEY ?? (typeof options.apiKey === "string" ? options.apiKey : undefined),
     headers: {
       "User-Agent": `opencode/${InstallationVersion} cloudflare-workers-ai (${os.platform()} ${os.release()}; ${os.arch()})`,
-      ...options.headers,
+      ...(typeof options.headers === "object" && options.headers !== null ? options.headers as Record<string, string> : {}),
     },
     name: providerID,
   }
 }
 
 function expandAccountId(baseURL: unknown) {
-  if (typeof baseURL !== "string") return baseURL
+  if (typeof baseURL !== "string") return undefined
   return baseURL.replaceAll("${CLOUDFLARE_ACCOUNT_ID}", process.env.CLOUDFLARE_ACCOUNT_ID ?? "${CLOUDFLARE_ACCOUNT_ID}")
 }
 

@@ -194,9 +194,9 @@ export interface Interface {
   /** Registers and immediately applies a scoped integration registry update. */
   readonly update: State.Interface<Data, Editor>["update"]
   /** Returns one integration with its methods and current connections. */
-  readonly get: (id: ID) => Effect.Effect<Info | undefined>
+  readonly get: (id: ID) => Effect.Effect<Info | undefined, Credential.CredentialDecodeError>
   /** Returns all integrations with their methods and current connections. */
-  readonly list: () => Effect.Effect<Info[]>
+  readonly list: () => Effect.Effect<Info[], Credential.CredentialDecodeError>
   readonly connect: {
     /** Runs a key method and stores the resulting credential. */
     readonly key: (input: {

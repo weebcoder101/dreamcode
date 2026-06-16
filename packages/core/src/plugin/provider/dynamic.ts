@@ -20,32 +20,36 @@ export const DynamicProviderPlugin = PluginV2.define({
     )
     const allowed = new Set(allowedPackages)
     return {
-      "aisdk.sdk": Effect.fn(function* (evt) {
+      "aisdk.sdk": Effect.fnUntraced(function* (evt) {
         if (evt.sdk) return
 
         const packageName = evt.package
 
-        if (!allowed.has(packageName)) {
-          return yield* Effect.fail(new Error(`Package ${packageName} is not in AI_SDK_ALLOWED_PACKAGES allowlist`))
-        }
+        if (!allowed.has(packageName)) return
 
-        const installedPath = packageName.startsWith("file://")
-          ? packageName
-          : Option.getOrUndefined((yield* npm.add(packageName).pipe(
-            Effect.catchAll((e) => Effect.fail(new Error(`Failed to install ${packageName}: ${e}`))),
-          )).entrypoint)
-        if (!installedPath) return yield* Effect.fail(new Error(`Package ${packageName} has no import entrypoint`))
+        const installedPath = yield* Effect.gen(function* () {
+          if (packageName.startsWith("file://")) return packageName
+          const result = yield* npm.add(packageName)
+          return Option.getOrUndefined(result.entrypoint)
+        }).pipe(
+          Effect.catch(() => Effect.succeed(undefined as string | undefined)),
+        )
+        if (!installedPath) return
 
         const mod: Record<string, unknown> = yield* Effect.promise(async () => {
           return (await import(
             installedPath.startsWith("file://") ? installedPath : pathToFileURL(installedPath).href
           )) as Record<string, unknown>
-        }).pipe(Effect.catchAll((e) => Effect.fail(new Error(`Failed to import ${packageName}: ${e}`))))
+        }).pipe(
+          Effect.catch(() => Effect.succeed(undefined as Record<string, unknown> | undefined)),
+        )
+        if (!mod) return
+
         const match = Object.keys(mod).find((name) => name.startsWith("create"))
-        if (!match) return yield* Effect.fail(new Error(`Package ${packageName} has no provider factory export`))
+        if (!match) return
 
         const factory = mod[match]
-        if (!isProviderFactory(factory)) return yield* Effect.fail(new Error(`Export ${match} from ${packageName} is not a function`))
+        if (!isProviderFactory(factory)) return
 
         evt.sdk = factory(evt.options ?? {})
       }),

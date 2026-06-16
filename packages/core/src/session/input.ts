@@ -28,8 +28,14 @@ export class Admitted extends Schema.Class<Admitted>("SessionInput.Admitted")({
   promotedSeq: NonNegativeInt.pipe(Schema.optional),
 }) {}
 
+export class InputDecodeError extends Schema.TaggedErrorClass<InputDecodeError>()(
+  "SessionInput.InputDecodeError",
+  { message: Schema.String },
+) {}
+
 const decodePrompt = Schema.decodeUnknownEffect(Prompt)
-const encodePrompt = Schema.encodeSync(Prompt)
+const encodePromptSync = Schema.encodeSync(Prompt)
+const encodePrompt = Schema.encode(Prompt)
 
 const buildFromRow = (row: typeof SessionInputTable.$inferSelect, prompt: Prompt): Admitted =>
   new Admitted({
@@ -45,7 +51,7 @@ const buildFromRow = (row: typeof SessionInputTable.$inferSelect, prompt: Prompt
 const fromRow = (row: typeof SessionInputTable.$inferSelect): Effect.Effect<Admitted> =>
   decodePrompt(row.prompt).pipe(
     Effect.map((prompt: Prompt) => buildFromRow(row, prompt)),
-    Effect.orDie,
+    Effect.mapError((e) => new InputDecodeError({ message: `Failed to decode session input prompt: ${e}` })),
   )
 
 export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
@@ -136,7 +142,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
       id: input.id,
       session_id: input.sessionID,
       admitted_seq: input.admittedSeq,
-      prompt: encodePrompt(input.prompt),
+      prompt: yield* encodePrompt(input.prompt),
       delivery: input.delivery,
       time_created: DateTime.toEpochMillis(input.timeCreated),
     })
@@ -212,7 +218,7 @@ export const equivalent = (
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&
-  JSON.stringify(encodePrompt(input.prompt)) === JSON.stringify(encodePrompt(expected.prompt))
+  JSON.stringify(encodePromptSync(input.prompt)) === JSON.stringify(encodePromptSync(expected.prompt))
 
 export const guardReservedID = Effect.fn("SessionInput.guardReservedID")(function* (
   db: DatabaseService,
@@ -262,7 +268,7 @@ export const projectLegacyPrompted = Effect.fn("SessionInput.projectLegacyPrompt
       id: input.id,
       session_id: input.sessionID,
       admitted_seq: input.promotedSeq,
-      prompt: encodePrompt(input.prompt),
+      prompt: yield* encodePrompt(input.prompt),
       delivery: input.delivery,
       promoted_seq: input.promotedSeq,
       time_created: DateTime.toEpochMillis(input.timeCreated),

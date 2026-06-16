@@ -24,13 +24,20 @@ export class AgentReplacementBlocked extends Schema.TaggedErrorClass<AgentReplac
   { sessionID: SessionSchema.ID, previous: AgentV2.ID, current: AgentV2.ID },
 ) {}
 
-const retryRevisionMismatch = <A, E>(attempt: () => Effect.Effect<A, E>): Effect.Effect<A, E> =>
+const retryRevisionMismatch = <A, E>(
+  attempt: () => Effect.Effect<A, E>,
+  remaining = 10,
+  delayMs = 50,
+): Effect.Effect<A, E> =>
   attempt().pipe(
-    Effect.catchDefect((defect) =>
-      defect instanceof RevisionMismatch
-        ? Effect.yieldNow.pipe(Effect.andThen(() => retryRevisionMismatch(attempt)))
-        : Effect.die(defect),
-    ),
+    Effect.catchDefect((defect) => {
+      if (!(defect instanceof RevisionMismatch) || remaining <= 0) {
+        return Effect.die(defect)
+      }
+      return Effect.sleep(`${delayMs} millis`).pipe(
+        Effect.zipRight(retryRevisionMismatch(attempt, remaining - 1, delayMs * 2)),
+      )
+    }),
   )
 
 interface Prepared {

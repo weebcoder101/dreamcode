@@ -118,7 +118,7 @@ export function merge(...rulesets: Ruleset[]): Ruleset {
 export interface Interface {
   readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionV2.NotFoundError>
   readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionV2.NotFoundError>
-  readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
+  readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError | EventV2.InvalidSyncEventError>
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionV2.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
   readonly list: () => EffectRuntime.Effect<ReadonlyArray<Request>>
@@ -208,7 +208,7 @@ export const layer = Layer.effect(
           pending.set(request.id, item)
           yield* events
             .publish(Event.Asked, request)
-            .pipe(EffectRuntime.onError(() => EffectRuntime.sync(() => pending.delete(request.id))))
+            .pipe(EffectRuntime.catch(() => EffectRuntime.void), EffectRuntime.onError(() => EffectRuntime.sync(() => pending.delete(request.id))))
           return item
         }),
       )

@@ -149,7 +149,7 @@ export interface Interface {
     definition: D,
     data: Data<D>,
     options?: PublishOptions,
-  ) => Effect.Effect<Payload<D>>
+  ) => Effect.Effect<Payload<D>, InvalidSyncEventError>
   readonly subscribe: <D extends Definition>(definition: D) => Stream.Stream<Payload<D>>
   readonly all: () => Stream.Stream<Payload>
   readonly aggregateEvents: (input: {
@@ -163,11 +163,11 @@ export interface Interface {
   readonly replay: (
     event: SerializedEvent,
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, InvalidSyncEventError>
   readonly replayAll: (
     events: SerializedEvent[],
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
-  ) => Effect.Effect<string | undefined>
+  ) => Effect.Effect<string | undefined, InvalidSyncEventError>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
 }
@@ -227,32 +227,26 @@ export const layerWith = (options?: LayerOptions) =>
           const sync = definition?.sync
           if (sync) {
             if (event.version !== sync.version) {
-              yield* Effect.die(
-                new InvalidSyncEventError({
-                  type: event.type,
-                  message: `Expected event version ${sync.version}, got ${event.version}`,
-                }),
-              )
+              yield* new InvalidSyncEventError({
+                type: event.type,
+                message: `Expected event version ${sync.version}, got ${event.version}`,
+              })
             }
             const aggregateID = (event.data as Record<string, unknown>)[sync.aggregate]
             if (typeof aggregateID !== "string") {
-              yield* Effect.die(
-                new InvalidSyncEventError({
-                  type: event.type,
-                  message: `Expected string aggregate field ${sync.aggregate}`,
-                }),
-              )
+              yield* new InvalidSyncEventError({
+                type: event.type,
+                message: `Expected string aggregate field ${sync.aggregate}`,
+              })
             } else {
               if (input && input.aggregateID !== aggregateID) {
-                yield* Effect.die(
-                  new InvalidSyncEventError({
-                    type: event.type,
-                    message: `Aggregate mismatch: expected ${input.aggregateID}, got ${aggregateID}`,
-                  }),
-                )
+                yield* new InvalidSyncEventError({
+                  type: event.type,
+                  message: `Aggregate mismatch: expected ${input.aggregateID}, got ${aggregateID}`,
+                })
               }
               const list = projectors.get(event.type) ?? []
-              return yield* Effect.uninterruptible(
+              return yield* Effect.interruptible(
                 Effect.gen(function* () {
                   const committed = yield* db
                     .transaction(
@@ -269,12 +263,10 @@ export const layerWith = (options?: LayerOptions) =>
                             .get(versionedType(definition.type, sync.version))!
                             .encode(event.data) as Record<string, unknown>
                           if (input?.strictOwner && row?.ownerID && row.ownerID !== input.ownerID) {
-                            yield* Effect.die(
-                              new InvalidSyncEventError({
-                                type: event.type,
-                                message: `Replay owner mismatch for aggregate ${aggregateID}: expected ${row.ownerID}, got ${input.ownerID ?? "none"}`,
-                              }),
-                            )
+                            yield* new InvalidSyncEventError({
+                              type: event.type,
+                              message: `Replay owner mismatch for aggregate ${aggregateID}: expected ${row.ownerID}, got ${input.ownerID ?? "none"}`,
+                            })
                           }
                           if (input && input.seq <= latest) {
                             const stored = yield* db
@@ -298,24 +290,20 @@ export const layerWith = (options?: LayerOptions) =>
                               }
                               return
                             }
-                            yield* Effect.die(
-                              new InvalidSyncEventError({
-                                type: event.type,
-                                message: `Replay diverged at aggregate ${aggregateID} sequence ${input.seq}`,
-                              }),
-                            )
+                            yield* new InvalidSyncEventError({
+                              type: event.type,
+                              message: `Replay diverged at aggregate ${aggregateID} sequence ${input.seq}`,
+                            })
                           }
                           if (input && row?.ownerID && row.ownerID !== input.ownerID) {
                             return
                           }
                           const seq = input?.seq ?? latest + 1
                           if (input && seq !== latest + 1) {
-                            yield* Effect.die(
-                              new InvalidSyncEventError({
-                                type: event.type,
-                                message: `Sequence mismatch for aggregate ${aggregateID}: expected ${latest + 1}, got ${seq}`,
-                              }),
-                            )
+                            yield* new InvalidSyncEventError({
+                              type: event.type,
+                              message: `Sequence mismatch for aggregate ${aggregateID}: expected ${latest + 1}, got ${seq}`,
+                            })
                           }
                           const stored = yield* db
                             .select({ aggregateID: EventTable.aggregate_id, seq: EventTable.seq })
@@ -324,12 +312,10 @@ export const layerWith = (options?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           if (stored)
-                            yield* Effect.die(
-                              new InvalidSyncEventError({
-                                type: event.type,
-                                message: `Event ${event.id} already exists at aggregate ${stored.aggregateID} sequence ${stored.seq}`,
-                              }),
-                            )
+                            yield* new InvalidSyncEventError({
+                              type: event.type,
+                              message: `Event ${event.id} already exists at aggregate ${stored.aggregateID} sequence ${stored.seq}`,
+                            })
                           for (const guard of commitGuards) {
                             yield* guard(event)
                           }
@@ -386,12 +372,10 @@ export const layerWith = (options?: LayerOptions) =>
         return Effect.gen(function* () {
           const durable = registry.get(event.type)?.sync !== undefined
           if (!durable && commit)
-            return yield* Effect.die(
-              new InvalidSyncEventError({
-                type: event.type,
-                message: "Local commit hooks require a synchronized event",
-              }),
-            )
+            return yield* new InvalidSyncEventError({
+              type: event.type,
+              message: "Local commit hooks require a synchronized event",
+            })
           if (durable) {
             const committed = yield* commitSyncEvent(event as Payload, undefined, commit)
             if (committed) {
@@ -457,9 +441,7 @@ export const layerWith = (options?: LayerOptions) =>
         return Effect.gen(function* () {
           const definition = syncRegistry.get(event.type)
           if (!definition) {
-            yield* Effect.die(
-              new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` }),
-            )
+            yield* new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` })
           } else {
             const payload = {
               id: event.id,
@@ -489,23 +471,19 @@ export const layerWith = (options?: LayerOptions) =>
           const source = events[0]?.aggregateID
           if (!source) return undefined
           if (events.some((event) => event.aggregateID !== source)) {
-            yield* Effect.die(
-              new InvalidSyncEventError({
-                type: events[0]?.type ?? "unknown",
-                message: "Replay events must belong to the same aggregate",
-              }),
-            )
+            yield* new InvalidSyncEventError({
+              type: events[0]?.type ?? "unknown",
+              message: "Replay events must belong to the same aggregate",
+            })
           }
           const start = events[0]?.seq ?? 0
           for (const [index, event] of events.entries()) {
             const seq = start + index
             if (event.seq !== seq) {
-              yield* Effect.die(
-                new InvalidSyncEventError({
-                  type: event.type,
-                  message: `Replay sequence mismatch at index ${index}: expected ${seq}, got ${event.seq}`,
-                }),
-              )
+              yield* new InvalidSyncEventError({
+                type: event.type,
+                message: `Replay sequence mismatch at index ${index}: expected ${seq}, got ${event.seq}`,
+              })
             }
           }
           for (const event of events) {

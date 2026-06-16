@@ -69,19 +69,19 @@ export type Editor = {
 export interface Interface {
   readonly transform: State.Interface<Data, Editor>["transform"]
   readonly provider: {
-    readonly get: (providerID: ProviderV2.ID) => Effect.Effect<ProviderV2.Info, ProviderNotFoundError>
-    readonly all: () => Effect.Effect<ProviderV2.Info[]>
-    readonly available: () => Effect.Effect<ProviderV2.Info[]>
+    readonly get: (providerID: ProviderV2.ID) => Effect.Effect<ProviderV2.Info, ProviderNotFoundError | Credential.CredentialDecodeError>
+    readonly all: () => Effect.Effect<ProviderV2.Info[], Credential.CredentialDecodeError>
+    readonly available: () => Effect.Effect<ProviderV2.Info[], Credential.CredentialDecodeError>
   }
   readonly model: {
     readonly get: (
       providerID: ProviderV2.ID,
       modelID: ModelV2.ID,
-    ) => Effect.Effect<ModelV2.Info, ProviderNotFoundError | ModelNotFoundError>
-    readonly all: () => Effect.Effect<ModelV2.Info[]>
-    readonly available: () => Effect.Effect<ModelV2.Info[]>
-    readonly default: () => Effect.Effect<Option.Option<ModelV2.Info>>
-    readonly small: (providerID: ProviderV2.ID) => Effect.Effect<Option.Option<ModelV2.Info>>
+    ) => Effect.Effect<ModelV2.Info, ProviderNotFoundError | ModelNotFoundError | Credential.CredentialDecodeError>
+    readonly all: () => Effect.Effect<ModelV2.Info[], Credential.CredentialDecodeError>
+    readonly available: () => Effect.Effect<ModelV2.Info[], Credential.CredentialDecodeError>
+    readonly default: () => Effect.Effect<Option.Option<ModelV2.Info>, Credential.CredentialDecodeError>
+    readonly small: (providerID: ProviderV2.ID) => Effect.Effect<Option.Option<ModelV2.Info>, Credential.CredentialDecodeError>
   }
 }
 

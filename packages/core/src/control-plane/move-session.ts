@@ -60,7 +60,7 @@ export type Error =
   | ResetSourceChangesError
 
 export interface Interface {
-  readonly moveSession: (input: Input) => Effect.Effect<void, Error>
+  readonly moveSession: (input: Input) => Effect.Effect<void, Error | EventV2.InvalidSyncEventError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ControlPlaneMoveSession") {}

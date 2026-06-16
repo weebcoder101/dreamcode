@@ -50,7 +50,7 @@ type Plugin = {
 }
 
 export interface Interface {
-  readonly wait: () => Effect.Effect<void>
+  readonly wait: () => Effect.Effect<void, EventV2.InvalidSyncEventError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/PluginBoot") {}
@@ -73,7 +73,7 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const skill = yield* SkillV2.Service
     const references = yield* Reference.Service
-    const done = yield* Deferred.make<void>()
+    const done = yield* Deferred.make<void, EventV2.InvalidSyncEventError>()
 
     const add = Effect.fn("PluginBoot.add")(function* (input: Plugin) {
       yield* plugin.add({
