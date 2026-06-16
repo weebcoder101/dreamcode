@@ -5,10 +5,6 @@ import { Cause, Effect } from "effect"
 import { PlatformError } from "effect/PlatformError"
 import { HttpRouter, HttpServerError, HttpServerRespondable, HttpServerResponse } from "effect/unstable/http"
 
-// Keep typed HttpApi failures on their declared error path; this boundary replaces
-// defect-only empty 500s and catches typed FAIL errors whose schema types are
-// Respondable but undeclared on the endpoint (which would otherwise produce
-// empty-body 500s).
 export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect) =>
   effect.pipe(
     Effect.catchCause((cause) => {
@@ -26,42 +22,42 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
           ConfigErrorV1.FrontmatterError.isInstance(error) ||
           ConfigErrorV1.DirectoryTypoError.isInstance(error)
         ) {
-          return Effect.succeed(HttpServerResponse.jsonUnsafe(error.toObject(), { status: 400 }))
+          return Effect.succeed(
+            HttpServerResponse.text(JSON.stringify(error.toObject()), { status: 400, headers: { "content-type": "application/json" } }),
+          )
         }
 
-        // FileSystemError and PlatformError are transient infrastructure errors — return
-        // 503 (service unavailable) so the client can retry instead of treating them as
-        // fatal 500 defects.
-        if (FSUtil?.FileSystemError?.isInstance?.(error) || PlatformError.isInstance(error)) {
+        if (FSUtil?.FileSystemError?.isInstance?.(error) || PlatformError?.isInstance?.(error)) {
           const message = typeof error === "object" && error !== null && "message" in error
             ? String(error.message)
             : "Infrastructure error: filesystem or platform error"
           return Effect.succeed(
-            HttpServerResponse.jsonUnsafe(
-              new NamedError.Unknown({ message: `${message}. Try again.` }).toObject(),
-              { status: 503 },
+            HttpServerResponse.text(
+              JSON.stringify({ error: `${message}. Try again.` }),
+              { status: 503, headers: { "content-type": "application/json" } },
             ),
           )
         }
 
         const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+        const errorMessage = error instanceof Error
+          ? `${error.name}: ${error.message}\n${error.stack ?? ""}`
+          : String(error)
 
         return Effect.logError("failed", { ref, error, cause: Cause.pretty(cause) }).pipe(
           Effect.as(
-            HttpServerResponse.jsonUnsafe(
-              new NamedError.Unknown({
-                message: "Unexpected server error. Check server logs for details.",
+            HttpServerResponse.text(
+              JSON.stringify({
+                error: "Unexpected server error. Check server logs for details.",
+                detail: errorMessage,
                 ref,
-              }).toObject(),
-              { status: 500 },
+              }),
+              { status: 500, headers: { "content-type": "application/json" } },
             ),
           ),
         )
       }
 
-      // Catch typed FAIL errors. The framework produces empty-body 500s for
-      // fail errors that are Respondable-by-type but undeclared on the
-      // endpoint schema, so we always catch instead of trusting isRespondable.
       const failReason = cause.reasons.find(Cause.isFailReason)
       if (failReason) {
         const ref = `err_${crypto.randomUUID().slice(0, 8)}`
@@ -72,9 +68,9 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
             : "Unknown error"
         return Effect.logError("failed", { ref, error: failReason.error, cause: Cause.pretty(cause) }).pipe(
           Effect.as(
-            HttpServerResponse.jsonUnsafe(
-              new NamedError.Unknown({ message, ref }).toObject(),
-              { status: 500 },
+            HttpServerResponse.text(
+              JSON.stringify({ error: message, ref }),
+              { status: 500, headers: { "content-type": "application/json" } },
             ),
           ),
         )
