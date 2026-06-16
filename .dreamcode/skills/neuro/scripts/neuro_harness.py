@@ -187,7 +187,7 @@ def main():
     t0 = time.time()
 
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             body = json.loads(resp.read().decode())
             content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
             try:

@@ -129,6 +129,7 @@ export function RunFooterMenu(props: {
   grouped?: boolean
   background?: boolean
   headerColor?: ColorInput
+  onSelect?: (index: number) => void
 }) {
   const term = useTerminalDimensions()
   const limit = () => props.limit ?? FOOTER_MENU_ROWS
@@ -286,7 +287,13 @@ export function RunFooterMenu(props: {
                 ? props.theme().shade
                 : transparent
           return (
-            <box paddingRight={0} flexDirection="row" backgroundColor={background()}>
+            <box
+              paddingRight={0}
+              flexDirection="row"
+              backgroundColor={background()}
+              onMouseDown={() => props.onSelect?.(row.index)}
+              onMouseUp={() => props.onSelect?.(row.index)}
+            >
               {border() ? (
                 <text fg={props.theme().highlight} bg={background()} wrapMode="none">
                   {active() ? "▌" : " "}

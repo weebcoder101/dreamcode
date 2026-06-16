@@ -96,6 +96,18 @@ export type InferDef<T> =
       ? Def<P, M>
       : never
 
+const SUBAGENT_NAMES = new Set(["general", "explore"])
+
+const BUILD_COMMAND_RE = /^(npm|pip|yarn|pnpm|bun|make|cargo|go\s+build|dotnet\s+build|mvn|gradle|sbt|mix|composer)\s+(install|build|run\s+build|run\s+test|run\s+check|compile|deploy|add|publish)/i
+
+function classifyToolCall(tool: string, args: Record<string, unknown>, ctx: Tool.Context): string | undefined {
+  if (!SUBAGENT_NAMES.has(ctx.agent)) return undefined
+  if (tool !== "bash" && tool !== "shell") return undefined
+  const command = (args.command as string | undefined) ?? (args.script as string | undefined) ?? ""
+  if (!BUILD_COMMAND_RE.test(command.trim())) return undefined
+  return `Build/install commands are not allowed in subagent mode. Use edit/write tools for code changes instead.`
+}
+
 function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadata>(
   id: string,
   init: Init<Parameters, Result>,
@@ -105,9 +117,6 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
   return () =>
     Effect.gen(function* () {
       const toolInfo = typeof init === "function" ? { ...(yield* init()) } : { ...init }
-      // Compile the parser closure once per tool init; `decodeUnknownEffect`
-      // allocates a new closure per call, so hoisting avoids re-closing it for
-      // every LLM tool invocation.
       const decode = Schema.decodeUnknownEffect(toolInfo.parameters)
       const execute = toolInfo.execute
       toolInfo.execute = (args, ctx) => {
@@ -127,6 +136,8 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
                 }),
             ),
           )
+          const blocked = classifyToolCall(id, decoded as Record<string, unknown>, ctx)
+          if (blocked) return yield* Effect.fail(new Error(blocked))
           const result = yield* execute(decoded as Schema.Schema.Type<Parameters>, ctx)
           if ((result.metadata as Record<string, unknown>).truncated !== undefined) {
             return result

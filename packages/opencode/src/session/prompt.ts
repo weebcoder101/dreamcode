@@ -129,18 +129,22 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-    const ops = Effect.fn("SessionPrompt.ops")(function* () {
+    const ops = Effect.fn("SessionPrompt.ops")(function* (opts?: { disableTaskTool?: boolean }) {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
+        disableTaskTool: opts?.disableTaskTool ?? false,
       } satisfies TaskPromptOps
     })
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
+      sensorGateFiredMap.delete(sessionID)
       yield* state.cancel(sessionID)
     })
+
+    const sensorGateFiredMap = new Map<SessionID, boolean>()
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
@@ -1151,6 +1155,7 @@ Before every response, verify your reasoning:
         let synthesisText: string | undefined
         let prevUserMessageID: string | undefined
         let titleGenerated = false
+        let sensorGateFired = sensorGateFiredMap.get(sessionID) ?? false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1395,6 +1400,8 @@ Before every response, verify your reasoning:
                   // Cap at 7 to prevent oversaturation and redundant work
                   if (gateResult.personas.length > 7) gateResult.personas = gateResult.personas.slice(0, 7)
                   if (gateResult.personas.length > 0) {
+                    sensorGateFired = true
+                    sensorGateFiredMap.set(sessionID, true)
                     const personaLines = [
                       "<persona-system>",
                       `You are the ARCHITECT. You have spawned ${gateResult.personas.length} specialist agent${gateResult.personas.length > 1 ? "s" : ""}:`,
@@ -1424,12 +1431,16 @@ Before every response, verify your reasoning:
                       }
                     }
                     personaLines.push("MANDATORY: Execute the full skill chain for your own analysis.")
+                    personaLines.push("")
+                    personaLines.push("SPECIALIST ANALYSIS STATUS: All specialists have completed their reports.")
+                    personaLines.push("Your job is to SYNTHESIZE these findings into a unified response.")
+                    personaLines.push("CRITICAL: The task tool is DISABLED. You CANNOT spawn subagents. Do NOT attempt.")
                     personaLines.push("</persona-system>")
                     system.push(personaLines.join("\n"))
 
                     // ─── ENFORCEMENT: Spawn persona subagents ────────────
                     const { task: taskTool } = yield* registry.named()
-                    const subtaskOps = yield* ops()
+                    const subtaskOps = yield* ops({ disableTaskTool: true })
                     const generalAgent = yield* agents.get("general")
                     if (generalAgent) {
                       const tracker = PersonaTracker.create(sessionID, gateResult.personas.length)
@@ -1538,41 +1549,42 @@ Before every response, verify your reasoning:
                                } as SessionV1.ToolPart)
                              }).pipe(Effect.catchCause((cause) => Effect.logWarning("markComplete failed", { cause })))
 
-                          yield* Effect.all([
-                            taskTool
-                              .execute(
-                                {
-                                  prompt: personaPrompt,
-                                  description: `persona:${persona.name}`,
-                                  subagent_type: "general",
-                                },
-                                {
-                                  agent: "general",
-                                  sessionID,
-                                  messageID: personaAssistantMsg.id,
-                                  messages: msgs,
-                                  abort: new AbortController().signal,
-                                  callID: (part as SessionV1.ToolPart).callID,
-                                  extra: { bypassAgentCheck: true, promptOps: subtaskOps },
-                                  metadata: (meta) => Effect.gen(function* () {
-                                    yield* sessions.updatePart({
-                                      ...part,
-                                      type: "tool",
-                                      state: {
-                                        ...part.state,
-                                        metadata: { ...(part.state as any).metadata, ...meta },
-                                      },
-                                    } as SessionV1.ToolPart)
-                                  }).pipe(Effect.catchCause((cause) => Effect.void)),
-                                  ask: () => Effect.succeed({ status: "allow" as const }),
-                                },
-                              )
-                              .pipe(
-                                Effect.tap((result) => markComplete("completed", result.output, result.metadata)),
-                                Effect.catchCause((cause) => markComplete("error", `persona died: ${Cause.pretty(cause)}`)),
-                                Effect.catchCause((cause) => Effect.logWarning("persona execution fatality", { cause })),
-                              ),
-                          ])
+                            yield* Effect.all([
+                              taskTool
+                                .execute(
+                                  {
+                                    prompt: personaPrompt,
+                                    description: `persona:${persona.name}`,
+                                    subagent_type: "general",
+                                  },
+                                  {
+                                    agent: "general",
+                                    sessionID,
+                                    messageID: personaAssistantMsg.id,
+                                    messages: msgs,
+                                    abort: new AbortController().signal,
+                                    callID: (part as SessionV1.ToolPart).callID,
+                                    extra: { bypassAgentCheck: true, promptOps: subtaskOps },
+                                    metadata: (meta) => Effect.gen(function* () {
+                                      yield* sessions.updatePart({
+                                        ...part,
+                                        type: "tool",
+                                        state: {
+                                          ...part.state,
+                                          metadata: { ...(part.state as any).metadata, ...meta },
+                                        },
+                                      } as SessionV1.ToolPart)
+                                    }).pipe(Effect.catchCause((cause) => Effect.void)),
+                                    ask: () => Effect.succeed({ status: "allow" as const }),
+                                  },
+                                )
+                                .pipe(
+                                  Effect.tap((result) => markComplete("completed", result.output, result.metadata)),
+                                  Effect.catchCause((cause) =>
+                                    markComplete("error", `persona died: ${Cause.pretty(cause)}`),
+                                  ),
+                                ),
+                            ])
                         }),
                         { concurrency: 5 },
                       )
@@ -1594,6 +1606,9 @@ Before every response, verify your reasoning:
             const extraMsgs = synthesisText
               ? [{ role: "user" as const, content: synthesisText }]
               : []
+            const finalTools = synthesisText || sensorGateFired
+              ? Object.fromEntries(Object.entries(tools).filter(([id]) => id !== TaskTool.id)) as typeof tools
+              : tools
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1602,7 +1617,7 @@ Before every response, verify your reasoning:
               parentSessionID: session.parentID,
               system,
               messages: [...modelMsgs, ...extraMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
-              tools,
+              tools: finalTools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })

@@ -434,9 +434,9 @@ function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | 
     }
   }
 
-  const result = tryRun(200_000)
+  const result = tryRun(150_000)
   if (result) return result
-  return tryRun(400_000)
+  return tryRun(300_000)
 }
 
 function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): string | null {
@@ -446,7 +446,11 @@ function runNeuroHarness(prompt: string, projectRoot: string, scanType: string):
   if (!fs.existsSync(neuroHarness)) return null
 
   const tryRun = (timeoutMs: number): string | null => {
-    const tmpDir = fs.mkdtempSync(path.join(projectRoot, ".dreamcode", "tmp", "neuro-"))
+    const tmpBase = process.env.XDG_RUNTIME_DIR
+      ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
+      : path.join(projectRoot, ".dreamcode", "tmp")
+    fs.mkdirSync(tmpBase, { recursive: true })
+    const tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
     fs.chmodSync(tmpDir, 0o700)
     const tmpFile = path.join(tmpDir, "prompt.txt")
     try {
@@ -479,9 +483,9 @@ function runNeuroHarness(prompt: string, projectRoot: string, scanType: string):
     }
   }
 
-  const result = tryRun(200_000)
+  const result = tryRun(150_000)
   if (result) return result
-  return tryRun(400_000)
+  return tryRun(300_000)
 }
 
 export interface Interface {

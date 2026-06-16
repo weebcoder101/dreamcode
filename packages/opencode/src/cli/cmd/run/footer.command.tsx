@@ -677,6 +677,10 @@ export function RunSubagentSelectBody(props: {
         paddingRight={PANEL_PAD}
         grouped={false}
         background
+        onSelect={(index) => {
+          const item = items()[index]
+          if (item) props.onSelect(item.sessionID)
+        }}
       />
     </PanelShell>
   )

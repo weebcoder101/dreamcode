@@ -10,7 +10,7 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Effect, Exit, Ref, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
@@ -20,9 +20,10 @@ import { Log } from "@/util"
 const log = Log.create({ service: "tool.task" })
 
 export interface TaskPromptOps {
-  cancel(sessionID: SessionID): Effect.Effect<void>
-  resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
-  prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts>
+  readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts>
+  readonly disableTaskTool?: boolean
 }
 
 const id = "task"
@@ -109,8 +110,18 @@ export const TaskTool = Tool.define(
     const activeSubagents = (parentID: SessionID): Effect.Effect<number> =>
       Effect.gen(function* () {
         const children = yield* sessions.children(parentID)
-        return children.length
+        const jobs = yield* background.list()
+        const runningIds = new Set<string>()
+        for (const job of jobs) {
+          if (job.status === "running" || job.status === "pending") runningIds.add(job.id)
+        }
+        return children.filter((c) => runningIds.has(c.id)).length
       })
+
+    const spawningBudget = yield* Ref.make(new Map<SessionID, number>())
+    const MAX_SPAWNS_PER_BURST = 3
+    const spawnFailures = yield* Ref.make(new Map<SessionID, number>())
+    const MAX_CONSECUTIVE_FAILURES = 3
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -190,6 +201,30 @@ export const TaskTool = Tool.define(
         })
         return yield* Effect.fail(
           new Error(`Too many active subagents (${currentSubagents}) for parent session. Max is ${maxConcurrent}.`),
+        )
+      }
+
+      const failureCount = yield* Ref.modify(spawnFailures, (map) => {
+        const count = (map.get(ctx.sessionID) ?? 0) + 1
+        map.set(ctx.sessionID, count)
+        return [count, map] as const
+      })
+      if (failureCount > MAX_CONSECUTIVE_FAILURES) {
+        yield* Ref.update(spawnFailures, (map) => { map.delete(ctx.sessionID); return map })
+        return yield* Effect.fail(
+          new Error(`Subagent spawning blocked (${MAX_CONSECUTIVE_FAILURES} consecutive failures).`),
+        )
+      }
+
+      const budgetAvailable = yield* Ref.modify(spawningBudget, (map) => {
+        const count = map.get(ctx.sessionID) ?? 0
+        if (count >= MAX_SPAWNS_PER_BURST) return [false, map] as const
+        map.set(ctx.sessionID, count + 1)
+        return [true, map] as const
+      })
+      if (!budgetAvailable) {
+        return yield* Effect.fail(
+          new Error(`Subagent spawning burst limit reached (${MAX_SPAWNS_PER_BURST}). Complete work directly or wait for the next user message.`),
         )
       }
 

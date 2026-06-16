@@ -32,6 +32,8 @@ const log = Log.create({ service: "actor.spawn" })
 export const MAX_PRE_REACT = 3
 /** Cap on postStop ReAct re-entries per spawn. See MAX_PRE_REACT TODO. */
 export const MAX_POST_REACT = 3
+/** Sub-agents that should never be interrupted (e.g. background tasks). */
+const neverAbort = new Set<string>()
 const RETURN_FORMAT_INSTRUCTION = `
 
 ---
@@ -618,6 +620,7 @@ export const layer = Layer.effect(
                   forkContexts.delete(input.actorID)
                   perPluginPreReactCounts.delete(input.actorID)
                   actorFibers.delete(input.actorID)
+                  neverAbort.delete(input.actorID)
                 })
                 yield* actorReg
                   .updateStatus(input.sessionID, input.actorID, { status: "idle", lastOutcome: "success" })
@@ -658,6 +661,7 @@ export const layer = Layer.effect(
                   forkContexts.delete(input.actorID)
                   perPluginPreReactCounts.delete(input.actorID)
                   actorFibers.delete(input.actorID)
+                  neverAbort.delete(input.actorID)
                 })
                 const outcomeStatus = cancelled ? "cancelled" : "failure"
                 yield* actorReg
@@ -773,6 +777,7 @@ export const layer = Layer.effect(
         gateEligible,
         format: input.format,
       })
+      if (input.background) neverAbort.add(actorID)
       if (!input.background) yield* Fiber.join(fiber).pipe(Effect.ignore)
       return { actorID, sessionID: input.sessionID, outcome }
     })
@@ -789,6 +794,7 @@ export const layer = Layer.effect(
           concurrency: "unbounded",
           discard: true,
         })
+        if (neverAbort.has(actorID)) return
         const fiber = actorFibers.get(actorID)
         if (fiber) {
           yield* Fiber.interrupt(fiber).pipe(Effect.ignore)

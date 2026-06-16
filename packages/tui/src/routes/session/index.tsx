@@ -1903,7 +1903,7 @@ function InlineTool(props: {
           setErrorExpanded((value) => !value)
           return
         }
-        props.onClick?.()
+        // No default navigation — onMouseDown handles it. onMouseUp is error-expand only.
       }}
     >
       {props.children}
@@ -1956,7 +1956,7 @@ export function InlineToolRow(props: {
     >
       <Switch>
         <Match when={props.spinner}>
-          <Spinner color={props.color} children={props.children} />
+          <Spinner color={props.color} children={props.children} onMouseDown={props.onMouseDown} />
         </Match>
         <Match when={true}>
           <Show
@@ -1964,6 +1964,7 @@ export function InlineToolRow(props: {
               <text
                 paddingLeft={3}
                 fg={props.color}
+                onMouseDown={props.onMouseDown}
                 attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}
               >
                 ~ {props.pending}
@@ -1979,6 +1980,7 @@ export function InlineToolRow(props: {
               <text
                 width={INLINE_TOOL_ICON_WIDTH}
                 fg={props.failed ? props.errorColor : (props.iconColor ?? props.color)}
+                onMouseDown={props.onMouseDown}
                 attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}
               >
                 {props.icon}
@@ -1986,6 +1988,7 @@ export function InlineToolRow(props: {
               <text
                 flexGrow={1}
                 fg={props.failed ? props.errorColor : props.color}
+                onMouseDown={props.onMouseDown}
                 attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}
               >
                 {props.failed && !props.complete ? (props.failure ?? props.children) : props.children}
@@ -1996,7 +1999,7 @@ export function InlineToolRow(props: {
       </Switch>
       <Show when={props.failed && props.errorExpanded}>
         <box paddingLeft={INLINE_TOOL_ICON_WIDTH}>
-          <text fg={props.errorColor}>{props.error}</text>
+          <text fg={props.errorColor} onMouseDown={props.onMouseDown}>{props.error}</text>
         </box>
       </Show>
     </box>
