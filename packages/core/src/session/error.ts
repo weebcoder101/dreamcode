@@ -18,3 +18,17 @@ export class ContextSnapshotDecodeError extends Schema.TaggedErrorClass<ContextS
     return `Failed to decode context snapshot for session ${this.sessionID}: ${this.details}`
   }
 }
+
+export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoundError>()(
+  "Session.SessionNotFoundError",
+  { sessionID: SessionSchema.ID },
+) {
+  override get message() {
+    return `Session not found: ${this.sessionID}`
+  }
+}
+
+export class PublishValidationError extends Schema.TaggedErrorClass<PublishValidationError>()(
+  "Session.PublishValidationError",
+  { message: Schema.String },
+) {}

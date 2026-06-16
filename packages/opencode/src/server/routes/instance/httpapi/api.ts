@@ -22,6 +22,11 @@ import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
 import { Api } from "@opencode-ai/server/api"
+// TODO: reconcile the two HTTP API implementations. Api (from @opencode-ai/server) and the
+// opencode-internal InstanceHttpApi expose overlapping routes with different prefixes,
+// error models, and authentication middleware. The goal is a single HttpApi under /api/v2/.
+// Tracking: https://github.com/opencode-ai/opencode/issues/api-reconciliation
+//
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
 import { GlobalApi } from "./groups/global"
 import { Authorization } from "./middleware/authorization"

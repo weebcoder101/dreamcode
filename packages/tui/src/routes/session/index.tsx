@@ -84,6 +84,17 @@ import { PathFormatterProvider, usePathFormatter } from "../../context/path-form
 
 addDefaultParsers(parsers.parsers)
 
+const writeExport = async (file: string, content: string) => {
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, content)
+}
+
+// TODO: split this 2672-line file into focused sub-modules:
+//   session-commands.ts  — 24 command definitions (lines 310-690)
+//   tool-renderers/*.tsx — Edit, ApplyPatch, Shell, Glob, Read, Grep, etc. (lines ~1572-2600)
+//   message-components.tsx — UserMessage, AssistantMessage (lines ~1361-1570)
+//   session/ directory — one file per tool group + focused index.tsx (~400 lines)
+
 const GO_UPSELL_FREE_TIER_LAST_SEEN_AT = "go_upsell_last_seen_at"
 const GO_UPSELL_FREE_TIER_DONT_SHOW = "go_upsell_dont_show"
 const GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT = "go_upsell_account_rate_limit_last_seen_at"
@@ -176,10 +187,6 @@ function use() {
 export function Session() {
   const setEpilogue = useEpilogue()
   const clipboard = useClipboard()
-  const writeExport = async (file: string, content: string) => {
-    await mkdir(path.dirname(file), { recursive: true })
-    await writeFile(file, content)
-  }
   const pluginRuntime = usePluginRuntime()
   const route = useRouteData("session")
   const { navigate } = useRoute()

@@ -47,6 +47,9 @@ __pycache__/
 .opencode/git_push.log
 .opencode/error_log.jsonl
 
+# Evolution tracking (workspace state, not source)
+evolution/
+
 # Local dev artifacts
 .ghostty-web-local/
 .new/

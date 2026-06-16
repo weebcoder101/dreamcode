@@ -141,10 +141,13 @@ export const layer = Layer.effect(
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
       sensorGateFiredMap.delete(sessionID)
+      personaRoundMap.delete(sessionID)
       yield* state.cancel(sessionID)
     })
 
     const sensorGateFiredMap = new Map<SessionID, boolean>()
+    const personaRoundMap = new Map<SessionID, number>()
+    const MAX_PERSONA_ROUNDS = 3
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
@@ -1397,11 +1400,13 @@ Before every response, verify your reasoning:
                   system.push(sensorBlock.join("\n"))
 
                   // ─── Persona System Injection ─────────────────────────
-                  // Cap at 7 to prevent oversaturation and redundant work
-                  if (gateResult.personas.length > 7) gateResult.personas = gateResult.personas.slice(0, 7)
+                  // Cap at 5 to prevent oversaturation and redundant work
+                  if (gateResult.personas.length > 5) gateResult.personas = gateResult.personas.slice(0, 5)
                   if (gateResult.personas.length > 0) {
                     sensorGateFired = true
                     sensorGateFiredMap.set(sessionID, true)
+                    const currentRound = personaRoundMap.get(sessionID) ?? 0
+                    personaRoundMap.set(sessionID, currentRound + 1)
                     const personaLines = [
                       "<persona-system>",
                       `You are the ARCHITECT. You have spawned ${gateResult.personas.length} specialist agent${gateResult.personas.length > 1 ? "s" : ""}:`,
@@ -1416,23 +1421,29 @@ Before every response, verify your reasoning:
                       }
                       personaLines.push("")
                     }
+                    personaLines.push(`This is ROUND ${currentRound + 1} of specialist analysis.`)
                     personaLines.push("Each specialist provides findings asynchronously.")
                     personaLines.push("Their results will arrive as user messages. Wait for them before acting.")
                     personaLines.push("")
-                    personaLines.push("SYNTHESIS & DECISION LOOP:")
-                    personaLines.push("1. When all specialist results arrive, review each finding")
-                    personaLines.push("2. Compare findings against the user's original request — are there gaps?")
-                    personaLines.push("3. If findings are COMPLETE and cover all requirements:")
-                    personaLines.push("   - Proceed with implementation directly (edit, write code, etc.)")
-                    personaLines.push("   - Do NOT spawn additional subagents")
-                    personaLines.push("4. If findings have GAPS — areas not fully covered:")
-                    personaLines.push("   - Spawn additional subagents targeting the specific missing areas")
-                    personaLines.push("   - Focus each new subagent on the uncovered requirement only")
-                    personaLines.push("5. After additional subagents return, re-check against requirements")
-                    personaLines.push("6. Repeat until all requirements are met, then implement")
-                    personaLines.push("")
-                    personaLines.push("KEY RULE: Only spawn when there are clear gaps. Once requirements are met,")
-                    personaLines.push("stop spawning and implement. The decision to stop is YOURS.")
+                    if (currentRound + 1 >= MAX_PERSONA_ROUNDS) {
+                      personaLines.push("CRITICAL: This is your FINAL round of specialist analysis.")
+                      personaLines.push("After these results arrive, you MUST implement directly.")
+                      personaLines.push("The task tool is DISABLED after this round. No more subagents.")
+                      personaLines.push("Focus all your effort on implementing the solution now.")
+                    } else {
+                      personaLines.push("EFFICIENCY RULE: You should complete analysis in ONE round if possible.")
+                      personaLines.push("Only spawn additional specialists if you find CRITICAL gaps in coverage.")
+                      personaLines.push("")
+                      personaLines.push("SYNTHESIS & DECISION LOOP:")
+                      personaLines.push("1. When all specialist results arrive, IMMEDIATELY synthesize findings")
+                      personaLines.push("2. Check: Do findings cover ALL aspects of the user's request?")
+                      personaLines.push("3. If YES (findings are complete): IMPLEMENT NOW. Do not spawn more specialists.")
+                      personaLines.push("4. If NO (critical gaps exist): Spawn ONLY the missing specialist(s)")
+                      personaLines.push("5. After any gap-filling round, you MUST implement. No further spawning.")
+                      personaLines.push("")
+                      personaLines.push("KEY: Each round of spawning costs time and money. Be efficient.")
+                      personaLines.push("Most tasks should complete in 1 round. Use round 2 only for critical gaps.")
+                    }
                     personaLines.push("</persona-system>")
                     system.push(personaLines.join("\n"))
 
@@ -1521,9 +1532,14 @@ Before every response, verify your reasoning:
                             userText.trim(),
                             "",
                             "## Output Requirements",
-                            "Provide your findings as a structured analysis.",
-                            "Focus ONLY on your area of expertise.",
-                            "Be specific, cite code locations, and provide actionable recommendations.",
+                            "Provide your findings as a STRUCTURED ANALYSIS with:",
+                            "1. **Summary**: One paragraph overview of your findings",
+                            "2. **Key Issues**: Bullet list of specific problems found (with file:line references)",
+                            "3. **Recommendations**: Actionable fixes with code snippets where possible",
+                            "4. **Confidence**: Rate your confidence (High/Medium/Low) for each finding",
+                            "",
+                            "Be CONCISE. Focus on ACTIONABLE items only.",
+                            "Do not repeat findings from other specialists.",
                             "Do not attempt to produce a final answer — produce a focused specialist report.",
                             "",
                             `## Synthesis Guide`,
@@ -1604,7 +1620,10 @@ Before every response, verify your reasoning:
             const extraMsgs = synthesisText
               ? [{ role: "user" as const, content: synthesisText }]
               : []
-            const finalTools = tools
+            const personaRound = personaRoundMap.get(sessionID) ?? 0
+            const finalTools = personaRound >= MAX_PERSONA_ROUNDS
+              ? Object.fromEntries(Object.entries(tools).filter(([id]) => id !== TaskTool.id)) as typeof tools
+              : tools
             const result = yield* handle.process({
               user: lastUser,
               agent,

@@ -2,12 +2,13 @@ import { Effect } from "effect"
 import { PluginV2 } from "../../plugin"
 import { ProviderV2 } from "../../provider"
 
-function selectLanguage(sdk: any, modelID: string, useChat: boolean) {
-  if (useChat && sdk.chat) return sdk.chat(modelID)
-  if (sdk.responses) return sdk.responses(modelID)
-  if (sdk.messages) return sdk.messages(modelID)
-  if (sdk.chat) return sdk.chat(modelID)
-  return sdk.languageModel(modelID)
+function selectLanguage(sdk: Record<string, unknown>, modelID: string, useChat: boolean) {
+  if (useChat && typeof sdk.chat === "function") return sdk.chat(modelID)
+  if (typeof sdk.responses === "function") return sdk.responses(modelID)
+  if (typeof sdk.messages === "function") return sdk.messages(modelID)
+  if (typeof sdk.chat === "function") return sdk.chat(modelID)
+  if (typeof sdk.languageModel === "function") return sdk.languageModel(modelID)
+  throw new Error("No suitable language model method found on Azure SDK")
 }
 
 export const AzurePlugin = PluginV2.define({

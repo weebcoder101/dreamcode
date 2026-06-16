@@ -15,7 +15,11 @@ export const load = (dir: string) =>
       const config = new Config({
         npmPath,
         cwd: dir,
-        env: { ...process.env },
+        env: Object.fromEntries(
+          ["HOME", "PATH", "USER", "npm_config_registry", "npm_config_cache", "TMPDIR", "XDG_CACHE_HOME"]
+            .map(k => [k, process.env[k]])
+            .filter(([_, v]) => v !== undefined),
+        ),
         argv: [process.execPath, process.execPath],
         execPath: process.execPath,
         platform: process.platform,

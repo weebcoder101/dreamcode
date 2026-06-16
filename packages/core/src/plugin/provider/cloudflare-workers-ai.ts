@@ -31,7 +31,7 @@ export const CloudflareWorkersAIPlugin = PluginV2.define({
           sdkOptions({
             ...evt.options,
             baseURL: evt.options.baseURL ?? (accountId ? workersEndpoint(accountId) : undefined),
-          }) as any,
+          }),
         )
       }),
       "aisdk.language": Effect.fn(function* (evt) {
@@ -54,7 +54,7 @@ function hasWorkersEndpoint(api: ProviderV2.Api) {
   return api.type === "aisdk" && Boolean(api.url)
 }
 
-function sdkOptions(options: Record<string, any>) {
+function sdkOptions(options: Record<string, unknown>) {
   return {
     ...options,
     baseURL: expandAccountId(options.baseURL),

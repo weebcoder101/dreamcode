@@ -29,6 +29,7 @@ import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
+import { SessionNotFoundError } from "../error"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -105,7 +106,7 @@ export const layer = Layer.effect(
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
-      if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
+      if (!session) return yield* new SessionNotFoundError({ sessionID })
       return session
     })
 
@@ -148,6 +149,7 @@ export const layer = Layer.effect(
       | { readonly _tag: "ContinueAfterOverflowCompaction" }
 
     class TurnTransitionError extends Error {
+      readonly _tag = "TurnTransitionError"
       constructor(readonly transition: TurnTransition) {
         super()
       }
@@ -159,9 +161,12 @@ export const layer = Layer.effect(
       _tag: "ContinueAfterOverflowCompaction",
     })
 
+    // TODO: TurnTransitionError uses Effect.die for internal control flow.
+    // This defeats Effect-TS error tracking. Convert to Effect.fail with proper tagged errors
+    // when the retryAgentMismatch pattern is refactored to use Effect.catchTag instead of Effect.catchDefect.
     const retryAgentMismatch = (promotion: SessionInput.Delivery | undefined) =>
       Effect.catchDefect((defect) =>
-        defect instanceof SessionContextEpoch.AgentMismatch
+        defect instanceof SessionContextEpoch.AgentReplacementBlocked
           ? Effect.die(rebuildPreparedTurn(promotion))
           : Effect.die(defect),
       )
@@ -348,7 +353,7 @@ export const layer = Layer.effect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
+              return yield* Effect.die(new Error("Post-compaction provider attempt cannot recover another overflow"))
             yield* Effect.yieldNow
             return yield* runAfterOverflowCompaction(sessionID, defect.transition.promotion)
           }),

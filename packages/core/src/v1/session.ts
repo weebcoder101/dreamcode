@@ -1,3 +1,7 @@
+/**
+ * @deprecated V1 session schema. Will be removed in a future major version.
+ * Migrate to V2 session schema from `@opencode-ai/core/session/schema`.
+ */
 export * as SessionV1 from "./session"
 
 import { Effect, Schema, Types } from "effect"

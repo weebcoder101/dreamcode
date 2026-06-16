@@ -28,23 +28,29 @@ export class Admitted extends Schema.Class<Admitted>("SessionInput.Admitted")({
   promotedSeq: NonNegativeInt.pipe(Schema.optional),
 }) {}
 
-const decodePrompt = Schema.decodeUnknownSync(Prompt)
+const decodePrompt = Schema.decodeUnknownEffect(Prompt)
 const encodePrompt = Schema.encodeSync(Prompt)
 
-const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
+const buildFromRow = (row: typeof SessionInputTable.$inferSelect, prompt: Prompt): Admitted =>
   new Admitted({
     admittedSeq: row.admitted_seq,
     id: SessionMessage.ID.make(row.id),
     sessionID: SessionSchema.ID.make(row.session_id),
-    prompt: decodePrompt(row.prompt),
+    prompt,
     delivery: row.delivery,
     timeCreated: DateTime.makeUnsafe(row.time_created),
     ...(row.promoted_seq === null ? {} : { promotedSeq: row.promoted_seq }),
   })
 
+const fromRow = (row: typeof SessionInputTable.$inferSelect): Effect.Effect<Admitted> =>
+  decodePrompt(row.prompt).pipe(
+    Effect.map((prompt: Prompt) => buildFromRow(row, prompt)),
+    Effect.orDie,
+  )
+
 export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
   const row = yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie)
-  return row === undefined ? undefined : fromRow(row)
+  return row === undefined ? undefined : (yield* fromRow(row))
 })
 
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
@@ -75,7 +81,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     .pipe(
       Effect.flatMap((event) =>
         event.seq === undefined
-          ? Effect.die("Prompt admission event is missing aggregate sequence")
+          ? Effect.die(new Error("Prompt admission event is missing aggregate sequence"))
           : Effect.succeed(
               new Admitted({
                 admittedSeq: event.seq,
@@ -165,7 +171,7 @@ export const projectPromoted = Effect.fn("SessionInput.projectPromoted")(functio
     .get()
     .pipe(Effect.orDie)
   if (!updated) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
-  const stored = fromRow(updated)
+  const stored = yield* fromRow(updated)
   if (
     !matchesPrompt(stored, input) ||
     DateTime.toEpochMillis(stored.timeCreated) !== DateTime.toEpochMillis(input.timeCreated)
@@ -265,8 +271,8 @@ export const projectLegacyPrompted = Effect.fn("SessionInput.projectLegacyPrompt
     .returning()
     .get()
     .pipe(Effect.orDie)
-  if (!inserted) return yield* Effect.die("Prompt projection conflicts with admitted input")
-  return fromRow(inserted)
+  if (!inserted) return yield* Effect.die(new Error("Prompt projection conflicts with admitted input"))
+  return yield* fromRow(inserted)
 })
 
 const publish = Effect.fn("SessionInput.publish")(function* (
@@ -276,12 +282,13 @@ const publish = Effect.fn("SessionInput.publish")(function* (
   rows: ReadonlyArray<typeof SessionInputTable.$inferSelect>,
 ) {
   for (const row of rows) {
+    const prompt = yield* decodePrompt(row.prompt).pipe(Effect.orDie)
     yield* events
       .publish(SessionEvent.PromptLifecycle.Promoted, {
         sessionID,
         timestamp: yield* DateTime.now,
         messageID: SessionMessage.ID.make(row.id),
-        prompt: decodePrompt(row.prompt),
+        prompt,
         timeCreated: DateTime.makeUnsafe(row.time_created),
       })
       .pipe(

@@ -79,7 +79,7 @@ export const SnowflakeCortexPlugin = PluginV2.define({
           ...evt.options,
           ...(pat ? { apiKey: pat } : {}),
           fetch: cortexFetch(upstream) as typeof fetch,
-        } as any)
+        })
       }),
     }
   }),

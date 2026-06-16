@@ -9,7 +9,8 @@
     "db": "bun drizzle-kit",
     "migration": "bun run script/migration.ts",
     "fix-node-pty": "bun run script/fix-node-pty.ts",
-    "test": "bun test --only-failures",
+    "test": "bun test",
+    "test:failures": "bun test --only-failures",
     "typecheck": "tsgo --noEmit"
   },
   "bin": {
@@ -17,10 +18,12 @@
   },
   "exports": {
     "./public": "./src/public/index.ts",
+    "./internal": "./src/internal/index.ts",
     "./session/runner": "./src/session/runner/index.ts",
     "./system-context": "./src/system-context/index.ts",
     "./*": "./src/*.ts"
   },
+  "_internalExports": "The ./* wildcard exposes all src/ files as public API. Migrate consumers to @opencode-ai/core/public or @opencode-ai/core/internal. The wildcard will be removed in a future major version.",
   "imports": {
     "#sqlite": {
       "bun": "./src/database/sqlite.bun.ts",

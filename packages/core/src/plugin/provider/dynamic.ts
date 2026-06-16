@@ -1,30 +1,53 @@
 import { Npm } from "../../npm"
-import { Effect, Option } from "effect"
+import { Effect, Option, Config } from "effect"
 import { pathToFileURL } from "url"
 import { PluginV2 } from "../../plugin"
+
+const ALLOWED_PACKAGES_DEFAULT = ["@ai-sdk/openai", "@ai-sdk/anthropic", "@ai-sdk/google", "@ai-sdk/mistral", "@ai-sdk/deepseek", "@ai-sdk/togetherai", "@ai-sdk/groq"]
+
+type ProviderFactory = (options: Record<string, unknown>) => unknown
+
+const isProviderFactory = (value: unknown): value is ProviderFactory =>
+  typeof value === "function"
 
 export const DynamicProviderPlugin = PluginV2.define({
   id: PluginV2.ID.make("dynamic-provider"),
   effect: Effect.gen(function* () {
     const npm = yield* Npm.Service
+    const allowedPackages = yield* Config.string("AI_SDK_ALLOWED_PACKAGES").pipe(
+      Config.map((s) => s.split(",").map((p) => p.trim()).filter(Boolean)),
+      Config.withDefault(ALLOWED_PACKAGES_DEFAULT),
+    )
+    const allowed = new Set(allowedPackages)
     return {
       "aisdk.sdk": Effect.fn(function* (evt) {
         if (evt.sdk) return
 
-        const installedPath = evt.package.startsWith("file://")
-          ? evt.package
-          : Option.getOrUndefined((yield* npm.add(evt.package).pipe(Effect.orDie)).entrypoint)
-        if (!installedPath) throw new Error(`Package ${evt.package} has no import entrypoint`)
+        const packageName = evt.package
 
-        const mod = yield* Effect.promise(async () => {
+        if (!allowed.has(packageName)) {
+          return yield* Effect.fail(new Error(`Package ${packageName} is not in AI_SDK_ALLOWED_PACKAGES allowlist`))
+        }
+
+        const installedPath = packageName.startsWith("file://")
+          ? packageName
+          : Option.getOrUndefined((yield* npm.add(packageName).pipe(
+            Effect.catchAll((e) => Effect.fail(new Error(`Failed to install ${packageName}: ${e}`))),
+          )).entrypoint)
+        if (!installedPath) return yield* Effect.fail(new Error(`Package ${packageName} has no import entrypoint`))
+
+        const mod: Record<string, unknown> = yield* Effect.promise(async () => {
           return (await import(
             installedPath.startsWith("file://") ? installedPath : pathToFileURL(installedPath).href
-          )) as Record<string, (options: any) => any>
-        }).pipe(Effect.orDie)
+          )) as Record<string, unknown>
+        }).pipe(Effect.catchAll((e) => Effect.fail(new Error(`Failed to import ${packageName}: ${e}`))))
         const match = Object.keys(mod).find((name) => name.startsWith("create"))
-        if (!match) throw new Error(`Package ${evt.package} has no provider factory export`)
+        if (!match) return yield* Effect.fail(new Error(`Package ${packageName} has no provider factory export`))
 
-        evt.sdk = mod[match](evt.options)
+        const factory = mod[match]
+        if (!isProviderFactory(factory)) return yield* Effect.fail(new Error(`Export ${match} from ${packageName} is not a function`))
+
+        evt.sdk = factory(evt.options ?? {})
       }),
     }
   }),

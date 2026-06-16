@@ -1,2 +1,6 @@
 sst-env.d.ts
 packages/desktop/src/bindings.ts
+dist/
+evolution/
+.dreamcode/
+*.gen.ts

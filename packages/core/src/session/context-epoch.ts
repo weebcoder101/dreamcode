@@ -28,7 +28,7 @@ const retryRevisionMismatch = <A, E>(attempt: () => Effect.Effect<A, E>): Effect
   attempt().pipe(
     Effect.catchDefect((defect) =>
       defect instanceof RevisionMismatch
-        ? Effect.yieldNow.pipe(Effect.andThen(retryRevisionMismatch(attempt)))
+        ? Effect.yieldNow.pipe(Effect.andThen(() => retryRevisionMismatch(attempt)))
         : Effect.die(defect),
     ),
   )
@@ -212,7 +212,8 @@ const insert = Effect.fnUntraced(function* (
             .get()
             .pipe(Effect.orDie)
           if (!placed) return yield* Effect.die(new LocationMismatch())
-          if (placed.agent !== null && placed.agent !== agent) return yield* Effect.die(new AgentMismatch())
+          if (placed.agent !== null && placed.agent !== agent)
+            return yield* Effect.die(new AgentMismatch())
           const baselineSeq = yield* SessionInput.latestSeq(db, sessionID)
           yield* db
             .insert(SessionContextEpochTable)
@@ -290,7 +291,8 @@ const fence = Effect.fnUntraced(function* (
     .where(eq(SessionContextEpochTable.session_id, sessionID))
     .get()
     .pipe(Effect.orDie)
-  if (!current || (current.selected !== null && current.selected !== agent))
+  if (!current) return
+  if (current.selected !== null && current.selected !== agent)
     return yield* Effect.die(new AgentMismatch())
   if (current.revision !== expectedRevision) return yield* Effect.die(new RevisionMismatch())
 })

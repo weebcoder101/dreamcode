@@ -53,12 +53,11 @@ export const fromPromise = <T>(fn: () => Promise<T> | T): Effect.Effect<T> =>
 
 export function make(): Effect.Effect<Shape> {
   return Effect.gen(function* () {
-    const ctx = yield* Effect.context()
     const captured = captureSync()
     const instance = (yield* InstanceRef) ?? captured.instance
     const workspace = (yield* WorkspaceRef) ?? captured.workspace
     const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      attachWith(effect.pipe(Effect.provide(ctx)) as Effect.Effect<A, E, never>, { instance, workspace })
+      attachWith(effect as Effect.Effect<A, E, never>, { instance, workspace })
 
     return {
       promise: <A, E, R>(effect: Effect.Effect<A, E, R>) =>

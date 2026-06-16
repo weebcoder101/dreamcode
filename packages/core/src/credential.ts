@@ -41,6 +41,11 @@ export class Stored extends Schema.Class<Stored>("Credential.Stored")({
   value: Info,
 }) {}
 
+class CredentialDecodeError extends Schema.TaggedErrorClass<CredentialDecodeError>()(
+  "CredentialDecodeError",
+  { message: Schema.String },
+) {}
+
 export interface Interface {
   /** Returns every stored credential. */
   readonly all: () => Effect.Effect<Stored[]>
@@ -64,40 +69,51 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    const decode = Schema.decodeUnknownSync(Info)
-    const stored = (row: typeof CredentialTable.$inferSelect) => {
-      if (!row.integration_id) return
-      return new Stored({
-        id: row.id,
-        integrationID: row.integration_id,
-        label: row.label,
-        value: decode(row.value),
-      })
+    const decodeValue = Schema.decodeUnknownEffect(Info)
+    const stored = (row: typeof CredentialTable.$inferSelect): Effect.Effect<Stored | undefined> => {
+      if (row.integration_id == null) return Effect.succeed(undefined)
+      return decodeValue(row.value).pipe(
+        Effect.map((value) =>
+          new Stored({
+            id: row.id,
+            integrationID: row.integration_id as IntegrationSchema.ID,
+            label: row.label,
+            value,
+          }),
+        ),
+        Effect.orDie,
+      )
     }
 
     return Service.of({
       all: Effect.fn("Credential.all")(function* () {
-        return (yield* db
+        const rows = yield* db
           .select()
           .from(CredentialTable)
           .orderBy(asc(CredentialTable.time_created))
           .all()
-          .pipe(Effect.orDie)).flatMap((row) => {
-          const credential = stored(row)
-          return credential ? [credential] : []
-        })
+          .pipe(Effect.orDie)
+        const credentials: Stored[] = []
+        for (const row of rows) {
+          const credential = yield* stored(row)
+          if (credential) credentials.push(credential)
+        }
+        return credentials
       }),
       list: Effect.fn("Credential.list")(function* (integrationID) {
-        return (yield* db
+        const rows = yield* db
           .select()
           .from(CredentialTable)
           .where(eq(CredentialTable.integration_id, integrationID))
           .orderBy(asc(CredentialTable.time_created))
           .all()
-          .pipe(Effect.orDie)).flatMap((row) => {
-          const credential = stored(row)
-          return credential ? [credential] : []
-        })
+          .pipe(Effect.orDie)
+        const credentials: Stored[] = []
+        for (const row of rows) {
+          const credential = yield* stored(row)
+          if (credential) credentials.push(credential)
+        }
+        return credentials
       }),
       create: Effect.fn("Credential.create")(function* (input) {
         const credential = new Stored({
