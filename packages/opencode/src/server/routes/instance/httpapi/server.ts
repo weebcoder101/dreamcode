@@ -199,16 +199,18 @@ type RouteRequirements =
 
 export function createRoutes(
   corsOptions?: CorsOptions,
+  options?: { serveUI?: boolean },
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  return Layer.mergeAll(
+  const merged = [
     rootApiRoutes,
     eventApiRoutes,
     ptyConnectApiRoutes,
     instanceRoutes,
     serverRoutes,
     docRoute,
-    uiRoute,
-  ).pipe(
+  ]
+  if (options?.serveUI !== false) merged.push(uiRoute)
+  return Layer.mergeAll(...merged).pipe(
     Layer.provide([
       errorLayer,
       compressionLayer,
@@ -271,7 +273,10 @@ export function createRoutes(
   )
 }
 
-export const routes = createRoutes()
+// In-process server (dreamcode run) should not serve the web UI — the
+// catch-all /* route would intercept API routes and proxy to the upstream,
+// which fails when running locally without a real HTTP listener.
+export const routes = createRoutes(undefined, { serveUI: false })
 
 // Each webHandler gets a fresh MemoMap so layer builds are not polluted by
 // stale entries from AppRuntime's shared memoMap.  This matches the `serve`

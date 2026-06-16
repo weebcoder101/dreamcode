@@ -70,6 +70,7 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
           : typeof failReason.error === "object" && failReason.error !== null && "message" in failReason.error
             ? String((failReason.error as { message: unknown }).message)
             : "Unknown error"
+        console.log("[errorLayer] caught fail:", { ref, _tag: (failReason.error as any)?._tag, message, reason: Cause.pretty(cause) })
         return Effect.logError("failed", { ref, error: failReason.error, cause: Cause.pretty(cause) }).pipe(
           Effect.as(
             HttpServerResponse.jsonUnsafe(
@@ -80,6 +81,8 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
         )
       }
 
+      // Log if we reach here (error escaped all middleware)
+      console.log("[errorLayer] NO fail reason found, falling through. causes:", Cause.pretty(cause))
       return Effect.failCause(cause)
     }),
   ),
