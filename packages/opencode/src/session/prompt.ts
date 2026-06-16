@@ -1417,24 +1417,22 @@ Before every response, verify your reasoning:
                       personaLines.push("")
                     }
                     personaLines.push("Each specialist provides findings asynchronously.")
-                    personaLines.push("Continue your own analysis while waiting.")
-                    personaLines.push("When all results arrive, synthesize into a unified response.")
+                    personaLines.push("Their results will arrive as user messages. Wait for them before acting.")
                     personaLines.push("")
-                    personaLines.push("SYNTHESIS INSTRUCTIONS:")
-                    personaLines.push("1. Each specialist produces a focused report in their domain")
-                    personaLines.push("2. Review all findings for common themes and disagreements")
-                    personaLines.push("3. Prioritize by severity, confidence, and relevance")
-                    personaLines.push("4. Produce a unified, actionable response")
-                    for (const p of gateResult.personas) {
-                      if (p.synthesisGuide) {
-                        personaLines.push(`5. ${p.synthesisGuide}`)
-                      }
-                    }
-                    personaLines.push("MANDATORY: Execute the full skill chain for your own analysis.")
+                    personaLines.push("SYNTHESIS & DECISION LOOP:")
+                    personaLines.push("1. When all specialist results arrive, review each finding")
+                    personaLines.push("2. Compare findings against the user's original request — are there gaps?")
+                    personaLines.push("3. If findings are COMPLETE and cover all requirements:")
+                    personaLines.push("   - Proceed with implementation directly (edit, write code, etc.)")
+                    personaLines.push("   - Do NOT spawn additional subagents")
+                    personaLines.push("4. If findings have GAPS — areas not fully covered:")
+                    personaLines.push("   - Spawn additional subagents targeting the specific missing areas")
+                    personaLines.push("   - Focus each new subagent on the uncovered requirement only")
+                    personaLines.push("5. After additional subagents return, re-check against requirements")
+                    personaLines.push("6. Repeat until all requirements are met, then implement")
                     personaLines.push("")
-                    personaLines.push("SPECIALIST ANALYSIS STATUS: All specialists have completed their reports.")
-                    personaLines.push("Your job is to SYNTHESIZE these findings into a unified response.")
-                    personaLines.push("CRITICAL: The task tool is DISABLED. You CANNOT spawn subagents. Do NOT attempt.")
+                    personaLines.push("KEY RULE: Only spawn when there are clear gaps. Once requirements are met,")
+                    personaLines.push("stop spawning and implement. The decision to stop is YOURS.")
                     personaLines.push("</persona-system>")
                     system.push(personaLines.join("\n"))
 
@@ -1606,9 +1604,7 @@ Before every response, verify your reasoning:
             const extraMsgs = synthesisText
               ? [{ role: "user" as const, content: synthesisText }]
               : []
-            const finalTools = synthesisText || sensorGateFired
-              ? Object.fromEntries(Object.entries(tools).filter(([id]) => id !== TaskTool.id)) as typeof tools
-              : tools
+            const finalTools = tools
             const result = yield* handle.process({
               user: lastUser,
               agent,
