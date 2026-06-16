@@ -59,8 +59,8 @@ def main():
 
     api_key = os.environ.get("NEURO_API_KEY")
     if not api_key:
-        print("ERROR: NEURO_API_KEY environment variable missing.")
-        sys.exit(20)
+        print(json.dumps({"status": "skipped", "reason": "NEURO_API_KEY not set"}))
+        sys.exit(0)
 
     api_url = os.environ.get("NEURO_API_BASE_URL", "https://api.neurometric.ai/v1")
 
@@ -93,8 +93,8 @@ def main():
     context["automation"] = context.get("automation", args.task or "manual")
 
     if not files:
-        print("ERROR: No files provided. Use --file or --file-content.")
-        sys.exit(1)
+        print(json.dumps({"status": "skipped", "reason": "No files provided"}))
+        sys.exit(0)
 
     # Build prompt using built-in prompts
     SYSTEM_PROMPTS = {
