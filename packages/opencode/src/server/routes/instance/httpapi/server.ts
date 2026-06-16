@@ -1,4 +1,4 @@
-import { Config as EffectConfig, Context, Effect, Layer } from "effect"
+import { Config as EffectConfig, ConfigProvider, Context, Effect, Layer } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import {
   FetchHttpClient,
@@ -276,7 +276,12 @@ export function createRoutes(
 // In-process server (dreamcode run) should not serve the web UI — the
 // catch-all /* route would intercept API routes and proxy to the upstream,
 // which fails when running locally without a real HTTP listener.
-export const routes = createRoutes(undefined, { serveUI: false })
+// Provide a live ConfigProvider so Config.string(...) reads from process.env
+// instead of the module-level cached snapshot.  This matches what
+// listenerLayer (server.ts:113) does via Layer.provide.
+export const routes = createRoutes(undefined, { serveUI: false }).pipe(
+  Layer.provideMerge(ConfigProvider.layer(ConfigProvider.fromEnv())),
+)
 
 // Each webHandler gets a fresh MemoMap so layer builds are not polluted by
 // stale entries from AppRuntime's shared memoMap.  This matches the `serve`

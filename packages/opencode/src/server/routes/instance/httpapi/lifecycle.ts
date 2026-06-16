@@ -1,8 +1,9 @@
 import { EffectBridge } from "@/effect/bridge"
 import type { InstanceContext } from "@/project/instance-context"
 import { InstanceStore } from "@/project/instance-store"
-import { Effect } from "effect"
-import { HttpEffect, HttpMiddleware, HttpServerRequest } from "effect/unstable/http"
+import { NamedError } from "@opencode-ai/core/util/error"
+import { Cause, Effect } from "effect"
+import { HttpEffect, HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 
 type MarkedInstance = {
   ctx: InstanceContext
@@ -51,4 +52,21 @@ export const disposeMiddleware: HttpMiddleware.HttpMiddleware = (effect) =>
       Effect.catchCause((cause) => Effect.logWarning("instance disposal failed", { cause })),
     )
     return response
-  })
+  }).pipe(
+    Effect.catchCause((cause) => {
+      const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+      const message = (() => {
+        const failures = cause.reasons.filter(Cause.isFailReason)
+        if (failures.length > 0) {
+          return String(failures.map((r) => (r.error instanceof Error ? r.error.message : r.error)).join("; "))
+        }
+        const defects = cause.reasons.filter(Cause.isDieReason)
+        if (defects.length > 0) {
+          return String(defects.map((r) => (r.defect instanceof Error ? r.defect.message : String(r.defect))).join("; "))
+        }
+        return "Unexpected server error"
+      })()
+      const body = JSON.stringify({ error: message.slice(0, 500), ref })
+      return Effect.succeed(HttpServerResponse.text(body, { status: 500 }))
+    }),
+  )
