@@ -8,6 +8,12 @@ When NOT to use the Task tool:
 - If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Task tool, to find the match more quickly
 - If no available agent is a good fit for the task, use other tools directly
 
+DECISION CHECK — BEFORE SPAWNING you MUST answer these questions:
+1. Is this task complex enough that it genuinely needs a separate agent?
+2. Can you do it yourself with the tools you already have (Read, Grep, Glob, bash)?
+3. Have you already started working on it? If so, finish it yourself.
+4. Does the user need the subagent's result to continue, or can you defer?
+Only spawn if you answered "yes" to #1, "no" to #2-3, and the result is needed now.
 
 Usage notes:
 1. Launch multiple agents concurrently for independent research or exploration tasks, to maximize performance; to do that, use a single message with multiple tool uses

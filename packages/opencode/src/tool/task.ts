@@ -115,13 +115,13 @@ export const TaskTool = Tool.define(
         for (const job of jobs) {
           if (job.status === "running" || job.status === "pending") runningIds.add(job.id)
         }
-        return children.filter((c) => runningIds.has(c.id)).length
+        const foregroundActive = yield* Ref.get(activeSubagentSessions)
+        return children.filter((c) => runningIds.has(c.id) || foregroundActive.has(c.id)).length
       })
 
-    const spawningBudget = yield* Ref.make(new Map<SessionID, number>())
+    const activeSubagentSessions = yield* Ref.make(new Set<SessionID>())
+    const spawningBudget = yield* Ref.make(new Map<SessionID, { count: number; time: number }>())
     const MAX_SPAWNS_PER_BURST = 3
-    const spawnFailures = yield* Ref.make(new Map<SessionID, number>())
-    const MAX_CONSECUTIVE_FAILURES = 3
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -204,27 +204,21 @@ export const TaskTool = Tool.define(
         )
       }
 
-      const failureCount = yield* Ref.modify(spawnFailures, (map) => {
-        const count = (map.get(ctx.sessionID) ?? 0) + 1
-        map.set(ctx.sessionID, count)
-        return [count, map] as const
-      })
-      if (failureCount > MAX_CONSECUTIVE_FAILURES) {
-        yield* Ref.update(spawnFailures, (map) => { map.delete(ctx.sessionID); return map })
-        return yield* Effect.fail(
-          new Error(`Subagent spawning blocked (${MAX_CONSECUTIVE_FAILURES} consecutive failures).`),
-        )
-      }
-
       const budgetAvailable = yield* Ref.modify(spawningBudget, (map) => {
-        const count = map.get(ctx.sessionID) ?? 0
-        if (count >= MAX_SPAWNS_PER_BURST) return [false, map] as const
-        map.set(ctx.sessionID, count + 1)
+        const now = Date.now()
+        const entry = map.get(ctx.sessionID)
+        const burstWindow = 30_000 // 30s window
+        if (entry && (now - entry.time) < burstWindow) {
+          if (entry.count >= MAX_SPAWNS_PER_BURST) return [false, map] as const
+          map.set(ctx.sessionID, { count: entry.count + 1, time: now })
+          return [true, map] as const
+        }
+        map.set(ctx.sessionID, { count: 1, time: now })
         return [true, map] as const
       })
       if (!budgetAvailable) {
         return yield* Effect.fail(
-          new Error(`Subagent spawning burst limit reached (${MAX_SPAWNS_PER_BURST}). Complete work directly or wait for the next user message.`),
+          new Error(`Subagent spawning burst limit reached (${MAX_SPAWNS_PER_BURST} in 30s).`),
         )
       }
 
@@ -278,6 +272,8 @@ export const TaskTool = Tool.define(
         modelID: msg.info.modelID,
         providerID: msg.info.providerID,
       }
+
+      yield* Ref.update(activeSubagentSessions, (set) => { set.add(nextSession.id); return set })
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
@@ -386,7 +382,12 @@ export const TaskTool = Tool.define(
           }),
           notify(nextSession.id),
         ]),
-        run: runTask().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id))),
+        run: runTask().pipe(
+          Effect.onInterrupt(() => ops.cancel(nextSession.id)),
+          Effect.ensuring(
+            Ref.update(activeSubagentSessions, (set) => { set.delete(nextSession.id); return set }),
+          ),
+        ),
       })
 
       function backgroundResult() {
@@ -439,15 +440,11 @@ export const TaskTool = Tool.define(
           }),
         (_, exit) =>
           Effect.gen(function* () {
+            yield* Effect.sync(() => ctx.abort.removeEventListener("abort", onAbort))
+            yield* Ref.update(activeSubagentSessions, (set) => { set.delete(nextSession.id); return set })
             if (Exit.hasInterrupts(exit))
-              yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                ctx.abort.removeEventListener("abort", onAbort)
-              }),
-            ),
-          ),
+              yield* background.cancel(nextSession.id).pipe(Effect.ignore)
+          }),
       )
     })
 
