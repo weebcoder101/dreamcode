@@ -5,8 +5,10 @@ import { Cause, Effect } from "effect"
 import { PlatformError } from "effect/PlatformError"
 import { HttpRouter, HttpServerError, HttpServerRespondable, HttpServerResponse } from "effect/unstable/http"
 
-// Keep typed HttpApi failures on their declared error path; this boundary only replaces defect-only empty 500s
-// and catches typed FAIL errors that aren't Respondable (which would otherwise produce empty-body 500s).
+// Keep typed HttpApi failures on their declared error path; this boundary replaces
+// defect-only empty 500s and catches typed FAIL errors whose schema types are
+// Respondable but undeclared on the endpoint (which would otherwise produce
+// empty-body 500s).
 export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect) =>
   effect.pipe(
     Effect.catchCause((cause) => {
@@ -57,10 +59,11 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
         )
       }
 
-      // Catch typed FAIL errors that aren't Respondable — without this they
-      // produce empty-body 500s from the Effect HTTP framework.
+      // Catch typed FAIL errors. The framework produces empty-body 500s for
+      // fail errors that are Respondable-by-type but undeclared on the
+      // endpoint schema, so we always catch instead of trusting isRespondable.
       const failReason = cause.reasons.find(Cause.isFailReason)
-      if (failReason && !HttpServerRespondable.isRespondable(failReason.error)) {
+      if (failReason) {
         const ref = `err_${crypto.randomUUID().slice(0, 8)}`
         const message = failReason.error instanceof Error
           ? failReason.error.message

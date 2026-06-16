@@ -96,7 +96,7 @@ import { workspaceHandlers } from "./handlers/workspace"
 import { instanceContextLayer } from "./middleware/instance-context"
 import { workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
-import { memoMap } from "@opencode-ai/core/effect/memo-map"
+
 import { compressionLayer } from "./middleware/compression"
 import { corsVaryFix } from "./middleware/cors-vary"
 import { securityHeaders } from "./middleware/security-headers"
@@ -273,10 +273,13 @@ export function createRoutes(
 
 export const routes = createRoutes()
 
+// Each webHandler gets a fresh MemoMap so layer builds are not polluted by
+// stale entries from AppRuntime's shared memoMap.  This matches the `serve`
+// command which creates `Layer.makeMemoMapUnsafe()` per listener.
 export const webHandler = lazy(() =>
   HttpRouter.toWebHandler(routes, {
     disableLogger: true,
-    memoMap,
+    memoMap: Layer.makeMemoMapUnsafe(),
     middleware: disposeMiddleware,
   }),
 )
