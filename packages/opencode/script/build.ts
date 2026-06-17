@@ -25,56 +25,94 @@ const plugin = createSolidTransformPlugin()
 
 // Patch effect dist files for bun 1.3.x runtime compatibility:
 // 1. bun --compile corrupts module-level TextEncoder via @__PURE__ tree-shaking
-// 2. bun 1.3.x mis-compiles rest parameters, making Schema.Union(a, b) set
-//    'members = a, options = b' instead of 'members = [a, b]'
+// 2. bun 1.3.x mis-compiles rest parameters, breaking Schema.Union(a, b) -> Union(a, options=b),
+//    Schema.check(...checks) -> check(checks), Schema.Literals(literals), Schema.Tuple(elements), etc.
 const effectPlugin: Bun.Plugin = {
   name: "effect-bun-patches",
   setup(build) {
     build.onLoad({ filter: /\/effect\/dist\//, namespace: "file" }, async (args) => {
       let source = await Bun.file(args.path).text()
-      // 1. Strip @__PURE__ annotations — bun uses them to tree-shake module-level
-      //    TextEncoder/TextDecoder even when the resulting variable is used later.
       source = source.replace(/\/\*[#@]\s*__PURE__\s*\*\//g, "")
-      // 2. Inline module-level encoder.encode() → new TextEncoder().encode() so
-      //    bun's DCE can't remove the const encoder assignment.
       source = source.replace(/\bencoder\.(encode|encodeInto)\(/g, "new TextEncoder().$1(")
       source = source.replace(/^const encoder = new TextEncoder\(\);?\s*$/gm, "")
       source = source.replace(/^const encoder = new TextEncoder\(\);?\n?/gm, "")
-      // 3. Fix Schema.Union(...members) rest parameter — bun 1.3.x mis-compiles the
-      //    TypeScript rest into function Union(members, options) which breaks all
-      //    multi-argument calls.  Use arguments object (not rest param) to work
-      //    around bun's minifier also mangling rest params.
-      source = source.replace(/export function Union\(members,\s*options\)\s*\{(\s*)return makeUnion\(AST\.union\(members,\s*options\?\.mode\s*\?\?\s*"anyOf",\s*undefined\),\s*members\);\s*\}/s,
+
+      source = source.replace(
+        /export function Union\(members,\s*options\)\s*\{(\s*)return makeUnion\(AST\.union\(members,\s*options\?\.mode\s*\?\?\s*"anyOf",\s*undefined\),\s*members\);\s*\}/s,
         "export function Union(members, options) {\n" +
         "  if (!Array.isArray(members)) {\n" +
-        "    var _args = Array.prototype.slice.call(arguments);\n" +
-        "    members = _args;\n" +
-        "    options = typeof _args[_args.length - 1] === 'object' && !Array.isArray(_args[_args.length - 1]) && _args.length > 1 ? _args.pop() : undefined;\n" +
+        "    var _uargs = Array.prototype.slice.call(arguments);\n" +
+        "    members = _uargs;\n" +
+        "    options = typeof _uargs[_uargs.length - 1] === 'object' && !Array.isArray(_uargs[_uargs.length - 1]) && _uargs.length > 1 ? _uargs.pop() : undefined;\n" +
         "  }\n" +
         "  return makeUnion(AST.union(members, (options && options.mode) || 'anyOf', undefined), members);\n" +
         "}"
       )
-      // 4. Guard ALL memoized AST traversal functions against undefined ast.
-      //    bun 1.3.x runtime can leave AST node references as undefined when
-      //    tree-shaking rest-parameter-based schema constructors.  Each
-      //    memoized function (toType, toEncoded, flip, etc.) checks ast.encoding
-      //    on entry and crashes if ast is undefined.
-      //    Only applies to SchemaAST.js to avoid corrupting other files.
+
+      source = source.replace(
+        /export function check\(\.\.\.checks\)\s*\{(\s*)return self => self\.check\(\.\.\.checks\);\s*\}/s,
+        "export function check() {\n" +
+        "  var checks = Array.prototype.slice.call(arguments);\n" +
+        "  return self => self.check.apply(self, checks);\n" +
+        "}"
+      )
+
+      source = source.replace(
+        /export function Literals\(literals\)\s*\{/,
+        "export function Literals() { var literals = arguments.length === 1 && Array.isArray(arguments[0]) ? arguments[0] : Array.prototype.slice.call(arguments);",
+      )
+
+      source = source.replace(
+        /export function Tuple\(elements\)\s*\{(\s*)return makeTuple\(AST\.tuple\(elements\), elements\);\s*\}/s,
+        "export function Tuple() {\n" +
+        "  var elements = arguments.length === 1 && Array.isArray(arguments[0]) ? arguments[0] : Array.prototype.slice.call(arguments);\n" +
+        "  return makeTuple(AST.tuple(elements), elements);\n" +
+        "}"
+      )
+
+      // 7. Fix memoize in Function.js — WeakMap crashes on undefined keys.
+      if (args.path.includes("Function.js")) {
+        source = source.replace(
+          /export function memoize\(f\)\s*\{(\s*)const cache = new WeakMap\(\);\s*return a\s*=>\s*\{/s,
+          "export function memoize(f) {\n" +
+          "  const cache = new WeakMap();\n" +
+          "  return a => {\n" +
+          "    if (a == null) return f(a);",
+        )
+      }
+
+      // 8. Guard toType et al against undefined, filter undefined from AST arrays,
+      //    and guard SchemaParser.makeEffect / recurDefaults against null AST.
       if (args.path.includes("SchemaAST.js")) {
         source = source.replace(/=\s*memoize\(\(?\s*\w+\s*\)?\s*=>\s*\{/g,
           " = memoize((ast) => { if (ast == null) return ast;",
         )
-      }
-      // 5. Some AST nodes are corrupt (undefined) due to bun's runtime. When
-      //    the guard above returns undefined, downstream code crashes using
-      //    undefined as a WeakMap key.  Patch the recurring functions to skip
-      //    undefined array elements.
-      if (args.path.includes("SchemaAST.js")) {
-        // .recur(f) should skip undefined elements
-        source = source.replace(/\.recur\s*=\s*function\s*\(\s*([^)]+)\)\s*\{/g,
-          ".recur = function($1) { if (this.types) { this.types = this.types.filter(function(t) { return t != null; }); } if (this.elements) { this.elements = this.elements.filter(function(e) { return e != null; }); } if (this.propertySignatures) { this.propertySignatures = this.propertySignatures.filter(function(p) { return p != null; }); }",
+        source = source.replace(
+          /(export function union\(members, mode, checks\)\s*\{)/,
+          "$1 if (Array.isArray(members)) members = members.filter(function(m) { return m != null; }); else return;",
+        )
+        source = source.replace(
+          /(export function tuple\(elements, checks\s*=\s*undefined\)\s*\{)/,
+          "$1 if (Array.isArray(elements)) elements = elements.filter(function(e) { return e != null; }); else return;",
+        )
+        source = source.replace(
+          /(export function struct\(fields, checks, annotations\)\s*\{)/,
+          "$1 if (fields && typeof fields === 'object') { var _keys = Object.keys(fields); for (var _i = 0; _i < _keys.length; _i++) { if (fields[_keys[_i]] == null) delete fields[_keys[_i]]; } }",
         )
       }
+      if (args.path.includes("SchemaParser.js")) {
+        source = source.replace(
+          /const recurDefaults = memoize\(ast\s*=>\s*\{/,
+          "const recurDefaults = memoize(ast => { if (ast == null) return ast;",
+        )
+        source = source.replace(
+          /export function makeEffect\(schema\)\s*\{(\s*)const ast = recurDefaults\(AST\.toType\(schema\.ast\)\);/s,
+          "export function makeEffect(schema) {\n" +
+          "  if (schema == null || schema.ast == null) return;\n" +
+          "  const ast = recurDefaults(AST.toType(schema.ast));",
+        )
+      }
+
       return { contents: source, loader: "js" }
     })
   },
@@ -113,80 +151,25 @@ const allTargets: {
   abi?: "musl"
   avx2?: false
 }[] = [
-  {
-    os: "linux",
-    arch: "arm64",
-  },
-  {
-    os: "linux",
-    arch: "x64",
-  },
-  {
-    os: "linux",
-    arch: "x64",
-    avx2: false,
-  },
-  {
-    os: "linux",
-    arch: "arm64",
-    abi: "musl",
-  },
-  {
-    os: "linux",
-    arch: "x64",
-    abi: "musl",
-  },
-  {
-    os: "linux",
-    arch: "x64",
-    abi: "musl",
-    avx2: false,
-  },
-  {
-    os: "darwin",
-    arch: "arm64",
-  },
-  {
-    os: "darwin",
-    arch: "x64",
-  },
-  {
-    os: "darwin",
-    arch: "x64",
-    avx2: false,
-  },
-  {
-    os: "win32",
-    arch: "arm64",
-  },
-  {
-    os: "win32",
-    arch: "x64",
-  },
-  {
-    os: "win32",
-    arch: "x64",
-    avx2: false,
-  },
+  { os: "linux", arch: "arm64" },
+  { os: "linux", arch: "x64" },
+  { os: "linux", arch: "x64", avx2: false },
+  { os: "linux", arch: "arm64", abi: "musl" },
+  { os: "linux", arch: "x64", abi: "musl" },
+  { os: "linux", arch: "x64", abi: "musl", avx2: false },
+  { os: "darwin", arch: "arm64" },
+  { os: "darwin", arch: "x64" },
+  { os: "darwin", arch: "x64", avx2: false },
+  { os: "win32", arch: "arm64" },
+  { os: "win32", arch: "x64" },
+  { os: "win32", arch: "x64", avx2: false },
 ]
 
 const targets = singleFlag
   ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
-        return false
-      }
-
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
-
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
-
+      if (item.os !== process.platform || item.arch !== process.arch) return false
+      if (item.avx2 === false) return baselineFlag
+      if (item.abi !== undefined) return false
       return true
     })
   : allTargets
@@ -202,7 +185,6 @@ if (!skipInstall) {
 for (const item of targets) {
   const name = [
     pkg.name,
-    // changing to win32 flags npm for some reason
     item.os === "win32" ? "windows" : item.os,
     item.arch,
     item.avx2 === false ? "baseline" : undefined,
@@ -218,12 +200,11 @@ for (const item of targets) {
   const parserWorker = fs.realpathSync(fs.existsSync(localPath) ? localPath : rootPath)
   const workerPath = "./src/cli/tui/worker.ts"
 
-  // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
   // Build the server as a plain JS bundle (not compiled) so effect's Schema
-  // system works correctly — bun's --compile step corrupts Schema AST traversal.
+  // system works — bun's --compile step corrupts Schema AST traversal.
   const serverOutDir = path.resolve(dir, `dist/${name}/bin`)
   await Bun.build({
     conditions: ["bun", "node"],
@@ -232,7 +213,7 @@ for (const item of targets) {
     external: ["node-gyp"],
     format: "esm",
     target: "bun",
-    minify: true,
+    minify: false,
     sourcemap: "none",
     splitting: false,
     outdir: serverOutDir,
@@ -283,7 +264,6 @@ for (const item of targets) {
     },
   })
 
-  // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/opencode`
     console.log(`Running smoke test: ${binaryPath} --version`)
