@@ -40,7 +40,7 @@ export class Service extends ConfigService.Service<Service>()("@dreamcode/Runtim
   enableExperimentalModels: bool("OPENCODE_ENABLE_EXPERIMENTAL_MODELS"),
   enableQuestionTool: bool("OPENCODE_ENABLE_QUESTION_TOOL"),
   experimentalReferences: enabledByExperimental("OPENCODE_EXPERIMENTAL_REFERENCES"),
-  experimentalBackgroundSubagents: Config.all({
+  backgroundSubagents: Config.all({
     experimental,
     enabled: Config.boolean("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS").pipe(Config.option),
     dreamcode: Config.boolean("OPENCODE_DREAMCODE_MODE").pipe(Config.withDefault(true)),

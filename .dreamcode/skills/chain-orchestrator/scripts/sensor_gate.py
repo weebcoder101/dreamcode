@@ -210,8 +210,12 @@ def build_dynamic_graph(prompt: str) -> dict:
         for skill in TASK_SKILLS.get(task["task_type"], []):
             needed_skills.add(skill)
     
-    # Always include dream
-    needed_skills.add("breakthrough-overdrive-innovation")
+    # Only include dream/innovation when task actually requires it
+    # (not for trivial communication-only tasks)
+    task_types = {t["task_type"] for t in tasks}
+    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
+    if task_types & INNOVATION_TASKS:
+        needed_skills.add("breakthrough-overdrive-innovation")
     
     # Resolve dependencies — add prerequisites
     resolved = set()
@@ -244,14 +248,20 @@ def build_dynamic_graph(prompt: str) -> dict:
     # Topological sort — respect dependencies
     chain = _topological_sort(resolved)
     
-    # MINIMUM SKILL FLOOR — never run with less than 3 skills
-    # Ensures at least: dream + one execution skill + LTM persistence
-    MINIMUM_CHAIN = ["breakthrough-overdrive-innovation", "neuro", "pieces-ltm"]
-    if len(chain) < 3:
-        for skill in MINIMUM_CHAIN:
-            if skill not in chain:
-                chain.append(skill)
-        chain = _topological_sort(set(chain))
+    # MINIMUM SKILL FLOOR — trivial tasks need fewer skills
+    task_types = {t["task_type"] for t in tasks}
+    TRIVIAL_TASKS = {"communication"}
+    if task_types <= TRIVIAL_TASKS:
+        # Trivial: just the needed skills, no forced chain
+        pass
+    else:
+        # Non-trivial: ensure at least neuro + LTM persistence
+        MINIMUM_CHAIN = ["neuro", "pieces-ltm"]
+        if len(chain) < 2:
+            for skill in MINIMUM_CHAIN:
+                if skill not in chain:
+                    chain.append(skill)
+            chain = _topological_sort(set(chain))
     
     # Determine complexity
     complexity = "high" if len(tasks) > 3 else "medium" if len(tasks) > 1 else "low"

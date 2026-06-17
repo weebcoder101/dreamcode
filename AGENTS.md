@@ -173,6 +173,29 @@ bash /home/ronya/Pilot-Project/.opencode/scripts/safe_git_push.sh origin dreamco
 
 Check status: tail -10 /home/ronya/Pilot-Project/.opencode/git_push.log
 
+## bun Runtime Quirks
+
+### bun 1.3.x rest-parameter bug
+
+bun 1.3.14 has a runtime bug where TypeScript rest parameters in minified/compiled code
+are corrupted: `function fn(...args)` becomes `function fn(args)` where `args` is the
+**first element** instead of the **array of all arguments**. This affects effect v4's Schema
+library (`Schema.Union(...members)`, `Schema.check(...checks)`, etc.).
+
+The bug affects BOTH `bun run` (JS) and `bun build --compile` (binary), not just compile mode.
+Canary (1.4.0-canary) introduced a JSON parser regression that breaks the build script's
+`define` values with ternary/spread operators.
+
+**Workaround**: The `effectPlugin` in `packages/opencode/script/build.ts` patches effect dist
+files to replace rest parameters with `arguments`-based collection. See
+`packages/opencode/script/AGENTS.md` for details.
+
+### `bun upgrade --canary` breaks `define` values
+
+bun 1.4.0-canary+0c537fef8 enforces strict JSON parsing on `Bun.build({ define: {...} })` values,
+rejecting ternary/spread operators. This breaks the build script's `define` block.
+Downgrade with `bun upgrade --stable`.
+
 ## TYPECHECK — NEVER run `bun turbo typecheck` with default concurrency
 
 `bun turbo typecheck` at the monorepo root spawns 29 parallel tsc processes

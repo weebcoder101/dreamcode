@@ -2242,12 +2242,12 @@ function Task(props: ToolProps) {
 
   onMount(() => {
     if (props.part.state.status === "pending") return
-    const sessionID = stringValue(props.part.metadata?.sessionId)
+    const sessionID = stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
     if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
   })
 
   const sessionID = createMemo(() => {
-    return stringValue(props.part.metadata?.sessionId)
+    return stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
   })
   const messages = createMemo(() => sync.data.message[sessionID() ?? ""] ?? [])
 

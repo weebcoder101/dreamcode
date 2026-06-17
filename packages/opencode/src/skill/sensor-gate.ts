@@ -233,44 +233,44 @@ function selectPersonas(result: SensorGateResult): Persona[] {
     return { profile, score }
   })
 
-  // Sort by score descending, filter out negatives
-  const eligible = scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score)
+  // Raise minimum score threshold — require at least 2 tag matches to justify a persona
+  const eligible = scored.filter((s) => s.score >= 2).sort((a, b) => b.score - a.score)
 
-  // Dynamic depth-based count: floor of 2, then scale by depth + mode
+  // For simple/low-risk tasks, skip personas entirely
+  if (complexityScore <= 1 && mode !== "DREAM_INNOVATION" && eligible.length === 0) {
+    return []
+  }
+
+  // Deduplicate personas with overlapping focus areas
+  const deduped: typeof eligible = []
+  for (const candidate of eligible) {
+    const hasOverlap = deduped.some((existing) => {
+      const overlap = candidate.profile.tags.filter((t) => existing.profile.tags.includes(t))
+      return overlap.length >= Math.ceil(Math.min(candidate.profile.tags.length, existing.profile.tags.length) * 0.6)
+    })
+    if (!hasOverlap) deduped.push(candidate)
+  }
+
+  // Dynamic depth-based count
   const dd = depthScore(result)
   let count: number
   if (mode === "DREAM_INNOVATION") {
-    count = Math.min(7, Math.max(4, Math.ceil(dd * 1.3)))
+    count = Math.min(5, Math.max(3, Math.ceil(dd * 1.3)))
   } else if (mode === "TRIVIAL") {
-    count = 2
+    count = 1
   } else {
-    count = Math.min(5, Math.max(2, Math.ceil(dd * 1.2)))
+    count = Math.min(3, Math.max(1, Math.ceil(dd * 1.2)))
   }
-  count = Math.min(count, eligible.length, 7)
+  count = Math.min(count, deduped.length)
 
-  // Floor of 2: if count < 2 after eligibility cap, pad with defaults
-  if (count < 2) {
-    const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
-    const picked = eligible.map((s) => s.profile)
-    const padCount = 2 - picked.length
-    for (const d of defaults) {
-      if (padCount <= 0) break
-      if (!picked.find((p) => p.name === d.name)) {
-        picked.push(d)
-      }
-    }
-    return overlapCheck(picked.slice(0, 2).map((p) => ({
-      name: p.name,
-      role: p.role,
-      focus: p.focus,
-      skills: p.skills,
-      task: dynamicTaskFor(p, result.intent),
-      goals: dynamicGoalsFor(p, result.intent),
-      synthesisGuide: dynamicSynthesisFor(p),
-    })))
+  // Floor of 1: always provide at least one specialist perspective
+  if (count < 1 && deduped.length > 0) {
+    count = 1
   }
 
-  return overlapCheck(eligible.slice(0, count).map((s) => ({
+  if (count === 0) return []
+
+  return overlapCheck(deduped.slice(0, count).map((s) => ({
     name: s.profile.name,
     role: s.profile.role,
     focus: s.profile.focus,
@@ -285,6 +285,7 @@ export interface SensorGateResult {
   intent: string
   domain_tags: string[]
   risk_level: string
+  confidence: number
   time_sensitivity: string
   requires_tools: string
   deliverable_type: string
@@ -308,6 +309,7 @@ function parseSensorGateOutput(output: string): SensorGateResult {
     intent: "",
     domain_tags: [],
     risk_level: "medium",
+    confidence: 0.5,
     time_sensitivity: "medium",
     requires_tools: "files",
     deliverable_type: "multi",
@@ -334,6 +336,7 @@ function parseSensorGateOutput(output: string): SensorGateResult {
       result.domain_tags = tags.split(",").map((t) => t.trim()).filter(Boolean)
     }
     if (trimmed.startsWith("- risk_level:")) result.risk_level = trimmed.slice(13).trim()
+    if (trimmed.startsWith("- confidence:")) result.confidence = parseFloat(trimmed.slice(12)) || 0.5
     if (trimmed.startsWith("- time_sensitivity:")) result.time_sensitivity = trimmed.slice(19).trim()
     if (trimmed.startsWith("- requires_tools:")) result.requires_tools = trimmed.slice(17).trim()
     if (trimmed.startsWith("- deliverable_type:")) result.deliverable_type = trimmed.slice(19).trim()
@@ -544,7 +547,11 @@ export const layer = Layer.succeed(Service, Service.of({
       const scanType = result.risk_level === "high" ? "security" : "full_audit"
       const neuroResult = runNeuroHarness(prompt, directory, scanType)
       if (neuroResult) {
-        result.neuro_result = neuroResult
+        if (neuroResult.includes('"status": "skipped"') || neuroResult.includes('"status":"skipped"')) {
+          console.warn("[sensor-gate] NEURO analysis skipped — NEURO_API_KEY not set. Sign up at https://neurometric.ai to get your free API key.")
+        } else {
+          result.neuro_result = neuroResult
+        }
       }
     }
 

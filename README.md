@@ -2,6 +2,8 @@
 
 [![Install Test](https://github.com/weebcoder101/dreamcode/actions/workflows/install_test.yml/badge.svg)](https://github.com/weebcoder101/dreamcode/actions/workflows/install_test.yml)
 
+> **New to DreamCode?** Read the **[Complete Guide](GUIDE.md)** — architecture, skills, configuration, and advanced patterns.
+
 An open-source AI coding agent with native dream thinking, 37-skill dynamic graph, memory consolidation, and scoring enforcement.
 
 ## Quick Install
@@ -56,6 +58,19 @@ dreamcode
 # Or with API key
 OPENAI_API_KEY=your-key dreamcode
 ```
+
+## NEURO API (Highly Recommended — Free)
+
+DreamCode works best with the [NEURO API](https://neurometric.ai) — **120+ specialized AI models, completely free**.
+
+```bash
+# Get your free key at https://neurometric.ai
+export NEURO_API_KEY="your-key"
+```
+
+Without NEURO, DreamCode falls back to local analysis only. With NEURO, you get domain-specific model routing, multi-perspective analysis, and up to 10 review iterations.
+
+See [GUIDE.md §19 — NEURO API](GUIDE.md#19-neuro-api) for full setup.
 
 ## Configuration
 
@@ -124,9 +139,9 @@ DreamCode includes full VS Code support:
 
 DreamCode is designed for Antigravity IDE. Open your project in Antigravity and the `.opencode/` config is auto-detected. See [GUIDE.md](GUIDE.md) for the full Antigravity workflow.
 
-## Interactive Guide
+## Documentation
 
-For the complete walkthrough of every feature, see **[GUIDE.md](GUIDE.md)**.
+For the complete walkthrough of every feature, see **[GUIDE.md](GUIDE.md)** — covers architecture, all 37 skills, NEURO setup, Pieces LTM, and advanced patterns.
 
 ## Credits
 

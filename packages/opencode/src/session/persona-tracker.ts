@@ -26,14 +26,12 @@ export interface PersonaTracker {
   readonly sessionID: string
   readonly remaining: () => number
   readonly complete: (name: string, role: string, output: string, status: "completed" | "error", extra?: { task?: string; goals?: string[]; synthesisGuide?: string }) => Effect.Effect<void>
-  readonly waitForAll: () => Effect.Effect<PersonaResult[]>
   readonly getAll: () => PersonaResult[]
 }
 
 export function create(sessionID: string, total: number): PersonaTracker {
   const results: PersonaResult[] = []
   let remaining = total
-  let resolveWait: ((results: PersonaResult[]) => void) | null = null
 
   const complete = Effect.fn("PersonaTracker.complete")(function* (
     name: string,
@@ -44,18 +42,6 @@ export function create(sessionID: string, total: number): PersonaTracker {
   ) {
     results.push({ name, role, output, status, ...extra })
     remaining--
-
-    if (remaining <= 0 && resolveWait) {
-      resolveWait(results)
-    }
-  })
-
-  const waitForAll = Effect.fn("PersonaTracker.waitForAll")(function* () {
-    if (remaining <= 0) return results
-
-    return yield* Effect.callback<PersonaResult[]>((resume) => {
-      resolveWait = (r) => resume(Effect.succeed(r))
-    })
   })
 
   const getAll = (): PersonaResult[] => results.slice()
@@ -64,7 +50,6 @@ export function create(sessionID: string, total: number): PersonaTracker {
     sessionID,
     remaining: () => remaining,
     complete,
-    waitForAll,
     getAll,
   }
 }

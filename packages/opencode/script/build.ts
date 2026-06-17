@@ -23,10 +23,10 @@ const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
 
-// Patch effect dist files for bun 1.3.x runtime compatibility:
-// 1. bun --compile corrupts module-level TextEncoder via @__PURE__ tree-shaking
-// 2. bun 1.3.x mis-compiles rest parameters, breaking Schema.Union(a, b) -> Union(a, options=b),
-//    Schema.check(...checks) -> check(checks), Schema.Literals(literals), Schema.Tuple(elements), etc.
+// Patch effect dist files for bun 1.3.x runtime compatibility.
+// bun 1.3.x corrupts rest parameters at the JSC engine level, breaking
+// Schema.Union, Schema.check, etc. These patches run during Bun.build and
+// are included in the compiled binary.
 const effectPlugin: Bun.Plugin = {
   name: "effect-bun-patches",
   setup(build) {
@@ -70,7 +70,6 @@ const effectPlugin: Bun.Plugin = {
         "}"
       )
 
-      // 7. Fix memoize in Function.js — WeakMap crashes on undefined keys.
       if (args.path.includes("Function.js")) {
         source = source.replace(
           /export function memoize\(f\)\s*\{(\s*)const cache = new WeakMap\(\);\s*return a\s*=>\s*\{/s,
@@ -81,8 +80,6 @@ const effectPlugin: Bun.Plugin = {
         )
       }
 
-      // 8. Guard toType et al against undefined, filter undefined from AST arrays,
-      //    and guard SchemaParser.makeEffect / recurDefaults against null AST.
       if (args.path.includes("SchemaAST.js")) {
         source = source.replace(/=\s*memoize\(\(?\s*\w+\s*\)?\s*=>\s*\{/g,
           " = memoize((ast) => { if (ast == null) return ast;",
@@ -110,6 +107,27 @@ const effectPlugin: Bun.Plugin = {
           "export function makeEffect(schema) {\n" +
           "  if (schema == null || schema.ast == null) return;\n" +
           "  const ast = recurDefaults(AST.toType(schema.ast));",
+        )
+      }
+      // Guard appendTransformation: to can be undefined when toType receives
+      // a corrupted AST node from bun's rest-parameter bug.
+      if (args.path.includes("SchemaAST.js")) {
+        source = source.replace(
+          /function appendTransformation\(from, transformation, to\)\s*\{/,
+          "function appendTransformation(from, transformation, to) {\n" +
+          "  if (to == null) return from;",
+        )
+        // Also guard middlewareDecoding/middlewareEncoding callers
+        source = source.replace(
+          /function middlewareDecoding\(ast, middleware\)\s*\{(\s*)return appendTransformation\(ast, middleware, toType\(ast\)\);/s,
+          "function middlewareDecoding(ast, middleware) {\n" +
+          "  var resolved = toType(ast);\n" +
+          "  return resolved ? appendTransformation(ast, middleware, resolved) : ast;",
+        )
+        source = source.replace(
+          /function middlewareEncoding\(ast, middleware\)\s*\{(\s*)return appendTransformation\(toEncoded\(ast\), middleware, ast\);/s,
+          "function middlewareEncoding(ast, middleware) {\n" +
+          "  return ast ? appendTransformation(toEncoded(ast), middleware, ast) : ast;",
         )
       }
 
@@ -200,12 +218,10 @@ for (const item of targets) {
   const parserWorker = fs.realpathSync(fs.existsSync(localPath) ? localPath : rootPath)
   const workerPath = "./src/cli/tui/worker.ts"
 
+  // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
-  // Build the server as a plain JS bundle (not compiled) so effect's Schema
-  // system works — bun's --compile step corrupts Schema AST traversal.
-  const serverOutDir = path.resolve(dir, `dist/${name}/bin`)
   await Bun.build({
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
@@ -214,32 +230,8 @@ for (const item of targets) {
     format: "esm",
     target: "bun",
     minify: false,
-    sourcemap: "none",
-    splitting: false,
-    outdir: serverOutDir,
-    naming: "opencode-server.js",
-    entrypoints: ["./src/index.ts"],
-    define: {
-      FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
-      OPENCODE_VERSION: `'${Script.version}'`,
-      OPENCODE_MODELS_DEV: generated.modelsData,
-      OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
-      OPENCODE_WORKER_PATH: workerPath,
-      OPENCODE_CHANNEL: `'${Script.channel}'`,
-      OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
-    },
-  })
-  console.log(`Server bundle: ${path.join(serverOutDir, "opencode-server.js")}`)
-
-  await Bun.build({
-    conditions: ["bun", "node"],
-    tsconfig: "./tsconfig.json",
-    plugins: [plugin, effectPlugin],
-    external: ["node-gyp"],
-    format: "esm",
-    minify: true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
-    splitting: true,
+    splitting: false,
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,

@@ -139,6 +139,8 @@ def call_neuro_guardian(prompt: str, context: dict = None) -> dict:
 
     if not api_key:
         # Fallback: rule-based review if NEURO unavailable
+        import sys
+        print("WARNING: NEURO_API_KEY not set. Using rule-based safety review. Sign up at https://neurometric.ai to get your free API key for enhanced analysis.", file=sys.stderr)
         return _rule_based_review(prompt)
 
     user_content = f"User prompt: {prompt}"

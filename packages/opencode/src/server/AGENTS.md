@@ -19,3 +19,13 @@ The opencode server has two distinct initialization paths:
 - If the build fails → `handlerPromise` holds a rejected promise → `handlerCache` is NEVER set → every subsequent call re-throws the same error
 
 There is NO retry mechanism. Process restart is required after a layer build failure.
+
+## Compiled binary in-process server
+
+In `--single` (compiled) mode, `Server.Default()` uses the in-process `HttpApiApp.webHandler()` directly.
+The `effectPlugin` in build.ts patches effect dist files during build to fix bun 1.3.x rest-parameter
+corruption (`Schema.Union`, `Schema.check`, etc.). These patches ensure Schema codec building works
+in the compiled binary.
+
+When adding new handler endpoints that use `handle()`, verify they work in compiled mode;
+if they crash with `.encoding`, switch to `handleRaw()` + manual `Schema.decodeUnknownEffect()`.

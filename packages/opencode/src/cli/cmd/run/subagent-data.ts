@@ -12,8 +12,8 @@ import type { FooterSubagentState, FooterSubagentTab, StreamCommit } from "./typ
 export const SUBAGENT_BOOTSTRAP_LIMIT = 200
 export const SUBAGENT_CALL_BOOTSTRAP_LIMIT = 80
 
-const SUBAGENT_COMMIT_LIMIT = 80
-const SUBAGENT_CALL_LIMIT = 32
+const SUBAGENT_COMMIT_LIMIT = 200
+const SUBAGENT_CALL_LIMIT = 100
 const SUBAGENT_ROLE_LIMIT = 32
 const SUBAGENT_ERROR_LIMIT = 16
 const SUBAGENT_ECHO_LIMIT = 8

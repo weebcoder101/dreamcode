@@ -1162,6 +1162,7 @@ Before every response, verify your reasoning:
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
+          synthesisText = undefined
           yield* status.set(sessionID, { type: "busy" })
           yield* Effect.logInfo("loop", { "session.id": sessionID, step })
 
@@ -1368,6 +1369,7 @@ Before every response, verify your reasoning:
             // Runs classification + skill chain selection on every user message.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
             // Also skip when the agent itself is a subagent (mode === "subagent").
+            // Skip after synthesis — synthesis should NOT auto-spawn subagents.
             if (step === 1 && !session.parentID) {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
@@ -1376,9 +1378,17 @@ Before every response, verify your reasoning:
                 .map((p) => p.text)
                 .join("\n")
 
-              if (userText.trim()) {
+              // Detect synthesis response — skip auto-spawn after synthesis
+              const lastUserMsg = msgs.findLast(
+                (m) => m.info.role === "user" && m.info.id === lastUser.id,
+              )
+              const isSynthesis = lastUserMsg?.parts.some(
+                (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
+              ) ?? false
+
+              if (userText.trim() && !isSynthesis) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
-                if (gateResult && !gateResult.is_social_greeting) {
+                if (gateResult && !gateResult.is_social_greeting && gateResult.confidence < 0.7) {
                   const sensorBlock = [
                     "<sensor-gate>",
                     `Intent: ${gateResult.intent}`,
@@ -1400,8 +1410,8 @@ Before every response, verify your reasoning:
                   system.push(sensorBlock.join("\n"))
 
                   // ─── Persona System Injection ─────────────────────────
-                  // Cap at 5 to prevent oversaturation and redundant work
-                  if (gateResult.personas.length > 5) gateResult.personas = gateResult.personas.slice(0, 5)
+                  // Cap at 3 to prevent oversaturation and redundant work
+                  if (gateResult.personas.length > 3) gateResult.personas = gateResult.personas.slice(0, 3)
                   if (gateResult.personas.length > 0) {
                     sensorGateFired = true
                     sensorGateFiredMap.set(sessionID, true)
@@ -1528,6 +1538,32 @@ Before every response, verify your reasoning:
                               "",
                             ] : []),
                             otherContext,
+                            // Context summary from prior analysis (not full conversation)
+                            ...(() => {
+                              const priorFindings = msgs
+                                .filter((m) => m.info.role === "assistant")
+                                .slice(-3)
+                                .flatMap((m) => m.parts.filter((p) => p.type === "text" && !("ignored" in p && p.ignored)))
+                                .map((p) => ("text" in p ? p.text : ""))
+                                .filter(Boolean)
+                                .join("\n")
+                                .slice(0, 2000)
+                              return priorFindings
+                                ? [
+                                  "## Current Context Summary",
+                                  "Prior analysis has identified:",
+                                  priorFindings,
+                                  "",
+                                ]
+                                : []
+                            })(),
+                            // Focused guiding steps for this persona
+                            "## Your Guiding Steps",
+                            `1. Focus specifically on: ${persona.focus}`,
+                            "2. Identify issues in your domain with file:line references",
+                            "3. Provide actionable recommendations with code snippets",
+                            "4. Flag any blockers that would prevent implementation",
+                            "",
                             `## User Prompt`,
                             userText.trim(),
                             "",
@@ -1553,13 +1589,13 @@ Before every response, verify your reasoning:
                                  goals: persona.goals,
                                  synthesisGuide: persona.synthesisGuide,
                                })
-                               const st = part.state as { status: string; time?: { start: number }; input: Record<string, any> }
-                               yield* sessions.updatePart({
-                                 ...part,
-                                 type: "tool",
-                                 state: status === "completed"
-                                   ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
-                                   : { ...st, status: "error" as const, error: output, metadata: { ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                                const st = part.state as { status: string; time?: { start: number }; input: Record<string, any>; metadata?: Record<string, any> }
+                                yield* sessions.updatePart({
+                                  ...part,
+                                  type: "tool",
+                                  state: status === "completed"
+                                    ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...st.metadata, ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                    : { ...st, status: "error" as const, error: output, metadata: { ...st.metadata, ...extraMeta, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
                                } as SessionV1.ToolPart)
                              }).pipe(Effect.catchCause((cause) => Effect.logWarning("markComplete failed", { cause })))
 
@@ -1585,7 +1621,8 @@ Before every response, verify your reasoning:
                                         type: "tool",
                                         state: {
                                           ...part.state,
-                                          metadata: { ...(part.state as any).metadata, ...meta },
+                                          title: meta.title ?? (part.state as any).title,
+                                          metadata: { ...(part.state as any).metadata, ...meta.metadata },
                                         },
                                       } as SessionV1.ToolPart)
                                     }).pipe(Effect.catchCause((cause) => Effect.void)),

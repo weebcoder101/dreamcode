@@ -96,6 +96,9 @@ export const TaskTool = Tool.define(
 
     const computeSessionDepth = (id: SessionID): Effect.Effect<number> =>
       Effect.gen(function* () {
+        const cached = yield* Ref.get(depthCache)
+        if (cached.has(id)) return cached.get(id)!
+
         let depth = 0
         let current: SessionID | undefined = id
         while (current) {
@@ -104,6 +107,7 @@ export const TaskTool = Tool.define(
           depth++
           current = s.parentID
         }
+        yield* Ref.update(depthCache, (m) => new Map(m).set(id, depth))
         return depth
       })
 
@@ -121,6 +125,7 @@ export const TaskTool = Tool.define(
 
     const activeSubagentSessions = yield* Ref.make(new Set<SessionID>())
     const spawningBudget = yield* Ref.make(new Map<SessionID, { count: number; time: number }>())
+    const depthCache = yield* Ref.make(new Map<SessionID, number>())
     const MAX_SPAWNS_PER_BURST = 3
 
     const run = Effect.fn("TaskTool.execute")(function* (
@@ -129,9 +134,9 @@ export const TaskTool = Tool.define(
     ) {
       const cfg = yield* config.get()
       const runInBackground = params.background === true
-      if (runInBackground && !flags.experimentalBackgroundSubagents) {
+      if (runInBackground && !flags.backgroundSubagents) {
         return yield* Effect.fail(
-          new Error("Background subagents require OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
+          new Error("Background subagents are not enabled"),
         )
       }
 
@@ -449,11 +454,11 @@ export const TaskTool = Tool.define(
     })
 
     return {
-      description: flags.experimentalBackgroundSubagents
+      description: flags.backgroundSubagents
         ? [DESCRIPTION, BACKGROUND_DESCRIPTION].join("\n\n")
         : DESCRIPTION,
       parameters: Parameters,
-      jsonSchema: flags.experimentalBackgroundSubagents ? undefined : ToolJsonSchema.fromSchema(BaseParameters),
+      jsonSchema: flags.backgroundSubagents ? undefined : ToolJsonSchema.fromSchema(BaseParameters),
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         run(params, ctx).pipe(Effect.orDie),
     }

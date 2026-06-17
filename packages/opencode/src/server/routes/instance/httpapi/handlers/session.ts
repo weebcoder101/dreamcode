@@ -44,6 +44,43 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
+const parsePromptPayload = (
+  request: HttpServerRequest.HttpServerRequest,
+): Effect.Effect<Partial<typeof PromptPayload.Type>, HttpApiError.BadRequest> =>
+  Effect.gen(function* () {
+    const body = yield* Effect.orDie(request.text)
+    if (body.trim().length === 0) return {}
+    const json = yield* tryParseJson(body)
+    if (json === null || typeof json !== "object" || Array.isArray(json)) {
+      return yield* new HttpApiError.BadRequest({})
+    }
+    const obj = json as Record<string, unknown>
+    const payload: Record<string, unknown> = {}
+    if (typeof obj.messageID === "string") payload.messageID = obj.messageID
+    if (obj.model !== null && typeof obj.model === "object" && !Array.isArray(obj.model)) {
+      const m = obj.model as Record<string, unknown>
+      if (typeof m.modelID === "string" || typeof m.id === "string") {
+        payload.model = m
+        if (!m.modelID && m.id) m.modelID = m.id
+        if (!m.providerID) m.providerID = "openai"
+      }
+    }
+    if (typeof obj.agent === "string") payload.agent = obj.agent
+    if (typeof obj.system === "string") payload.system = obj.system
+    if (typeof obj.variant === "string") payload.variant = obj.variant
+    if (Array.isArray(obj.parts)) {
+      payload.parts = obj.parts.map((part: unknown) => {
+        if (part && typeof part === "object") {
+          const p = part as Record<string, unknown>
+          if (typeof p.type === "string" && typeof p.text === "string") return { type: p.type, text: p.text }
+        }
+        return part
+      })
+    }
+    if (typeof obj.noReply === "boolean") payload.noReply = obj.noReply
+    return payload as Partial<typeof PromptPayload.Type>
+  })
+
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -292,12 +329,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
       params: { sessionID: SessionID }
-      payload: typeof PromptPayload.Type
+      request: HttpServerRequest.HttpServerRequest
     }) {
       yield* requireSession(ctx.params.sessionID)
+      const payload = yield* parsePromptPayload(ctx.request)
       const message = yield* promptSvc
         .prompt({
-          ...ctx.payload,
+          ...payload,
           sessionID: ctx.params.sessionID,
         })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
@@ -426,7 +464,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("share", share)
       .handle("unshare", unshare)
       .handle("summarize", summarize)
-      .handle("prompt", prompt)
+      .handleRaw("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)
       .handle("shell", shell)

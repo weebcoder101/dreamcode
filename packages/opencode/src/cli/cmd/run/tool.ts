@@ -1438,13 +1438,17 @@ export function toolEntryBody(commit: StreamCommit, raw: string): RunEntryBody |
 
   if (ctx.name === "task") {
     if (commit.phase === "start") {
-      return undefined
+      const input = ctx.state.input as Record<string, any> | undefined
+      const label = input?.description || input?.task || "Analyzing..."
+      return textBody(`📋 Spawning: ${label}`)
     }
 
     if (commit.phase === "final" && ctx.status === "completed") {
       const result = taskResult(text(ctx.state.output))
+      const toolCount = (ctx.state.metadata as any)?.toolCalls?.length ?? 0
+      const suffix = toolCount > 0 ? `\n↳ ${toolCount} tool calls` : ""
       if (result) {
-        return markdownBody(result)
+        return markdownBody(result + suffix)
       }
     }
   }

@@ -54,3 +54,22 @@ The `/*` catch-all in `uiRoute` is a `HttpRouter.use` layer that registers a wil
 **Fix**: `createRoutes()` accepts `options.serveUI` (default `true`) to control whether the UI route is included. The `webHandler` passes `{ serveUI: false }`. The `listenerLayer` uses the default (includes UI route).
 
 The specific route (`/session`) vs catch-all (`/*`) matching depends on find-my-way's internal priority. Under normal conditions, specific routes take priority, but when the catch-all is registered on the same router instance as API routes from `Layer.mergeAll`, the catch-all can intercept incorrectly.
+
+## `handle` vs `handleRaw` in compiled binaries
+
+`handle()` triggers framework Schema codec building for the endpoint's payload/success schemas.
+In `--single` (compiled) binaries, bun 1.3.x corrupts rest parameters in effect's Schema library,
+causing `toType(undefined)` crashes with `TypeError: undefined is not an object (evaluating 'ast.encoding')`.
+
+`handleRaw()` bypasses framework codec building — the handler receives the raw request and decodes
+the body manually via `Schema.decodeUnknownEffect(Schema)(json)`. Manual decoding works because
+the codec is built per-call and the effectPlugin patches prevent the corruption at the specific
+call sites.
+
+**Rule of thumb**: If an endpoint crashes in compiled mode with `.encoding` or `WeakMap` errors,
+convert it to `handleRaw()` with manual `Schema.decodeUnknownEffect()` in the handler body.
+The session `createRaw` handler is the reference pattern (`handlers/session.ts:157`).
+
+When the payload schema is too complex for `Schema.decodeUnknownEffect` to work even with manual
+decoding (e.g., `PromptPayload` with deeply nested Union/Struct/Class schemas), fall back to
+manual JSON parsing with per-field type checks, using only the fields the handler actually needs.

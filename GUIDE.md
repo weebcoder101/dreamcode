@@ -873,14 +873,27 @@ pieces_annotations_full_text_search --query "security audit"
 
 ---
 
-## 19. NEURO API
+## 19. NEURO API (FREE)
 
-DreamCode can call 120+ specialized models via the NEURO API:
+> **DreamCode works best with NEURO — and it's completely free.**
 
-### Setup
+The [NEURO API](https://neurometric.ai) gives DreamCode access to 120+ specialized AI models for domain-specific analysis, multi-perspective review, and architectural guidance.
+
+### Get Your Free API Key
+
+1. Visit [neurometric.ai](https://neurometric.ai) and sign up for a free account
+2. Copy your API key from the dashboard
+3. Set it in your environment:
 
 ```bash
 export NEURO_API_KEY="your-key"
+```
+
+Or add it to `.env.secret` (DO NOT COMMIT):
+
+```bash
+echo 'NEURO_API_KEY=your-key' >> .env.secret
+set -a; source .env.secret; set +a
 ```
 
 ### How it works
@@ -896,6 +909,16 @@ For complex tasks, NEURO runs up to 10 iterations:
 - Iteration 4-6: Deep review
 - Iteration 7-9: Edge cases
 - Iteration 10: Final synthesis
+
+### What you get with NEURO (vs without)
+
+| Feature | Without NEURO | With NEURO |
+|---------|---------------|------------|
+| Model routing | Local fallback only | 120+ specialized models |
+| Review iterations | 1-2 local passes | Up to 10 NEURO iterations |
+| Architecture review | Basic | Multi-perspective analysis |
+| Edge case detection | Limited | Comprehensive |
+| Cost | Free | Free |
 
 ### Skip NEURO (for trivial tasks)
 
