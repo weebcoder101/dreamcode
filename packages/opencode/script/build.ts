@@ -22,6 +22,63 @@ const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
+
+// Patch effect dist files for bun 1.3.x runtime compatibility:
+// 1. bun --compile corrupts module-level TextEncoder via @__PURE__ tree-shaking
+// 2. bun 1.3.x mis-compiles rest parameters, making Schema.Union(a, b) set
+//    'members = a, options = b' instead of 'members = [a, b]'
+const effectPlugin: Bun.Plugin = {
+  name: "effect-bun-patches",
+  setup(build) {
+    build.onLoad({ filter: /\/effect\/dist\//, namespace: "file" }, async (args) => {
+      let source = await Bun.file(args.path).text()
+      // 1. Strip @__PURE__ annotations — bun uses them to tree-shake module-level
+      //    TextEncoder/TextDecoder even when the resulting variable is used later.
+      source = source.replace(/\/\*[#@]\s*__PURE__\s*\*\//g, "")
+      // 2. Inline module-level encoder.encode() → new TextEncoder().encode() so
+      //    bun's DCE can't remove the const encoder assignment.
+      source = source.replace(/\bencoder\.(encode|encodeInto)\(/g, "new TextEncoder().$1(")
+      source = source.replace(/^const encoder = new TextEncoder\(\);?\s*$/gm, "")
+      source = source.replace(/^const encoder = new TextEncoder\(\);?\n?/gm, "")
+      // 3. Fix Schema.Union(...members) rest parameter — bun 1.3.x mis-compiles the
+      //    TypeScript rest into function Union(members, options) which breaks all
+      //    multi-argument calls.  Use arguments object (not rest param) to work
+      //    around bun's minifier also mangling rest params.
+      source = source.replace(/export function Union\(members,\s*options\)\s*\{(\s*)return makeUnion\(AST\.union\(members,\s*options\?\.mode\s*\?\?\s*"anyOf",\s*undefined\),\s*members\);\s*\}/s,
+        "export function Union(members, options) {\n" +
+        "  if (!Array.isArray(members)) {\n" +
+        "    var _args = Array.prototype.slice.call(arguments);\n" +
+        "    members = _args;\n" +
+        "    options = typeof _args[_args.length - 1] === 'object' && !Array.isArray(_args[_args.length - 1]) && _args.length > 1 ? _args.pop() : undefined;\n" +
+        "  }\n" +
+        "  return makeUnion(AST.union(members, (options && options.mode) || 'anyOf', undefined), members);\n" +
+        "}"
+      )
+      // 4. Guard ALL memoized AST traversal functions against undefined ast.
+      //    bun 1.3.x runtime can leave AST node references as undefined when
+      //    tree-shaking rest-parameter-based schema constructors.  Each
+      //    memoized function (toType, toEncoded, flip, etc.) checks ast.encoding
+      //    on entry and crashes if ast is undefined.
+      //    Only applies to SchemaAST.js to avoid corrupting other files.
+      if (args.path.includes("SchemaAST.js")) {
+        source = source.replace(/=\s*memoize\(\(?\s*\w+\s*\)?\s*=>\s*\{/g,
+          " = memoize((ast) => { if (ast == null) return ast;",
+        )
+      }
+      // 5. Some AST nodes are corrupt (undefined) due to bun's runtime. When
+      //    the guard above returns undefined, downstream code crashes using
+      //    undefined as a WeakMap key.  Patch the recurring functions to skip
+      //    undefined array elements.
+      if (args.path.includes("SchemaAST.js")) {
+        // .recur(f) should skip undefined elements
+        source = source.replace(/\.recur\s*=\s*function\s*\(\s*([^)]+)\)\s*\{/g,
+          ".recur = function($1) { if (this.types) { this.types = this.types.filter(function(t) { return t != null; }); } if (this.elements) { this.elements = this.elements.filter(function(e) { return e != null; }); } if (this.propertySignatures) { this.propertySignatures = this.propertySignatures.filter(function(p) { return p != null; }); }",
+        )
+      }
+      return { contents: source, loader: "js" }
+    })
+  },
+}
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
 
 const createEmbeddedWebUIBundle = async () => {
@@ -165,10 +222,38 @@ for (const item of targets) {
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
+  // Build the server as a plain JS bundle (not compiled) so effect's Schema
+  // system works correctly — bun's --compile step corrupts Schema AST traversal.
+  const serverOutDir = path.resolve(dir, `dist/${name}/bin`)
   await Bun.build({
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
-    plugins: [plugin],
+    plugins: [plugin, effectPlugin],
+    external: ["node-gyp"],
+    format: "esm",
+    target: "bun",
+    minify: true,
+    sourcemap: "none",
+    splitting: false,
+    outdir: serverOutDir,
+    naming: "opencode-server.js",
+    entrypoints: ["./src/index.ts"],
+    define: {
+      FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
+      OPENCODE_VERSION: `'${Script.version}'`,
+      OPENCODE_MODELS_DEV: generated.modelsData,
+      OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
+      OPENCODE_WORKER_PATH: workerPath,
+      OPENCODE_CHANNEL: `'${Script.channel}'`,
+      OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
+    },
+  })
+  console.log(`Server bundle: ${path.join(serverOutDir, "opencode-server.js")}`)
+
+  await Bun.build({
+    conditions: ["bun", "node"],
+    tsconfig: "./tsconfig.json",
+    plugins: [plugin, effectPlugin],
     external: ["node-gyp"],
     format: "esm",
     minify: true,

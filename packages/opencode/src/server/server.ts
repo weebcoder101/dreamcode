@@ -1,5 +1,8 @@
 import "./init-projectors"
 
+import { spawn } from "child_process"
+import { existsSync } from "fs"
+import path from "path"
 import { NodeHttpServer } from "@effect/platform-node"
 import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
@@ -52,10 +55,99 @@ class ListenerServerService extends Context.Service<ListenerServerService, Liste
   "@dreamcode/ListenerServer",
 ) {}
 
+function findServerBundle(): string | undefined {
+  const candidates = [
+    // Next to the binary (release layout)
+    path.join(path.dirname(process.execPath), "opencode-server.js"),
+    // Working directory (dev layout)
+    path.join(process.cwd(), "opencode-server.js"),
+    // Dist relative to project root
+    path.join(path.dirname(process.execPath), "..", "..", "opencode-server.js"),
+  ]
+  for (const c of candidates) {
+    if (existsSync(c)) return c
+  }
+  return
+}
+
 export const Default = lazy(() => {
-  const handler = HttpApiApp.webHandler().handler
+  // bun --compile corrupts effect's Schema AST traversal, making the
+  // in-process webHandler crash on any request.  Spawn the server as a
+  // plain JS bundle (opencode-server.js) via bun subprocess instead.
+  let listener: Listener | undefined
+
+  async function ensureServer(): Promise<Listener> {
+    if (listener) return listener
+
+    // Find the server bundle relative to the current binary
+    const serverPath = findServerBundle()
+    if (!serverPath) {
+      throw new Error(
+        "Server bundle (opencode-server.js) not found. " +
+        "Run with --single or place opencode-server.js next to the binary.",
+      )
+    }
+
+    return new Promise((resolve, reject) => {
+      // The server bundle is a JS file; must spawn via bun
+      const child = spawn("bun", [serverPath, "serve", "--port", "0", "--allow-no-auth"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, OPENCODE_SERVER_PASSWORD: "" },
+      })
+
+      let port: number | undefined
+      const onData = (data: Buffer) => {
+        const text = data.toString()
+        // The server prints "dreamcode server listening on http://X.X.X.X:PORT"
+        const match = text.match(/listening on http:\/\/[^:]+:(\d+)/)
+        if (match) {
+          port = parseInt(match[1], 10)
+          const url = new URL("http://localhost")
+          url.port = String(port)
+          url.hostname = "127.0.0.1"
+          listener = {
+            hostname: "127.0.0.1",
+            port,
+            url,
+            stop: () => { child.kill(); return Promise.resolve() },
+          }
+          resolve(listener)
+        }
+      }
+      child.stdout.on("data", onData)
+      child.stderr.on("data", (data: Buffer) => process.stderr.write(data))
+      child.on("error", reject)
+      child.on("exit", (code) => {
+        if (!port) reject(new Error(`Server exited with code ${code} before announcing port`))
+      })
+      setTimeout(() => {
+        if (!port) { child.kill(); reject(new Error("Server startup timed out")) }
+      }, 30_000)
+    })
+  }
+
   const app: ServerApp = {
-    fetch: (request: Request) => handler(request, HttpApiApp.context),
+    fetch: async (request) => {
+      try {
+        const srv = await ensureServer()
+        const url = new URL(request.url)
+        url.hostname = "127.0.0.1"
+        url.port = String(srv.port)
+        try { process.stderr.write("[PROXY] " + request.method + " " + request.url + "\n") } catch {}
+        return await fetch(new Request(url, {
+          method: request.method,
+          headers: request.headers,
+          body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+          signal: request.signal,
+        }))
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e)
+        return new Response(JSON.stringify({ error: "Server unavailable", detail }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        })
+      }
+    },
     request(input, init) {
       return app.fetch(input instanceof Request ? input : new Request(new URL(input, "http://localhost"), init))
     },
