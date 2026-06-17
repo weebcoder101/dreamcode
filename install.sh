@@ -107,7 +107,7 @@ case "$ARCH" in
 esac
 NATIVE_BIN="dist/opencode-${PLATFORM}-${ARCH}/bin/opencode"
 if [ -f "$NATIVE_BIN" ]; then
-  ln -sf "$(pwd)/$NATIVE_BIN" "$(pwd)/bin/.opencode"
+  ln -sf "../dist/opencode-${PLATFORM}-${ARCH}/bin/opencode" "$(pwd)/bin/.opencode"
   echo -e "${GREEN}Linked native binary: ${PLATFORM}-${ARCH}${NC}"
 fi
 
