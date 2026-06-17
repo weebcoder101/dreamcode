@@ -1,0 +1,48 @@
+{
+  "id": "todo-1781735993052",
+  "sessionId": "ses_12861cfedffeVL3Qgdu97y0P43",
+  "items": [
+    {
+      "id": "1",
+      "content": "Fix absolute path symlink → relative path",
+      "status": "in_progress",
+      "priority": "high",
+      "createdAt": "2026-06-17T22:39:53.052Z",
+      "updatedAt": "2026-06-17T22:39:53.052Z"
+    },
+    {
+      "id": "2",
+      "content": "Fix install.sh to create relative symlinks",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-17T22:39:53.052Z",
+      "updatedAt": "2026-06-17T22:39:53.052Z"
+    },
+    {
+      "id": "3",
+      "content": "Delete v1.2.2 release and tag, recommit with fix",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-17T22:39:53.052Z",
+      "updatedAt": "2026-06-17T22:39:53.052Z"
+    },
+    {
+      "id": "4",
+      "content": "Push fixed commit and recreate release",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-17T22:39:53.052Z",
+      "updatedAt": "2026-06-17T22:39:53.052Z"
+    },
+    {
+      "id": "5",
+      "content": "Persist to Pieces LTM",
+      "status": "pending",
+      "priority": "medium",
+      "createdAt": "2026-06-17T22:39:53.052Z",
+      "updatedAt": "2026-06-17T22:39:53.052Z"
+    }
+  ],
+  "createdAt": "2026-06-17T22:39:53.052Z",
+  "updatedAt": "2026-06-17T22:39:53.052Z"
+}
