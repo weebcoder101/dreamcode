@@ -1,56 +1,72 @@
 {
-  "id": "todo-1781755912334",
+  "id": "todo-1781759347569",
   "sessionId": "ses_12730b9a5ffeWjBaS0YFoydt0o",
   "items": [
     {
       "id": "item-0",
-      "content": "Create /research command file",
-      "status": "completed",
+      "content": "Read critical source files (prompt.ts, task.ts, overflow.ts, context-compressor.ts, publish-llm-event.ts)",
+      "status": "in_progress",
       "priority": "high",
-      "createdAt": "2026-06-18T04:11:52.334Z",
-      "updatedAt": "2026-06-18T04:11:52.334Z"
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
     },
     {
       "id": "item-1",
-      "content": "Create /deep-research command file",
-      "status": "completed",
+      "content": "Implement Fix 3: Smart subagent context extraction (replace raw msgs with compacted summary)",
+      "status": "pending",
       "priority": "high",
-      "createdAt": "2026-06-18T04:11:52.334Z",
-      "updatedAt": "2026-06-18T04:11:52.334Z"
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
     },
     {
       "id": "item-2",
-      "content": "Remove persona cap (prompt.ts)",
-      "status": "in_progress",
+      "content": "Implement Fix 4: First-query subagent model cost warning",
+      "status": "pending",
       "priority": "high",
-      "createdAt": "2026-06-18T04:11:52.334Z",
-      "updatedAt": "2026-06-18T04:11:52.334Z"
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
     },
     {
       "id": "item-3",
-      "content": "Remove burst rate limit (task.ts)",
+      "content": "Add /subagent slash command",
       "status": "pending",
       "priority": "high",
-      "createdAt": "2026-06-18T04:11:52.334Z",
-      "updatedAt": "2026-06-18T04:11:52.334Z"
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
     },
     {
       "id": "item-4",
-      "content": "Remove per-response spawn cap (prompt.ts)",
+      "content": "Update About/AGENTS.md with subagent cost guidance",
       "status": "pending",
-      "priority": "high",
-      "createdAt": "2026-06-18T04:11:52.334Z",
-      "updatedAt": "2026-06-18T04:11:52.334Z"
+      "priority": "medium",
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
     },
     {
       "id": "item-5",
-      "content": "Commit, push, create release v1.2.3",
+      "content": "Add compaction threshold cap for 1M-context models",
       "status": "pending",
       "priority": "high",
-      "createdAt": "2026-06-18T04:11:52.334Z",
-      "updatedAt": "2026-06-18T04:11:52.334Z"
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
+    },
+    {
+      "id": "item-6",
+      "content": "Fix cost tracking in publish-llm-event.ts",
+      "status": "pending",
+      "priority": "medium",
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
+    },
+    {
+      "id": "item-7",
+      "content": "Push everything and build binary",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-18T05:09:07.567Z",
+      "updatedAt": "2026-06-18T05:09:07.567Z"
     }
   ],
-  "createdAt": "2026-06-18T04:11:52.334Z",
-  "updatedAt": "2026-06-18T04:11:52.334Z"
+  "createdAt": "2026-06-18T05:09:07.567Z",
+  "updatedAt": "2026-06-18T05:09:07.567Z"
 }
