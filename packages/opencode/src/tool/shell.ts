@@ -369,7 +369,8 @@ export const ShellTool = Tool.define(
         }
         return FSUtil.normalizePath(path.resolve(root, FSUtil.windowsPath(text)))
       }
-      return path.resolve(root, text)
+      const expanded = text.startsWith("~") ? path.join(os.homedir(), text.slice(1)) : text
+      return path.resolve(root, expanded)
     })
 
     const argPath = Effect.fn("ShellTool.argPath")(function* (arg: string, cwd: string, ps: boolean, shell: string) {
@@ -567,7 +568,7 @@ export const ShellTool = Tool.define(
           return exit.kind === "exit" ? exit.code : null
         }),
       ).pipe(
-        Effect.catchAll((error) => {
+        Effect.catch((error) => {
           const msg = error instanceof Error ? error.message : String(error)
           last = preview(`shell tool error: ${msg}`)
           return Effect.succeed(null as number | null)

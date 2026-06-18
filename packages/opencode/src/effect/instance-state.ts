@@ -15,7 +15,10 @@ export interface InstanceState<A, E = never, R = never> {
 
 export const context = Effect.gen(function* () {
   const ctx = yield* InstanceRef
-  if (!ctx) return FallbackContext
+  if (!ctx) {
+    yield* Effect.logWarning("InstanceState using FallbackContext — InstanceRef is undefined. process.cwd() may mismatch project root.")
+    return FallbackContext
+  }
   return ctx
 })
 
