@@ -59,7 +59,9 @@ export const make = <A, E = never, R = never>(
           return yield* init(ctx)
         }),
       timeToLive: (exit) => {
-        if (Exit.isSuccess(exit)) return Duration.hours(1)
+        // Extended TTL to reduce cache misses during long sessions.
+        // Active sessions keep calling InstanceState.get() which refreshes the TTL.
+        if (Exit.isSuccess(exit)) return Duration.hours(4)
         return Duration.seconds(30)
       },
       requireServicesAt: "lookup",

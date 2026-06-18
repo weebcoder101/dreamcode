@@ -220,6 +220,18 @@ export function evaluateSpawnNecessity(
   const reasons: string[] = []
   let score = 0
 
+  // 0. User-specified agent count — if the prompt explicitly requests N subagents,
+  //    honor that as a hard override (up to RATE_MAX_SPAWNS).
+  const userCountMatch = prompt.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
+  const userCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), 7) : 0
+  if (userCount > 0) {
+    return {
+      shouldSpawn: true,
+      reason: `User explicitly requested ${userCount} specialist agents`,
+      suggestedCount: userCount,
+    }
+  }
+
   // 1. Social greetings — never spawn for "hello", "thanks", etc.
   if (result.is_social_greeting) {
     return { shouldSpawn: false, reason: "Social greeting — no specialists needed", suggestedCount: 0 }
@@ -288,7 +300,7 @@ export function evaluateSpawnNecessity(
 
   const shouldSpawn = score >= 2
   const suggestedCount = shouldSpawn
-    ? Math.min(3, Math.max(1, Math.ceil(score / 2)))
+    ? Math.min(5, Math.max(1, Math.ceil(score / 2)))
     : 0
 
   return {
@@ -346,7 +358,7 @@ function selectPersonas(result: SensorGateResult): Persona[] {
     if (!hasOverlap) deduped.push(candidate)
   }
 
-  // Dynamic depth-based count
+  // Dynamic depth-based count — now supports up to 5 specialists
   const dd = depthScore(result)
   let count: number
   if (mode === "DREAM_INNOVATION") {
@@ -354,7 +366,7 @@ function selectPersonas(result: SensorGateResult): Persona[] {
   } else if (mode === "TRIVIAL") {
     count = 1
   } else {
-    count = Math.min(3, Math.max(1, Math.ceil(dd * 1.2)))
+    count = Math.min(5, Math.max(1, Math.ceil(dd * 1.2)))
   }
   count = Math.min(count, deduped.length)
 

@@ -1278,15 +1278,6 @@ Before every response, verify your reasoning:
             continue
           }
 
-          if (
-            lastFinished &&
-            lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
-          ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
-            continue
-          }
-
           const agent = yield* agents.get(lastUser.agent)
           if (!agent) {
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -1295,6 +1286,19 @@ Before every response, verify your reasoning:
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
+
+          // Subagents should NOT trigger auto-compaction — they do focused work
+          // and compaction during their execution is costly and disruptive.
+          if (
+            agent.mode !== "subagent" &&
+            lastFinished &&
+            lastFinished.summary !== true &&
+            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+          ) {
+            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+            continue
+          }
+
           const maxSteps = agent.steps ?? Infinity
           const isLastStep = step >= maxSteps
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
@@ -1614,39 +1618,11 @@ Before every response, verify your reasoning:
                           // Build compacted context for this persona — file paths, recent exchange, current task
                           const contextBlock = buildSubagentContextPrompt(subagentCtx)
 
-                          // Reorder prompt for cache efficiency: static sections first so
-                          // all concurrent persona calls share the same KV-cache prefix.
+                          // Cache-optimized prompt ordering: STATIC sections first so all
+                          // concurrent persona calls share the same KV-cache prefix.
+                          // Persona-specific identity is pushed to the end.
                           const personaPrompt = [
-                            `You are "${persona.name}" — ${persona.role}.`,
-                            `Your focus area: ${persona.focus}.`,
-                            "",
-                            `## Task`,
-                            persona.task || `Analyze the following task from your ${persona.role} perspective.`,
-                            goalsBlock,
-                            "",
-                            // Static: other specialists info (same for all calls)
-                            otherContext,
-                            // Static: guiding steps
-                            "## Your Guiding Steps",
-                            `1. Focus specifically on: ${persona.focus}`,
-                            "2. Identify issues in your domain with file:line references",
-                            "3. Provide actionable recommendations with code snippets",
-                            "4. Flag any blockers that would prevent implementation",
-                            "",
-                            // Dynamic (different per persona): neuro result at end
-                            ...(persona.neuroResult ? [
-                              "## NEURO Analysis",
-                              persona.neuroResult,
-                              "",
-                              "Use this analysis to inform your findings.",
-                              "",
-                            ] : []),
-                            // Context block: smart compacted version of conversation
-                            contextBlock,
-                            "",
-                            `## User Prompt`,
-                            userText.trim(),
-                            "",
+                            // === STATIC SECTIONS (identical for all concurrent personas) ===
                             "## Output Requirements",
                             "Provide your findings as a STRUCTURED ANALYSIS with:",
                             "1. **Summary**: One paragraph overview of your findings",
@@ -1658,8 +1634,38 @@ Before every response, verify your reasoning:
                             "Do not repeat findings from other specialists.",
                             "Do not attempt to produce a final answer — produce a focused specialist report.",
                             "",
+                            "## Your Guiding Steps",
+                            "1. Focus specifically on your assigned focus area",
+                            "2. Identify issues in your domain with file:line references",
+                            "3. Provide actionable recommendations with code snippets",
+                            "4. Flag any blockers that would prevent implementation",
+                            "",
+                            // Static: other specialists info (same for all calls)
+                            otherContext,
+                            "",
                             `## Synthesis Guide`,
-                            persona.synthesisGuide || `When synthesizing, include your findings on ${persona.focus}.`,
+                            persona.synthesisGuide || `When synthesizing, include your findings on your focus area.`,
+                            "",
+                            // === SEMI-STATIC: context block (same for all personas in same turn) ===
+                            contextBlock,
+                            "",
+                            "## User Prompt",
+                            userText.trim(),
+                            "",
+                            // === DYNAMIC SECTIONS (diverges per persona) at the very end ===
+                            `## Your Identity`,
+                            `You are "${persona.name}" — ${persona.role}.`,
+                            `Your focus area: ${persona.focus}.`,
+                            "",
+                            `## Task`,
+                            persona.task || `Analyze the following task from your ${persona.role} perspective.`,
+                            goalsBlock,
+                            ...(persona.neuroResult ? [
+                              "",
+                              "## NEURO Analysis",
+                              persona.neuroResult,
+                              "Use this analysis to inform your findings.",
+                            ] : []),
                           ].join("\n")
 
                            const markComplete = (status: "completed" | "error", output: string, extraMeta?: Record<string, any>) =>

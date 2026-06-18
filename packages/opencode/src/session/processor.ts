@@ -973,9 +973,11 @@ export const layer = Layer.effect(
             yield* status.set(ctx.sessionID, { type: "busy" })
             const stream = llm.stream(streamInput)
 
+            // NEVER cut the stream mid-response — let the response complete
+            // naturally. Compaction is checked AFTER the stream drains so the
+            // model finishes its thought before any context reduction happens.
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
-              Stream.takeUntil(() => ctx.needsCompaction),
               Stream.runDrain,
             )
           }).pipe(

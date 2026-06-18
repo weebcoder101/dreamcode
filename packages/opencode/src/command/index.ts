@@ -105,7 +105,7 @@ export const layer = Layer.effect(
         get template() {
           return PROMPT_RESEARCH
         },
-        subtask: true,
+        subtask: false,
         hints: hints(PROMPT_RESEARCH),
       }
       commands[Default.SUBAGENT] = {
