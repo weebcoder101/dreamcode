@@ -1,0 +1,56 @@
+{
+  "id": "todo-1781755912334",
+  "sessionId": "ses_12730b9a5ffeWjBaS0YFoydt0o",
+  "items": [
+    {
+      "id": "item-0",
+      "content": "Create /research command file",
+      "status": "completed",
+      "priority": "high",
+      "createdAt": "2026-06-18T04:11:52.334Z",
+      "updatedAt": "2026-06-18T04:11:52.334Z"
+    },
+    {
+      "id": "item-1",
+      "content": "Create /deep-research command file",
+      "status": "completed",
+      "priority": "high",
+      "createdAt": "2026-06-18T04:11:52.334Z",
+      "updatedAt": "2026-06-18T04:11:52.334Z"
+    },
+    {
+      "id": "item-2",
+      "content": "Remove persona cap (prompt.ts)",
+      "status": "in_progress",
+      "priority": "high",
+      "createdAt": "2026-06-18T04:11:52.334Z",
+      "updatedAt": "2026-06-18T04:11:52.334Z"
+    },
+    {
+      "id": "item-3",
+      "content": "Remove burst rate limit (task.ts)",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-18T04:11:52.334Z",
+      "updatedAt": "2026-06-18T04:11:52.334Z"
+    },
+    {
+      "id": "item-4",
+      "content": "Remove per-response spawn cap (prompt.ts)",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-18T04:11:52.334Z",
+      "updatedAt": "2026-06-18T04:11:52.334Z"
+    },
+    {
+      "id": "item-5",
+      "content": "Commit, push, create release v1.2.3",
+      "status": "pending",
+      "priority": "high",
+      "createdAt": "2026-06-18T04:11:52.334Z",
+      "updatedAt": "2026-06-18T04:11:52.334Z"
+    }
+  ],
+  "createdAt": "2026-06-18T04:11:52.334Z",
+  "updatedAt": "2026-06-18T04:11:52.334Z"
+}

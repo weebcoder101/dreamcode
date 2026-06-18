@@ -4,9 +4,9 @@
 
 ### Configuration
 - `MAX_PERSONA_ROUNDS = 3` (prompt.ts:150) - Maximum rounds of specialist analysis
-- Max personas capped at 5 (prompt.ts:1404) - Prevents oversaturation
 - `personaRoundMap` tracks rounds per session (prompt.ts:149)
 - `sensorGateFiredMap` persists across messages (prompt.ts:148)
+- No persona count cap — all personas from sensor gate are spawned
 
 ### Efficiency Rules
 - Agent should complete analysis in ONE round if possible

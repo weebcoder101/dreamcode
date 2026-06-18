@@ -124,9 +124,7 @@ export const TaskTool = Tool.define(
       })
 
     const activeSubagentSessions = yield* Ref.make(new Set<SessionID>())
-    const spawningBudget = yield* Ref.make(new Map<SessionID, { count: number; time: number }>())
     const depthCache = yield* Ref.make(new Map<SessionID, number>())
-    const MAX_SPAWNS_PER_BURST = 3
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -206,24 +204,6 @@ export const TaskTool = Tool.define(
         })
         return yield* Effect.fail(
           new Error(`Too many active subagents (${currentSubagents}) for parent session. Max is ${maxConcurrent}.`),
-        )
-      }
-
-      const budgetAvailable = yield* Ref.modify(spawningBudget, (map) => {
-        const now = Date.now()
-        const entry = map.get(ctx.sessionID)
-        const burstWindow = 30_000 // 30s window
-        if (entry && (now - entry.time) < burstWindow) {
-          if (entry.count >= MAX_SPAWNS_PER_BURST) return [false, map] as const
-          map.set(ctx.sessionID, { count: entry.count + 1, time: now })
-          return [true, map] as const
-        }
-        map.set(ctx.sessionID, { count: 1, time: now })
-        return [true, map] as const
-      })
-      if (!budgetAvailable) {
-        return yield* Effect.fail(
-          new Error(`Subagent spawning burst limit reached (${MAX_SPAWNS_PER_BURST} in 30s).`),
         )
       }
 

@@ -153,9 +153,7 @@ export const layer = Layer.effect(
 
     const sensorGateFiredMap = new Map<SessionID, boolean>()
     const personaRoundMap = new Map<SessionID, number>()
-    const responseSpawnCountMap = new Map<SessionID, number>()
     const MAX_PERSONA_ROUNDS = 3
-    const RESPONSE_SPAWNS_PER_RESPONSE = 5
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
@@ -268,16 +266,6 @@ export const layer = Layer.effect(
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
 
-      // Per-response spawn limit to prevent resource exhaustion
-      const currentSpawnCount = responseSpawnCountMap.get(sessionID) ?? 0
-      if (currentSpawnCount >= RESPONSE_SPAWNS_PER_RESPONSE) {
-        const error = new NamedError.Unknown({
-          message: `Response spawn limit reached (${RESPONSE_SPAWNS_PER_RESPONSE} subagents per response). Synthesize existing results and proceed to implementation.`,
-        })
-        yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-        throw error
-      }
-      responseSpawnCountMap.set(sessionID, currentSpawnCount + 1)
       const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
@@ -1432,15 +1420,11 @@ Before every response, verify your reasoning:
                   system.push(sensorBlock.join("\n"))
 
                   // ─── Persona System Injection ─────────────────────────
-                  // Scale persona cap by confidence: low confidence → more specialists
-                  const maxPersonas = isLowConfidence ? 5 : 3
-                  if (gateResult.personas.length > maxPersonas) gateResult.personas = gateResult.personas.slice(0, maxPersonas)
                   if (gateResult.personas.length > 0) {
                     sensorGateFired = true
                     sensorGateFiredMap.set(sessionID, true)
                     const currentRound = personaRoundMap.get(sessionID) ?? 0
                     personaRoundMap.set(sessionID, currentRound + 1)
-                    responseSpawnCountMap.set(sessionID, 0)
                     const personaLines = [
                       "<persona-system>",
                       `You are the ARCHITECT. You have spawned ${gateResult.personas.length} specialist agent${gateResult.personas.length > 1 ? "s" : ""}:`,
@@ -1473,8 +1457,6 @@ Before every response, verify your reasoning:
                       personaLines.push("")
                       personaLines.push("LOOP SAFETY: Do not re-spawn specialists for the same analysis area.")
                       personaLines.push("Each new round must target a DIFFERENT gap. No duplicate work.")
-                      personaLines.push(`RESPONSE SPAWN LIMIT: You may spawn at most ${RESPONSE_SPAWNS_PER_RESPONSE} subagents per response turn.`)
-                      personaLines.push("If you reach this limit, synthesize existing results and proceed to implementation.")
                     } else {
                       personaLines.push("EFFICIENCY MODE (high confidence task):")
                       personaLines.push("You should complete analysis in ONE round if possible.")

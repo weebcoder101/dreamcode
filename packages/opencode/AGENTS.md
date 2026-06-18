@@ -134,9 +134,9 @@ Plain async code should pass explicit context or stay inside an Effect fiber; do
 
 ### Configuration
 - `MAX_PERSONA_ROUNDS = 3` (src/session/prompt.ts:150) - Maximum rounds of specialist analysis
-- Max personas capped at 5 (src/session/prompt.ts:1404) - Prevents oversaturation
 - `personaRoundMap` tracks rounds per session
 - `sensorGateFiredMap` persists across messages
+- No persona count cap — all personas from sensor gate are spawned
 
 ### Efficiency Rules
 - Agent should complete analysis in ONE round if possible
