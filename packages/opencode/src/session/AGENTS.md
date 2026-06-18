@@ -3,10 +3,27 @@
 ## Persona System
 
 ### Configuration
-- `MAX_PERSONA_ROUNDS = 3` (prompt.ts:150) - Maximum rounds of specialist analysis
-- `personaRoundMap` tracks rounds per session (prompt.ts:149)
-- `sensorGateFiredMap` persists across messages (prompt.ts:148)
-- No persona count cap — all personas from sensor gate are spawned
+- `MAX_PERSONA_ROUNDS = 3` (prompt.ts) - Maximum rounds of specialist analysis
+- `RATE_MAX_SPAWNS = 7` — Max persona spawns per 5-minute rolling window
+- `RATE_WINDOW_MS = 5 * 60 * 1000` — 5-minute rate limit window
+- `personaRoundMap` tracks rounds per session
+- `sensorGateFiredMap` persists across messages
+- `spawnHistory` tracks spawn timestamps for rolling-window rate limiting
+
+### Spawn Necessity Evaluation
+- `evaluateSpawnNecessity()` in sensor-gate.ts checks BEFORE spawning:
+  - Task complexity (risk level, confidence, mode)
+  - Domain diversity (single vs multi-domain)
+  - Prompt characteristics (length, code blocks)
+  - Chain complexity (simple vs multi-step)
+- Simple tasks (high confidence, low risk, single domain) → agent handles directly
+- Multi-domain, high-risk, complex chain tasks → specialists spawned
+
+### Rate Limiting (Runtime Enforced)
+- 7 spawns per 5-minute window per session (rolling window)
+- Checked in code, not just prompt text — hard enforcement
+- Agent sees `<rate-budget>` in system prompt for self-regulation
+- When limit hit: `<rate-limit>` warning injected, task handled directly
 
 ### Efficiency Rules
 - Agent should complete analysis in ONE round if possible
