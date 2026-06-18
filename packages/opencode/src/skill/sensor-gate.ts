@@ -203,6 +203,101 @@ function overlapCheck(personas: Persona[]): Persona[] {
   })
 }
 
+// ─── Spawn Necessity Evaluation ─────────────────────────────────────
+// Decides whether subagents are actually needed for a given task.
+// Prevents wasting compute on simple tasks that the main agent handles directly.
+
+export interface SpawnEvaluation {
+  shouldSpawn: boolean
+  reason: string
+  suggestedCount: number
+}
+
+export function evaluateSpawnNecessity(
+  result: SensorGateResult,
+  prompt: string,
+): SpawnEvaluation {
+  const reasons: string[] = []
+  let score = 0
+
+  // 1. Social greetings — never spawn for "hello", "thanks", etc.
+  if (result.is_social_greeting) {
+    return { shouldSpawn: false, reason: "Social greeting — no specialists needed", suggestedCount: 0 }
+  }
+
+  // 2. High-confidence low-risk tasks — agent can handle directly
+  if (result.risk_level === "low" && result.confidence > 0.85 && result.mode !== "DREAM_INNOVATION") {
+    return { shouldSpawn: false, reason: "High-confidence low-risk task — agent handles directly", suggestedCount: 0 }
+  }
+
+  // 3. Trivial mode — always skip
+  if (result.mode === "TRIVIAL") {
+    return { shouldSpawn: false, reason: "Trivial task — no specialists needed", suggestedCount: 0 }
+  }
+
+  // 4. Short conversational prompts without code context
+  const hasCodeBlocks = prompt.includes("```") || prompt.includes("src/") || prompt.includes("import ")
+  if (prompt.length < 80 && !hasCodeBlocks) {
+    return { shouldSpawn: false, reason: "Short conversational prompt — agent handles directly", suggestedCount: 0 }
+  }
+
+  // 5. Single domain, no chain complexity
+  const uniqueDomains = new Set(result.domain_tags.filter(Boolean)).size
+  if (uniqueDomains <= 1 && result.chain.length <= 1 && result.risk_level !== "high") {
+    reasons.push("Single domain, no chain — likely solvable without specialists")
+    score -= 2
+  }
+
+  // ─── Positive signals (spawn beneficial) ───
+
+  // Multi-domain tasks benefit from parallel specialist analysis
+  if (uniqueDomains >= 3) {
+    reasons.push("Multi-domain task — benefits from specialists")
+    score += 3
+  }
+
+  // High risk = security/critical review genuinely needed
+  if (result.risk_level === "high") {
+    reasons.push("High risk — security/critical review needed")
+    score += 2
+  }
+
+  // Complex skill chain = parallel analysis beneficial
+  if (result.chain.length >= 3) {
+    reasons.push("Complex skill chain — parallel analysis beneficial")
+    score += 2
+  }
+
+  // DREAM_INNOVATION mode always benefits from specialists
+  if (result.mode === "DREAM_INNOVATION") {
+    reasons.push("Innovation mode — creative analysis from multiple perspectives")
+    score += 2
+  }
+
+  // Medium risk with multiple domains
+  if (result.risk_level === "medium" && uniqueDomains >= 2) {
+    reasons.push("Medium-risk multi-domain task")
+    score += 1
+  }
+
+  // Code-heavy prompts benefit from structured review
+  if (hasCodeBlocks && prompt.length > 200) {
+    reasons.push("Code-heavy prompt — benefits from structured specialist review")
+    score += 1
+  }
+
+  const shouldSpawn = score >= 2
+  const suggestedCount = shouldSpawn
+    ? Math.min(3, Math.max(1, Math.ceil(score / 2)))
+    : 0
+
+  return {
+    shouldSpawn,
+    reason: reasons.join("; ") || (shouldSpawn ? "Task complexity warrants specialist analysis" : "Task is straightforward — agent handles directly"),
+    suggestedCount,
+  }
+}
+
 function depthScore(result: SensorGateResult): number {
   // Compute task depth from multiple signals on a 1-5 scale
   const tags = result.domain_tags.filter(Boolean).length

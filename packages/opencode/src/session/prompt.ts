@@ -33,7 +33,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
-import { SensorGate } from "@/skill/sensor-gate"
+import { SensorGate, evaluateSpawnNecessity } from "@/skill/sensor-gate"
 import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
 import { SessionStatus } from "./status"
@@ -148,12 +148,40 @@ export const layer = Layer.effect(
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
       sensorGateFiredMap.delete(sessionID)
       personaRoundMap.delete(sessionID)
+      spawnHistory.delete(sessionID)
       yield* state.cancel(sessionID)
     })
 
     const sensorGateFiredMap = new Map<SessionID, boolean>()
     const personaRoundMap = new Map<SessionID, number>()
     const MAX_PERSONA_ROUNDS = 3
+
+    // ─── Rolling-Window Rate Limiter ─────────────────────────────────
+    // Max 7 persona spawns per 5-minute window per session.
+    // Prevents compute cost explosion from rapid-fire specialist requests.
+    const RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
+    const RATE_MAX_SPAWNS = 7
+    const spawnHistory = new Map<SessionID, Array<{ timestamp: number; count: number }>>()
+
+    function checkRateLimit(sessionID: SessionID): { allowed: boolean; remaining: number; resetMs: number } {
+      const now = Date.now()
+      const history = spawnHistory.get(sessionID) ?? []
+      const valid = history.filter((e) => now - e.timestamp < RATE_WINDOW_MS)
+      spawnHistory.set(sessionID, valid)
+      const totalSpawns = valid.reduce((sum, e) => sum + e.count, 0)
+      if (totalSpawns >= RATE_MAX_SPAWNS) {
+        const oldestInWindow = valid[0]
+        const resetMs = oldestInWindow ? RATE_WINDOW_MS - (now - oldestInWindow.timestamp) : RATE_WINDOW_MS
+        return { allowed: false, remaining: 0, resetMs }
+      }
+      return { allowed: true, remaining: RATE_MAX_SPAWNS - totalSpawns, resetMs: RATE_WINDOW_MS }
+    }
+
+    function recordSpawn(sessionID: SessionID, count: number) {
+      const history = spawnHistory.get(sessionID) ?? []
+      history.push({ timestamp: Date.now(), count })
+      spawnHistory.set(sessionID, history)
+    }
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
@@ -1421,16 +1449,33 @@ Before every response, verify your reasoning:
 
                   // ─── Persona System Injection ─────────────────────────
                   if (gateResult.personas.length > 0) {
+                    // ─── Spawn Necessity Check ────────────────────────
+                    const spawnEval = evaluateSpawnNecessity(gateResult, userText)
+                    if (!spawnEval.shouldSpawn) {
+                      // Agent handles directly — inject sensor gate info but skip persona spawning
+                      system.push(`\n<spawn-decision>SPAWN SKIPPED: ${spawnEval.reason}. Handle this task directly using the skill plan above.</spawn-decision>`)
+                    } else if (!checkRateLimit(sessionID).allowed) {
+                      // Rate limit hit — skip spawning, inject warning
+                      const rateCheck = checkRateLimit(sessionID)
+                      system.push(`\n<rate-limit>Subagent rate limit reached (${RATE_MAX_SPAWNS} per 5min). ${Math.ceil(rateCheck.resetMs / 1000)}s until reset. Handle the task directly using the skill plan.</rate-limit>`)
+                    } else {
+                    // ─── Proceed with spawning ──────────────────────────
                     sensorGateFired = true
                     sensorGateFiredMap.set(sessionID, true)
                     const currentRound = personaRoundMap.get(sessionID) ?? 0
                     personaRoundMap.set(sessionID, currentRound + 1)
+
+                    // Rate limit: truncate persona count to remaining budget
+                    const rateCheck = checkRateLimit(sessionID)
+                    const personaTeam = gateResult.personas.slice(0, Math.min(spawnEval.suggestedCount, rateCheck.remaining))
+                    recordSpawn(sessionID, personaTeam.length)
+
                     const personaLines = [
                       "<persona-system>",
-                      `You are the ARCHITECT. You have spawned ${gateResult.personas.length} specialist agent${gateResult.personas.length > 1 ? "s" : ""}:`,
+                      `You are the ARCHITECT. You have spawned ${personaTeam.length} specialist agent${personaTeam.length > 1 ? "s" : ""}:`,
                       "",
                     ]
-                    gateResult.personas.forEach((p, i) => {
+                    personaTeam.forEach((p, i) => {
                       personaLines.push(`${i + 1}. "${p.name}" (${p.role})`)
                       personaLines.push(`   Task: ${p.task?.slice(0, 120) || `Analyzing ${p.focus}`}`)
                       if (p.goals?.length) {
@@ -1473,6 +1518,9 @@ Before every response, verify your reasoning:
                       personaLines.push("Most tasks should complete in 1 round. Use round 2 only for critical gaps.")
                     }
                     personaLines.push("</persona-system>")
+                    // Rate limit awareness — tell agent the budget so it self-regulates
+                    const rateNow = checkRateLimit(sessionID)
+                    personaLines.push(`<rate-budget>${rateNow.remaining} of ${RATE_MAX_SPAWNS} specialist spawns remaining in this 5-minute window. Think before spawning: can you solve this directly?</rate-budget>`)
                     system.push(personaLines.join("\n"))
 
                     // ─── ENFORCEMENT: Spawn persona subagents ────────────
@@ -1480,8 +1528,7 @@ Before every response, verify your reasoning:
                     const subtaskOps = yield* ops({ disableTaskTool: true })
                     const generalAgent = yield* agents.get("general")
                     if (generalAgent) {
-                      const tracker = PersonaTracker.create(sessionID, gateResult.personas.length)
-                      const personaTeam = gateResult.personas
+                      const tracker = PersonaTracker.create(sessionID, personaTeam.length)
 
                       const personaAssistantMsg: SessionV1.Assistant = yield* sessions.updateMessage({
                         id: MessageID.ascending(),
@@ -1665,6 +1712,7 @@ Before every response, verify your reasoning:
                       ).pipe(Effect.catchCause((cause) => Effect.void))
                     }
                     // ─── End Enforcement ─────────────────────────────────
+                    } // close else (spawn allowed)
                   }
                   // ─── End Persona System ───────────────────────────────
                 }
