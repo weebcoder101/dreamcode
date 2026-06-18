@@ -129,6 +129,12 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
+
+    // Sanitize text before embedding in system prompt to prevent prompt injection
+    function sanitizeForSystemPrompt(text: string): string {
+      return text.replace(/[<>]/g, (ch) => (ch === "<" ? "&lt;" : "&gt;"))
+    }
+
     const ops = Effect.fn("SessionPrompt.ops")(function* (opts?: { disableTaskTool?: boolean }) {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -147,7 +153,9 @@ export const layer = Layer.effect(
 
     const sensorGateFiredMap = new Map<SessionID, boolean>()
     const personaRoundMap = new Map<SessionID, number>()
+    const responseSpawnCountMap = new Map<SessionID, number>()
     const MAX_PERSONA_ROUNDS = 3
+    const RESPONSE_SPAWNS_PER_RESPONSE = 5
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
@@ -259,6 +267,17 @@ export const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
+
+      // Per-response spawn limit to prevent resource exhaustion
+      const currentSpawnCount = responseSpawnCountMap.get(sessionID) ?? 0
+      if (currentSpawnCount >= RESPONSE_SPAWNS_PER_RESPONSE) {
+        const error = new NamedError.Unknown({
+          message: `Response spawn limit reached (${RESPONSE_SPAWNS_PER_RESPONSE} subagents per response). Synthesize existing results and proceed to implementation.`,
+        })
+        yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+        throw error
+      }
+      responseSpawnCountMap.set(sessionID, currentSpawnCount + 1)
       const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
@@ -1389,48 +1408,52 @@ Before every response, verify your reasoning:
               if (userText.trim() && !isSynthesis) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
                 if (gateResult && !gateResult.is_social_greeting) {
+                  const isLowConfidence = gateResult.confidence < 0.7
+
                   const sensorBlock = [
                     "<sensor-gate>",
                     `Intent: ${gateResult.intent}`,
                     `Mode: ${gateResult.mode}`,
+                    `Confidence: ${gateResult.confidence}`,
                     `Primary Skill: ${gateResult.primary_skill}`,
                     `Support Skills: ${gateResult.support_skills.join(", ")}`,
                     `Chain: ${gateResult.chain.join(" → ")}`,
                     `Guardian: ${gateResult.guardian_decision} (${gateResult.guardian_risk})`,
                     "",
-                    gateResult.skill_plan,
+                    sanitizeForSystemPrompt(gateResult.skill_plan),
                   ]
 
                   // Add neuro analysis if available
                   if (gateResult.neuro_result) {
-                    sensorBlock.push("", "<neuro-analysis>", gateResult.neuro_result, "</neuro-analysis>")
+                    sensorBlock.push("", "<neuro-analysis>", sanitizeForSystemPrompt(gateResult.neuro_result), "</neuro-analysis>")
                   }
 
                   sensorBlock.push("</sensor-gate>")
                   system.push(sensorBlock.join("\n"))
 
                   // ─── Persona System Injection ─────────────────────────
-                  // Cap at 3 to prevent oversaturation and redundant work
-                  if (gateResult.personas.length > 3) gateResult.personas = gateResult.personas.slice(0, 3)
+                  // Scale persona cap by confidence: low confidence → more specialists
+                  const maxPersonas = isLowConfidence ? 5 : 3
+                  if (gateResult.personas.length > maxPersonas) gateResult.personas = gateResult.personas.slice(0, maxPersonas)
                   if (gateResult.personas.length > 0) {
                     sensorGateFired = true
                     sensorGateFiredMap.set(sessionID, true)
                     const currentRound = personaRoundMap.get(sessionID) ?? 0
                     personaRoundMap.set(sessionID, currentRound + 1)
+                    responseSpawnCountMap.set(sessionID, 0)
                     const personaLines = [
                       "<persona-system>",
                       `You are the ARCHITECT. You have spawned ${gateResult.personas.length} specialist agent${gateResult.personas.length > 1 ? "s" : ""}:`,
                       "",
                     ]
-                    for (let i = 0; i < gateResult.personas.length; i++) {
-                      const p = gateResult.personas[i]
+                    gateResult.personas.forEach((p, i) => {
                       personaLines.push(`${i + 1}. "${p.name}" (${p.role})`)
                       personaLines.push(`   Task: ${p.task?.slice(0, 120) || `Analyzing ${p.focus}`}`)
                       if (p.goals?.length) {
                         personaLines.push(`   Goals: ${p.goals.join("; ")}`)
                       }
                       personaLines.push("")
-                    }
+                    })
                     personaLines.push(`This is ROUND ${currentRound + 1} of specialist analysis.`)
                     personaLines.push("Each specialist provides findings asynchronously.")
                     personaLines.push("Their results will arrive as user messages. Wait for them before acting.")
@@ -1440,8 +1463,21 @@ Before every response, verify your reasoning:
                       personaLines.push("After these results arrive, you MUST implement directly.")
                       personaLines.push("The task tool is DISABLED after this round. No more subagents.")
                       personaLines.push("Focus all your effort on implementing the solution now.")
+                    } else if (isLowConfidence) {
+                      personaLines.push("MULTI-ROUND MODE (low confidence task):")
+                      personaLines.push("This task requires thorough multi-round specialist analysis.")
+                      personaLines.push("When specialist results arrive, synthesize and assess coverage.")
+                      personaLines.push("If findings are incomplete or ambiguous, spawn additional specialists to fill gaps.")
+                      personaLines.push(`You have up to ${MAX_PERSONA_ROUNDS} rounds. Use them wisely.`)
+                      personaLines.push("After reaching the round limit or achieving full coverage, IMPLEMENT the solution.")
+                      personaLines.push("")
+                      personaLines.push("LOOP SAFETY: Do not re-spawn specialists for the same analysis area.")
+                      personaLines.push("Each new round must target a DIFFERENT gap. No duplicate work.")
+                      personaLines.push(`RESPONSE SPAWN LIMIT: You may spawn at most ${RESPONSE_SPAWNS_PER_RESPONSE} subagents per response turn.`)
+                      personaLines.push("If you reach this limit, synthesize existing results and proceed to implementation.")
                     } else {
-                      personaLines.push("EFFICIENCY RULE: You should complete analysis in ONE round if possible.")
+                      personaLines.push("EFFICIENCY MODE (high confidence task):")
+                      personaLines.push("You should complete analysis in ONE round if possible.")
                       personaLines.push("Only spawn additional specialists if you find CRITICAL gaps in coverage.")
                       personaLines.push("")
                       personaLines.push("SYNTHESIS & DECISION LOOP:")
@@ -1544,7 +1580,7 @@ Before every response, verify your reasoning:
                                 .filter((m) => m.info.role === "assistant")
                                 .slice(-3)
                                 .flatMap((m) => m.parts.filter((p) => p.type === "text" && !("ignored" in p && p.ignored)))
-                                .map((p) => ("text" in p ? p.text : ""))
+                                .map((p) => ("text" in p ? sanitizeForSystemPrompt(p.text) : ""))
                                 .filter(Boolean)
                                 .join("\n")
                                 .slice(0, 2000)
