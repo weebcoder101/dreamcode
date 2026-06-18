@@ -1,3 +1,7 @@
+---
+description: Configure a cheaper LLM model for subagents to reduce costs
+---
+
 # Subagent Model Selection
 
 ## How this works
