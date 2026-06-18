@@ -279,7 +279,6 @@ export const layer = Layer.effect(
           const dst = path.join(globalSkillsDir, entry)
           await cp(src, dst, { recursive: true }).catch(() => {})
         }
-        yield* Effect.logInfo("synced skills to global config", { from: source, to: globalSkillsDir, count: entries.length })
       },
       catch: (e) => Effect.logError("failed to sync skills to global config", { error: String(e) }),
     }).pipe(Effect.catchAll(() => Effect.void))
