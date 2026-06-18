@@ -1,0 +1,43 @@
+# Subagent Model Configuration
+
+The user wants to configure the LLM model used for subagent tasks.
+
+## How subagents work
+
+Subagents are spawned by the main Agent to perform analysis, research, file reading, and other helper tasks in parallel. Each subagent sends ~200K+ tokens per call, so using a cheaper model for subagents can significantly reduce costs without affecting quality (the parent model still handles synthesis and decision-making).
+
+## Current state
+
+- The parent session model is used for subagents by default.
+- If a custom subagent model was previously set, it is already active.
+
+## Available models
+
+Run `/models` to list saved models, then use `/subagent <providerID>/<modelID>` to set one.
+
+## Recommended cheap models
+
+| Model | Why |
+|-------|-----|
+| deepseek/deepseek-v4-flash | Fast, low cost, good at analysis |
+| openai/mimo-v2.5 | Very low cost, adequate for analysis |
+| openai/gpt-4o | Balances cost and quality |
+
+## User's input
+
+$ARGUMENTS
+
+## What to do
+
+If the user provided a model ID (e.g. `/subagent deepseek/deepseek-v4-flash`):
+- Confirm the selection
+- Tell the user the model is now active for subagent tasks
+- Note: the setting persists for the session
+
+If the user typed `/subagent` with no arguments:
+- Show the help above
+- Check the user's available models from context and list them
+- Ask the user which model they'd like
+
+If the user typed `/subagent off`:
+- Tell them the parent model will be used for subagents (resets to default)
