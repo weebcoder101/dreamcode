@@ -6,6 +6,10 @@ import { ProviderTransform } from "@/provider/transform"
 import type { MessageV2 } from "./message-v2"
 
 const COMPACTION_BUFFER = 20_000
+// Cap compaction threshold so 1M-context models compact proactively.
+// Prevents unbounded context growth (e.g. 213K tokens never compacting
+// because the threshold is 616K for a 1M-context model).
+const MAX_COMPACTION_THRESHOLD = 150_000
 
 export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outputTokenMax?: number }) {
   const context = input.model.limit.context
@@ -14,9 +18,10 @@ export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outpu
   const reserved =
     input.cfg.compaction?.reserved ??
     Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
-  return input.model.limit.input
+  const base = input.model.limit.input
     ? Math.max(0, input.model.limit.input - reserved)
     : Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
+  return Math.min(base, MAX_COMPACTION_THRESHOLD)
 }
 
 export function isOverflow(input: {

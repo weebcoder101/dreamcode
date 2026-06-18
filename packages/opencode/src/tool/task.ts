@@ -16,6 +16,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 import { GlobalBus } from "@/bus/global"
 import { Log } from "@/util"
+import { extractSubagentContext, buildSubagentContextPrompt } from "@/session/subagent-context"
 
 const log = Log.create({ service: "tool.task" })
 
@@ -446,22 +447,6 @@ export const TaskTool = Tool.define(
 )
 
 function buildContextPrompt(messages: SessionV1.WithParts[]): string {
-  const lines = [
-    "<active-context>",
-    "You have access to the parent session's conversation history for context.",
-    "Below are the recent messages from the parent session:",
-    "",
-  ]
-  for (const msg of messages.slice(-20)) {
-    const role = msg.info.role
-    const textParts = msg.parts
-      .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
-      .map((p) => p.text)
-    if (textParts.length > 0) {
-      lines.push(`[${role}]: ${textParts.join("\n")}`)
-      lines.push("")
-    }
-  }
-  lines.push("</active-context>")
-  return lines.join("\n")
+  const subagentCtx = extractSubagentContext(messages)
+  return buildSubagentContextPrompt(subagentCtx)
 }

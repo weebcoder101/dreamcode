@@ -53,3 +53,6 @@ evolution/
 # Local dev artifacts
 .ghostty-web-local/
 .new/
+.dreamcode/context_cache/
+.dreamcode/todos/
+.opencode/git_push.lock

@@ -36,6 +36,7 @@ import { Permission } from "@/permission"
 import { SensorGate, evaluateSpawnNecessity } from "@/skill/sensor-gate"
 import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
+import { extractSubagentContext, buildSubagentContextPrompt } from "./subagent-context"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { Shell } from "@/shell/shell"
@@ -1400,6 +1401,25 @@ Before every response, verify your reasoning:
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
+            // ─── Subagent Model Warning (first query, root session) ─────
+            // Warn user about subagent model costs on the first turn so they
+            // can set a cheaper model via /subagent before any subagents spawn.
+            if (step === 1 && !session.parentID) {
+              system.push([
+                "",
+                "<subagent-cost-warning>",
+                "## Subagent Model Configuration",
+                "",
+                "Subagents currently inherit your parent session model, which may be expensive.",
+                "If you are using a high-cost model, consider configuring a cheaper subagent",
+                "model (e.g. deepseek-v4-flash, mimo-v2.5) to reduce costs.",
+                "",
+                "Use **/subagent** to select a cheaper model from your saved providers,",
+                "or respond with \"keep parent\" to continue using the current model.",
+                "</subagent-cost-warning>",
+              ].join("\n"))
+            }
+
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
             // Runs classification + skill chain selection on every user message.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
@@ -1568,6 +1588,10 @@ Before every response, verify your reasoning:
                         ),
                       )
 
+                      // Extract smart subagent context once for all personas
+                      // instead of passing the full 200K+ token msgs array.
+                      const subagentCtx = extractSubagentContext(msgs)
+
                       yield* Effect.forEach(
                         personaTeam,
                         Effect.fnUntraced(function* (persona, i) {
@@ -1587,6 +1611,11 @@ Before every response, verify your reasoning:
                             ? ["", "## Goals", ...persona.goals.map((g) => `- ${g}`)].join("\n")
                             : ""
 
+                          // Build compacted context for this persona — file paths, recent exchange, current task
+                          const contextBlock = buildSubagentContextPrompt(subagentCtx)
+
+                          // Reorder prompt for cache efficiency: static sections first so
+                          // all concurrent persona calls share the same KV-cache prefix.
                           const personaPrompt = [
                             `You are "${persona.name}" — ${persona.role}.`,
                             `Your focus area: ${persona.focus}.`,
@@ -1595,6 +1624,16 @@ Before every response, verify your reasoning:
                             persona.task || `Analyze the following task from your ${persona.role} perspective.`,
                             goalsBlock,
                             "",
+                            // Static: other specialists info (same for all calls)
+                            otherContext,
+                            // Static: guiding steps
+                            "## Your Guiding Steps",
+                            `1. Focus specifically on: ${persona.focus}`,
+                            "2. Identify issues in your domain with file:line references",
+                            "3. Provide actionable recommendations with code snippets",
+                            "4. Flag any blockers that would prevent implementation",
+                            "",
+                            // Dynamic (different per persona): neuro result at end
                             ...(persona.neuroResult ? [
                               "## NEURO Analysis",
                               persona.neuroResult,
@@ -1602,32 +1641,8 @@ Before every response, verify your reasoning:
                               "Use this analysis to inform your findings.",
                               "",
                             ] : []),
-                            otherContext,
-                            // Context summary from prior analysis (not full conversation)
-                            ...(() => {
-                              const priorFindings = msgs
-                                .filter((m) => m.info.role === "assistant")
-                                .slice(-3)
-                                .flatMap((m) => m.parts.filter((p) => p.type === "text" && !("ignored" in p && p.ignored)))
-                                .map((p) => ("text" in p ? sanitizeForSystemPrompt(p.text) : ""))
-                                .filter(Boolean)
-                                .join("\n")
-                                .slice(0, 2000)
-                              return priorFindings
-                                ? [
-                                  "## Current Context Summary",
-                                  "Prior analysis has identified:",
-                                  priorFindings,
-                                  "",
-                                ]
-                                : []
-                            })(),
-                            // Focused guiding steps for this persona
-                            "## Your Guiding Steps",
-                            `1. Focus specifically on: ${persona.focus}`,
-                            "2. Identify issues in your domain with file:line references",
-                            "3. Provide actionable recommendations with code snippets",
-                            "4. Flag any blockers that would prevent implementation",
+                            // Context block: smart compacted version of conversation
+                            contextBlock,
                             "",
                             `## User Prompt`,
                             userText.trim(),
@@ -1676,7 +1691,7 @@ Before every response, verify your reasoning:
                                     agent: "general",
                                     sessionID,
                                     messageID: personaAssistantMsg.id,
-                                    messages: msgs,
+                                    messages: subagentCtx.recentMessages,
                                     abort: new AbortController().signal,
                                     callID: (part as SessionV1.ToolPart).callID,
                                     extra: { bypassAgentCheck: true, promptOps: subtaskOps },

@@ -128,3 +128,33 @@ code-hardener → lint-fixer → pieces-ltm → automated-learning
 - No postamble. Do not end with "Let me know if you need anything else"
 - One word answers are valid for yes/no questions
 - Code references: `file_path:line_number`
+
+---
+
+## 6. Subagent Cost Optimization (IMPORTANT)
+
+### ⚠️ Warning: Subagents inherit your parent model by default
+
+If you are using a high-cost model (e.g., o1, claude-opus), every subagent spawn
+will cost the same per-token rate. With 3-5 subagents per task, costs multiply
+quickly.
+
+### Recommendations
+
+- **Use `/subagent` to set a cheaper model** for subagents (e.g., deepseek-v4-flash, mimo-v2.5)
+- Low-cost models are perfectly adequate for code analysis, file reading, and research tasks
+- The parent model handles synthesis and decision-making — subagents just need analysis capability
+- On the first query of any session, you will see a prompt asking you to configure a cheaper subagent model
+
+### How to set
+
+```
+/subagent deepseek/deepseek-v4-flash    — Set subagent model
+/subagent off                           — Reset to parent model
+```
+
+### Why this matters
+
+Each persona subagent sends ~200K+ tokens per call. With 3-5 concurrent subagents,
+that's 600K-1M tokens per task round. At premium model rates, this can be
+significantly more expensive than using a cheap model for subagent analysis tasks.

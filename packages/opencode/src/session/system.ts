@@ -88,6 +88,15 @@ export const layer = Layer.effect(
                   ]),
                 "</available_references>",
               ].join("\n"),
+          [
+            "",
+            "<subagent-guidance>",
+            "**Cost Optimization:** Subagents use your parent session model by default.",
+            "If your current model is expensive, configure a cheaper subagent model",
+            "using the /subagent command to reduce costs.",
+            "Recommended low-cost subagent models: deepseek-v4-flash, mimo-v2.5",
+            "</subagent-guidance>",
+          ].join("\n"),
         ].filter((part): part is string => part !== undefined)
       }),
 
