@@ -414,13 +414,41 @@ function parseSensorGateOutput(output: string): SensorGateResult {
   return result
 }
 
+const HOME = process.env.HOME || process.env.USERPROFILE || ""
+
+function resolveSkillsDir(): string {
+  const candidates = [
+    path.join(HOME, ".config", "dreamcode", "skills"),
+    path.join(HOME, ".dreamcode", "skills"),
+    path.join(process.cwd(), ".dreamcode", "skills"),
+    path.join(process.cwd(), ".opencode", "skills"),
+  ]
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir
+    } catch {}
+  }
+  return candidates[0]
+}
+
+function resolveScript(relativePath: string): string | undefined {
+  const skillsDir = resolveSkillsDir()
+  const candidates = [
+    path.join(skillsDir, relativePath),
+    path.join(process.cwd(), ".dreamcode", "skills", relativePath),
+  ]
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p } catch {}
+  }
+  return undefined
+}
+
 const VALID_SCAN_TYPES = new Set(["security", "full_audit", "bug_hunt", "test_gap"])
 
 function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | null {
-  const skillsDir = path.join(projectRoot, ".dreamcode", "skills")
-  const sensorGate = path.join(skillsDir, "chain-orchestrator", "scripts", "sensor_gate.py")
+  const sensorGate = resolveScript("chain-orchestrator/scripts/sensor_gate.py")
 
-  if (!fs.existsSync(sensorGate)) return null
+  if (!sensorGate) return null
 
   const tryRun = (timeoutMs: number): SensorGateResult | null => {
     try {
@@ -443,10 +471,9 @@ function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | 
 }
 
 function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): string | null {
-  const skillsDir = path.join(projectRoot, ".dreamcode", "skills")
-  const neuroHarness = path.join(skillsDir, "neuro", "scripts", "neuro_harness.py")
+  const neuroHarness = resolveScript("neuro/scripts/neuro_harness.py")
 
-  if (!fs.existsSync(neuroHarness)) return null
+  if (!neuroHarness) return null
 
   const tryRun = (timeoutMs: number): string | null => {
     const tmpBase = process.env.XDG_RUNTIME_DIR

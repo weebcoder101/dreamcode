@@ -5,16 +5,59 @@ import * as path from "path"
 import { execFileSync } from "child_process"
 import DESCRIPTION from "./skill.txt"
 
-const PROJECT_ROOT = process.cwd()
-const SKILLS_DIR = path.join(PROJECT_ROOT, ".dreamcode", "skills")
-const SENSOR_GATE = path.join(SKILLS_DIR, "chain-orchestrator", "scripts", "sensor_gate.py")
-const CHAIN_LOG = path.join(PROJECT_ROOT, ".dreamcode", "chain_log.jsonl")
-const SCORE_FILE = path.join(PROJECT_ROOT, "evolution", "agent_score.json")
-const ERROR_LOG = path.join(PROJECT_ROOT, ".dreamcode", "error_log.jsonl")
+const HOME = process.env.HOME || process.env.USERPROFILE || ""
+
+// Resolve skills directory from multiple candidate paths (global config, then CWD-relative)
+function resolveSkillsDir(): string {
+  const candidates = [
+    path.join(HOME, ".config", "dreamcode", "skills"),
+    path.join(HOME, ".dreamcode", "skills"),
+    path.join(process.cwd(), ".dreamcode", "skills"),
+    path.join(process.cwd(), ".opencode", "skills"),
+  ]
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir
+    } catch {}
+  }
+  return candidates[0] // fallback to global config path
+}
+
+const SKILLS_DIR = resolveSkillsDir()
+const CHAIN_LOG = path.join(HOME, ".dreamcode", "chain_log.jsonl")
+const SCORE_FILE = path.join(HOME, ".dreamcode", "evolution", "agent_score.json")
+const ERROR_LOG = path.join(HOME, ".dreamcode", "error_log.jsonl")
+
+function findSensorGate(): string | undefined {
+  const candidates = [
+    path.join(SKILLS_DIR, "chain-orchestrator", "scripts", "sensor_gate.py"),
+    path.join(process.cwd(), ".dreamcode", "skills", "chain-orchestrator", "scripts", "sensor_gate.py"),
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {}
+  }
+  return undefined
+}
+
+const SENSOR_GATE = findSensorGate()
 
 function getAvailableSkills(): string[] {
   try {
-    if (!fs.existsSync(SENSOR_GATE)) return []
+    if (!SENSOR_GATE || !fs.existsSync(SENSOR_GATE)) {
+      // Fallback: scan the skills directory for SKILL.md files
+      if (fs.existsSync(SKILLS_DIR)) {
+        return fs.readdirSync(SKILLS_DIR).filter((d) => {
+          try {
+            return fs.statSync(path.join(SKILLS_DIR, d)).isDirectory()
+          } catch {
+            return false
+          }
+        })
+      }
+      return []
+    }
     const result = execFileSync("python3", [SENSOR_GATE, "--list-skills"], {
       encoding: "utf8",
       timeout: 5000,
@@ -22,20 +65,19 @@ function getAvailableSkills(): string[] {
     }).trim()
     return result.split("\n").filter(Boolean)
   } catch {
-    return [
-      "breakthrough-overdrive-innovation",
-      "automated-learning",
-      "deep-research",
-      "neuro",
-      "code-hardener",
-      "lint-fixer",
-      "pieces-ltm",
-      "security",
-      "testing",
-      "debugging",
-      "research",
-      "documentation",
-    ]
+    // Fallback: scan the skills directory
+    try {
+      if (fs.existsSync(SKILLS_DIR)) {
+        return fs.readdirSync(SKILLS_DIR).filter((d) => {
+          try {
+            return fs.statSync(path.join(SKILLS_DIR, d)).isDirectory()
+          } catch {
+            return false
+          }
+        })
+      }
+    } catch {}
+    return []
   }
 }
 
@@ -47,8 +89,10 @@ function logSkillExecution(skill: string, result: string, score: number) {
     score,
     source: "native-tool",
   }
-  fs.mkdirSync(path.dirname(CHAIN_LOG), { recursive: true })
-  fs.appendFileSync(CHAIN_LOG, JSON.stringify(entry) + "\n")
+  try {
+    fs.mkdirSync(path.dirname(CHAIN_LOG), { recursive: true })
+    fs.appendFileSync(CHAIN_LOG, JSON.stringify(entry) + "\n")
+  } catch {}
 }
 
 function logError(source: string, error: unknown) {
@@ -70,7 +114,7 @@ function recordScore(event: string, points: number, details: string) {
   try {
     const scoreDir = path.dirname(SCORE_FILE)
     fs.mkdirSync(scoreDir, { recursive: true })
-    let score = { total: 0, history: [] as any[] }
+    let score = { total: 0, history: [] as Array<{ timestamp: string; event: string; points: number; total_after: number; details: string }> }
     if (fs.existsSync(SCORE_FILE)) {
       score = JSON.parse(fs.readFileSync(SCORE_FILE, "utf8"))
     }
@@ -90,23 +134,12 @@ function recordScore(event: string, points: number, details: string) {
 }
 
 function sanitizeSensorGateOutput(raw: string): string {
-  const lines: string[] = []
-  for (const line of raw.split("\n")) {
-    if (line.startsWith("[SENSOR]") || line.startsWith("[GUARDIAN]") || line.startsWith("[ENFORCEMENT]") || line.startsWith("[AGENTS.md]")) {
-      continue
-    }
-    if (line.startsWith("Skill Plan:") || line.startsWith("=") || line.includes("AGENT INSTRUCTIONS")) {
-      continue
-    }
-    const trimmed = line.trim()
-    if (trimmed.startsWith("- intent:") || trimmed.startsWith("- primary:") || trimmed.startsWith("- supports:") || trimmed.startsWith("- mode:") || trimmed.startsWith("- chain:") || trimmed.startsWith("- decision:") || trimmed.startsWith("- risk_level:")) {
-      lines.push(trimmed)
-    }
-  }
-  if (lines.length === 0) {
-    return "Sensor gate completed (internal details suppressed)"
-  }
-  return lines.join("\n")
+  const lines = raw.split("\n")
+    .filter(line => !line.startsWith("[SENSOR]") && !line.startsWith("[GUARDIAN]") && !line.startsWith("[ENFORCEMENT]") && !line.startsWith("[AGENTS.md]"))
+    .filter(line => !line.startsWith("Skill Plan:") && !line.startsWith("=") && !line.includes("AGENT INSTRUCTIONS"))
+    .map(line => line.trim())
+    .filter(trimmed => trimmed.startsWith("- intent:") || trimmed.startsWith("- primary:") || trimmed.startsWith("- supports:") || trimmed.startsWith("- mode:") || trimmed.startsWith("- chain:") || trimmed.startsWith("- decision:") || trimmed.startsWith("- risk_level:"))
+  return lines.length > 0 ? lines.join("\n") : "Sensor gate completed (internal details suppressed)"
 }
 
 export const Parameters = Schema.Struct({
@@ -136,7 +169,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
           const skillName = params.name ?? params.skill ?? ""
           const runGate = params.run_sensor_gate !== false
 
-          if (runGate && fs.existsSync(SENSOR_GATE)) {
+          if (runGate && SENSOR_GATE && fs.existsSync(SENSOR_GATE)) {
             try {
               const gateResult = execFileSync(
                 "python3",

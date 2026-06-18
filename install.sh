@@ -150,9 +150,30 @@ YAML
 fi
 
 # ─── DreamCode directories ──────────────────────────────────
-DREAMCODE_DIR="$HOME/.dreamcode"
-mkdir -p "$DREAMCODE_DIR/skills" "$DREAMCODE_DIR/config" "$DREAMCODE_DIR/scripts" "$DREAMCODE_DIR/automations" "$DREAMCODE_DIR/automations/prompts"
-echo -e "${GREEN}Created dreamcode directories at $DREAMCODE_DIR${NC}"
+mkdir -p "$INSTALL_DIR/skills" "$INSTALL_DIR/config" "$INSTALL_DIR/scripts" "$INSTALL_DIR/automations" "$INSTALL_DIR/automations/prompts"
+echo -e "${GREEN}Created dreamcode directories at $INSTALL_DIR${NC}"
+
+# ─── Install skills to global config (so they work from ANY directory) ──
+CONFIG_SKILLS="$HOME/.config/dreamcode/skills"
+REPO_SKILLS="$INSTALL_DIR/.dreamcode/skills"
+REPO_SKILLS_ALT="$INSTALL_DIR/.opencode/skills"
+mkdir -p "$CONFIG_SKILLS"
+if [ -d "$REPO_SKILLS" ]; then
+  cp -r "$REPO_SKILLS/"* "$CONFIG_SKILLS/" 2>/dev/null || true
+  echo -e "${GREEN}Installed $(ls "$REPO_SKILLS" 2>/dev/null | wc -l) skills to $CONFIG_SKILLS${NC}"
+elif [ -d "$REPO_SKILLS_ALT" ]; then
+  cp -r "$REPO_SKILLS_ALT/"* "$CONFIG_SKILLS/" 2>/dev/null || true
+  echo -e "${GREEN}Installed $(ls "$REPO_SKILLS_ALT" 2>/dev/null | wc -l) skills to $CONFIG_SKILLS${NC}"
+else
+  echo -e "${ORANGE}WARN: No skills found in repo to install${NC}"
+fi
+# Also copy scripts and automations if they exist
+if [ -d "$INSTALL_DIR/.dreamcode/scripts" ]; then
+  cp -r "$INSTALL_DIR/.dreamcode/scripts/"* "$INSTALL_DIR/scripts/" 2>/dev/null || true
+fi
+if [ -d "$INSTALL_DIR/.dreamcode/automations" ]; then
+  cp -r "$INSTALL_DIR/.dreamcode/automations/"* "$INSTALL_DIR/automations/" 2>/dev/null || true
+fi
 
 # ─── Verify ─────────────────────────────────────────────────
 echo ""

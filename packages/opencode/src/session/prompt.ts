@@ -1388,7 +1388,7 @@ Before every response, verify your reasoning:
 
               if (userText.trim() && !isSynthesis) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
-                if (gateResult && !gateResult.is_social_greeting && gateResult.confidence < 0.7) {
+                if (gateResult && !gateResult.is_social_greeting) {
                   const sensorBlock = [
                     "<sensor-gate>",
                     `Intent: ${gateResult.intent}`,

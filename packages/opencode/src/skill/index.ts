@@ -255,6 +255,35 @@ export const layer = Layer.effect(
     const fsys = yield* FSUtil.Service
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
+
+    // First-run skill sync: if global config skills dir is empty, try to copy
+    // from the install directory so skills work from any CWD.
+    const globalSkillsDir = path.join(global.home, ".config", "dreamcode", "skills")
+    const installSkillsDir = path.join(global.home, ".dreamcode", "skills")
+    const repoSkillsDir = path.join(global.home, "dreamcode", ".dreamcode", "skills")
+    yield* Effect.tryPromise({
+      try: async () => {
+        const { stat, mkdir, readdir, cp } = await import("fs/promises")
+        const globalEmpty = !(await stat(globalSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+        if (!globalEmpty) return
+        const source = (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+          ? installSkillsDir
+          : (await stat(repoSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+            ? repoSkillsDir
+            : undefined
+        if (!source) return
+        await mkdir(globalSkillsDir, { recursive: true })
+        const entries = await readdir(source)
+        for (const entry of entries) {
+          const src = path.join(source, entry)
+          const dst = path.join(globalSkillsDir, entry)
+          await cp(src, dst, { recursive: true }).catch(() => {})
+        }
+        yield* Effect.logInfo("synced skills to global config", { from: source, to: globalSkillsDir, count: entries.length })
+      },
+      catch: (e) => Effect.logError("failed to sync skills to global config", { error: String(e) }),
+    }).pipe(Effect.catchAll(() => Effect.void))
+
     const discovered = yield* InstanceState.make(
       Effect.fn("Skill.discovery")(function* (ctx) {
         return yield* discoverSkills(
