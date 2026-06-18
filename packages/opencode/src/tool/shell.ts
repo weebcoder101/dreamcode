@@ -557,16 +557,22 @@ export const ShellTool = Tool.define(
 
           if (exit.kind === "abort") {
             aborted = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.catch(() => Effect.void))
           }
           if (exit.kind === "timeout") {
             expired = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.catch(() => Effect.void))
           }
 
           return exit.kind === "exit" ? exit.code : null
         }),
-      ).pipe(Effect.orDie)
+      ).pipe(
+        Effect.catchAll((error) => {
+          const msg = error instanceof Error ? error.message : String(error)
+          last = preview(`shell tool error: ${msg}`)
+          return Effect.succeed(null as number | null)
+        }),
+      )
 
       const meta: string[] = []
       if (expired) {
