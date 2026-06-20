@@ -102,6 +102,8 @@ export type PromptState = {
   bind: (area?: TextareaRenderable) => void
 }
 
+const isSubagentSlash = (name: string) => name === "subagent" || name === "subagents"
+
 function clamp(rows: number): number {
   return Math.max(TEXTAREA_MIN_ROWS, Math.min(TEXTAREA_MAX_ROWS, rows))
 }
@@ -406,6 +408,7 @@ export function createPromptState(input: PromptInput): PromptState {
       { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
       { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
       { kind: "slash", name: "subagent", display: "/subagent", description: "switch subagent model" } satisfies SlashOption,
+      { kind: "slash", name: "subagents", display: "/subagents", description: "switch subagent model" } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     const showSkillMenu = !shell() && skillCommands().length > 0 && !hasSkillsCommand()
@@ -828,6 +831,18 @@ export function createPromptState(input: PromptInput): PromptState {
   }
 
   const select = (item?: PromptOption) => {
+    // Always check for /subagent[s] by text content before relying on option
+    // ordering, which can be racey when query() hasn't propagated yet.
+    if (!item && area && !area.isDestroyed) {
+      const currentText = area.plainText
+      const head = slashHead(currentText)
+      if (head && isSubagentSlash(head.name)) {
+        cancelAutocomplete()
+        input.onSubagentModel()
+        return
+      }
+    }
+
     const next = item ?? options()[menu.selected()]
     if (!next || !area || area.isDestroyed) {
       return
@@ -841,7 +856,7 @@ export function createPromptState(input: PromptInput): PromptState {
         return
       }
 
-      if (next.name === "subagent") {
+      if (isSubagentSlash(next.name)) {
         cancelAutocomplete()
         input.onSubagentModel()
         return
@@ -1174,23 +1189,25 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
 
-    // Handle /subagent BEFORE parseSlashCommand to avoid wasted IPC call
+    // Handle /subagent /subagents BEFORE parseSlashCommand to avoid wasted IPC call
     const head = slashHead(next.text)
-    if (head && head.name === "subagent") {
+    if (head && isSubagentSlash(head.name)) {
       const arg = head.arguments?.trim()
       if (!arg) {
         input.onSubagentModel()
+        resetDraft()
+        return
+      }
+      const slash = arg.indexOf("/")
+      if (slash > 0 && slash < arg.length - 1) {
+        const providerID = arg.slice(0, slash)
+        const modelID = arg.slice(slash + 1)
+        input.onSubagentModelSelect({ providerID, modelID })
+        input.onStatus(`subagent model set to ${modelID}`)
       } else {
-        const slash = arg.indexOf("/")
-        if (slash > 0 && slash < arg.length - 1) {
-          const providerID = arg.slice(0, slash)
-          const modelID = arg.slice(slash + 1)
-          input.onSubagentModelSelect({ providerID, modelID })
-          input.onStatus(`subagent model: ${providerID}/${modelID}`)
-        } else {
-          input.onStatus(`invalid model format, expected providerID/modelID`)
-          input.onSubagentModel()
-        }
+        input.onStatus("invalid subagent format — use provider/model, e.g. openai/gpt-4")
+        input.onSubagentModel()
+        return
       }
       push(next)
       resetDraft()

@@ -459,7 +459,7 @@ export function RunCommandMenuBody(props: {
         : []),
     ]
     const commands = (props.commands() ?? [])
-      .filter((item) => item.source !== "skill" && !builtins.includes(item.name))
+      .filter((item) => item.source !== "skill" && !builtins.includes(item.name) && item.name !== "subagent" && item.name !== "subagents")
       .map(
         (item) =>
           ({
@@ -973,6 +973,7 @@ export function RunModelSelectBody(props: {
   current: Accessor<RunInput["model"]>
   onClose: () => void
   onSelect: (model: NonNullable<RunInput["model"]>) => void
+  title?: string
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
@@ -1058,7 +1059,7 @@ export function RunModelSelectBody(props: {
   return (
     <PanelShell
       id="run-direct-footer-model-panel"
-      title="Select model"
+      title={props.title ?? "Select model"}
       query={query()}
       count={items().length}
       total={entries().length}

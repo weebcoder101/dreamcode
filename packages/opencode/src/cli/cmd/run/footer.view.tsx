@@ -739,6 +739,10 @@ export function RunFooterView(props: RunFooterViewProps) {
                               closePanel()
                             }}
                             onCommand={(name) => {
+                              if (name === "subagent" || name === "subagents") {
+                                openSubagentModel()
+                                return
+                              }
                               composer.submitText(`/${name}`)
                               closePanel()
                             }}
@@ -785,6 +789,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                             providers={props.providers}
                             current={props.currentSubagentModel}
                             onClose={closePanel}
+                            title="Select subagent model"
                             onSelect={(model) => {
                               props.onSubagentModelSelect(model)
                               closePanel()

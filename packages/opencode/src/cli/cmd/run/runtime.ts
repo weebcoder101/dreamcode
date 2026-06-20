@@ -320,11 +320,6 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
     },
     onSubagentModelSelect: (model) => {
-      const exists = state.providers.some((p) => p.id === model.providerID && model.modelID in p.models)
-      if (!exists) {
-        shell.footer.setStatus(`subagent model not available: ${model.providerID}/${model.modelID}`)
-        return
-      }
       state.subagentModel = model
       saveSubagentModel(model)
     },
@@ -663,7 +658,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         let outputAnchor: LocalReplayAnchor | undefined
         try {
           const next = await ensureStream()
-          await next.handle.runPromptTurn({
+            await next.handle.runPromptTurn({
             agent: state.agent,
             model: state.model,
             variant: state.activeVariant,

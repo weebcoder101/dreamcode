@@ -835,6 +835,7 @@ export class RunFooter implements FooterApi {
 
     this.setCurrentSubagentModel(model)
     this.options.onSubagentModelSelect?.(model)
+    this.setNotice(`subagent model set to ${model.modelID}`)
   }
 
   private handleModelSelect = (model: NonNullable<RunInput["model"]>): void => {
