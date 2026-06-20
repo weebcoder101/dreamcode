@@ -183,26 +183,11 @@ const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (scr
   }
 })
 
-const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/
-
 export const Parameters = Schema.Struct({
-  name: Schema.String
-    .annotate({ description: "Skill name from the 37-skill graph" })
-    .pipe(Schema.nonEmpty())
-    .pipe(Schema.maxLength(128))
-    .pipe(Schema.pattern(SKILL_NAME_PATTERN)),
-  skill: Schema.optional(
-    Schema.String
-      .pipe(Schema.maxLength(128))
-      .pipe(Schema.pattern(SKILL_NAME_PATTERN)),
-  ).annotate({ description: "Skill name (deprecated, use name)" }),
-  prompt: Schema.String
-    .pipe(Schema.maxLength(100_000))
-    .annotate({ description: "Task prompt to pass to the skill" }),
-  // Phase 3: Default run_sensor_gate to false — sensor gate classification
-  // already happens in prompt.ts before the LLM is invoked. Only run when
-  // explicitly requested or when this tool is called directly by the user.
-  run_sensor_gate: Schema.optionalWithDefault(Schema.Boolean, { default: () => false }).annotate({
+  name: Schema.String.annotate({ description: "Skill name from the 37-skill graph" }),
+  skill: Schema.optional(Schema.String).annotate({ description: "Skill name (deprecated, use name)" }),
+  prompt: Schema.String.annotate({ description: "Task prompt to pass to the skill" }),
+  run_sensor_gate: Schema.optional(Schema.Boolean).annotate({
     description: "Run sensor gate classification first (default: false — classification already performed upstream)",
   }),
 })
