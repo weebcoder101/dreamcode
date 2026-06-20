@@ -19,7 +19,7 @@ import { createRunDemo } from "./demo"
 import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { trace } from "./trace"
-import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
+import { cycleVariant, formatModelLabel, resolveSavedSubagentModel, resolveSavedVariant, resolveVariant, saveSubagentModel, saveVariant } from "./variant.shared"
 import type { LocalReplayAnchor, LocalReplayRow, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
 
 /** @internal Exported for testing */
@@ -120,6 +120,7 @@ type RuntimeState = {
   shown: boolean
   aborting: boolean
   model: RunInput["model"]
+  subagentModel: RunInput["model"]
   providers: RunProvider[]
   variants: string[]
   limits: Record<string, number>
@@ -194,10 +195,12 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         })
   const savedTask = resolveSavedVariant(ctx.model)
   const [tuiConfig, session, savedVariant] = await Promise.all([tuiConfigTask, sessionTask, savedTask])
+  const savedSubagent = resolveSavedSubagentModel()
   const state: RuntimeState = {
     shown: !session.first,
     aborting: false,
     model: ctx.model,
+    subagentModel: savedSubagent ?? ctx.model,
     providers: [],
     variants: [],
     limits: {},
@@ -241,6 +244,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     history: session.history,
     agent: state.agent,
     model: state.model,
+    subagentModel: state.subagentModel,
     variant: state.activeVariant,
     tuiConfig,
     backgroundSubagents: input.backgroundSubagents,
@@ -315,6 +319,15 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         variants: state.variants,
       }
     },
+    onSubagentModelSelect: (model) => {
+      const exists = state.providers.some((p) => p.id === model.providerID && model.modelID in p.models)
+      if (!exists) {
+        shell.footer.setStatus(`subagent model not available: ${model.providerID}/${model.modelID}`)
+        return
+      }
+      state.subagentModel = model
+      saveSubagentModel(model)
+    },
     onVariantSelect: async (variant) => {
       if (!state.model || state.variants.length === 0) {
         return {
@@ -385,7 +398,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       ctx.sdk.command
         .list({ directory: ctx.directory })
         .then((x) => x.data ?? [])
-        .catch(() => []),
+        .catch((err) => {
+          console.warn("command list fetch failed", err)
+          return [] as RunCommand[]
+        }),
     ])
     if (footer.isClosed) {
       return

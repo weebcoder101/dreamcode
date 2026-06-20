@@ -40,12 +40,13 @@ _load_env_neuro()
 _script_dir = Path(__file__).resolve().parent
 _opencode_root = _script_dir.parent.parent.parent  # .opencode/
 if str(_opencode_root) not in sys.path:
-    sys.path.insert(0, str(_opencode_root))
+    sys.path.append(str(_opencode_root))
 
 
 def main():
     parser = argparse.ArgumentParser(description="NEURO API harness with prompt engine")
-    parser.add_argument("--task", default="", help="Task description")
+    parser.add_argument("--task", default="", help="Task description (alternative to --stdin)")
+    parser.add_argument("--stdin", action="store_true", help="Read task+context as JSON from stdin: {\"task\": \"...\", \"automationContext\": \"...\"}")
     parser.add_argument("--scan-type", default="full_audit",
                         choices=["security", "bug_hunt", "full_audit", "test_gap"])
     parser.add_argument("--file", action="append", default=[], help="Files to analyze")
@@ -56,6 +57,11 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-tokens", type=int, default=8192)
     args = parser.parse_args()
+    if args.stdin and not args.task:
+        stdin_data = json.loads(sys.stdin.read().strip())
+        args.task = stdin_data.get("task", "")
+        if stdin_data.get("automationContext"):
+            args.automation_context = json.dumps(stdin_data["automationContext"])
 
     api_key = os.environ.get("NEURO_API_KEY")
     if not api_key:
@@ -127,7 +133,8 @@ def main():
             "test_gap": "testing",
         }
         skill_for_router = scan_to_skill.get(args.scan_type, "neuro")
-        task_context = router.analyze_task(args.task, [skill_for_router])
+        full_task = context.get("task", args.task or "")
+        task_context = router.analyze_task(full_task, [skill_for_router])
         selection = router.select_models(task_context)
         # ModelSelection has .primary (ModelInfo with .id) and .secondary (list[ModelInfo])
         primary_model = selection.primary.id

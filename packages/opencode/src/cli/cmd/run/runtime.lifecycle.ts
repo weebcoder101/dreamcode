@@ -63,6 +63,7 @@ export type LifecycleInput = {
   history: RunPrompt[]
   agent: string | undefined
   model: RunInput["model"]
+  subagentModel: RunInput["model"]
   variant: string | undefined
   tuiConfig: RunTuiConfig
   backgroundSubagents: boolean
@@ -71,6 +72,7 @@ export type LifecycleInput = {
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
+  onSubagentModelSelect?: (model: NonNullable<RunInput["model"]>) => void
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
   onInterrupt?: () => void
   onBackground?: () => void
@@ -237,6 +239,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       sessionID: input.getSessionID ?? (() => input.sessionID),
       ...labels,
       model: input.model,
+      subagentModel: input.subagentModel,
       variant: input.variant,
       first: input.first,
       history: input.history,
@@ -251,6 +254,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       onQuestionReject: input.onQuestionReject,
       onCycleVariant: input.onCycleVariant,
       onModelSelect: input.onModelSelect,
+      onSubagentModelSelect: input.onSubagentModelSelect,
       onVariantSelect: input.onVariantSelect,
       onInterrupt: input.onInterrupt,
       onBackground: input.onBackground,

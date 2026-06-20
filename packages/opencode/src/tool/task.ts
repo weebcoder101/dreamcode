@@ -10,7 +10,12 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
+import fs from "fs/promises"
+import path from "path"
 import { Effect, Exit, Ref, Schema, Scope } from "effect"
+import { Global } from "@opencode-ai/core/global"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
@@ -22,8 +27,8 @@ const log = Log.create({ service: "tool.task" })
 
 export interface TaskPromptOps {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
-  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts>
+  readonly resolvePromptParts: (template: string) => Effect.Effect<SessionPrompt.PromptInput["parts"]>
+  readonly prompt: (input: SessionPrompt.PromptInput) => Effect.Effect<SessionV1.WithParts>
   readonly disableTaskTool?: boolean
 }
 
@@ -83,6 +88,21 @@ function renderOutput(input: {
     "</task>",
   ].join("\n")
 }
+
+const resolveUserSubagentModel = Effect.fnUntraced(function* () {
+  const file = path.join(Global.Path.state, "model.json")
+  const raw = yield* Effect.promise(() =>
+    fs.readFile(file, "utf-8").catch(() => undefined),
+  )
+  if (!raw) return undefined as { providerID: ProviderV2.ID; modelID: ModelV2.ID } | undefined
+  try {
+    const data = JSON.parse(raw)
+    if (data?.subagentModel?.providerID && data?.subagentModel?.modelID) {
+      return { providerID: data.subagentModel.providerID as ProviderV2.ID, modelID: data.subagentModel.modelID as ModelV2.ID }
+    }
+  } catch {}
+  return undefined
+})
 
 export const TaskTool = Tool.define(
   id,
@@ -254,7 +274,8 @@ export const TaskTool = Tool.define(
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
 
-      const model = next.model ?? {
+      const userModel = yield* resolveUserSubagentModel()
+      const model = userModel ?? next.model ?? {
         modelID: msg.info.modelID,
         providerID: msg.info.providerID,
       }

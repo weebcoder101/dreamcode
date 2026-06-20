@@ -78,6 +78,7 @@ type RunFooterViewProps = {
   commands: () => RunCommand[] | undefined
   providers: () => RunProvider[] | undefined
   currentModel: () => RunInput["model"]
+  currentSubagentModel: () => RunInput["model"]
   variants: () => string[]
   currentVariant: () => string | undefined
   state: () => FooterState
@@ -103,6 +104,7 @@ type RunFooterViewProps = {
   onRequestExit?: (fn: (() => boolean) | undefined) => void
   onExit: () => void
   onModelSelect: (model: NonNullable<RunInput["model"]>) => void
+  onSubagentModelSelect: (model: NonNullable<RunInput["model"]>) => void
   onVariantSelect: (variant: string | undefined) => void
   onRows: (rows: number) => void
   onLayout: (input: { route: FooterPromptRoute; autocomplete: boolean; subagentRows: number }) => void
@@ -139,6 +141,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const commanding = createMemo(() => active().type === "prompt" && route().type === "command")
   const skilling = createMemo(() => active().type === "prompt" && route().type === "skill")
   const modeling = createMemo(() => active().type === "prompt" && route().type === "model")
+  const subagentModeling = createMemo(() => active().type === "prompt" && route().type === "subagent-model")
   const varianting = createMemo(() => active().type === "prompt" && route().type === "variant")
   const panel = createMemo(
     () =>
@@ -149,6 +152,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       commanding() ||
       skilling() ||
       modeling() ||
+      subagentModeling() ||
       varianting(),
   )
   const selected = createMemo(() => {
@@ -295,6 +299,11 @@ export function RunFooterView(props: RunFooterViewProps) {
     props.onSubagentSelect?.(undefined)
   }
 
+  const openSubagentModel = () => {
+    setRoute({ type: "subagent-model" })
+    props.onSubagentSelect?.(undefined)
+  }
+
   const openSkillMenu = () => {
     if (props.commands() && skills().length === 0) {
       return
@@ -375,6 +384,8 @@ export function RunFooterView(props: RunFooterViewProps) {
     onExitRequest: props.onExitRequest,
     onExit: props.onExit,
     onSkillMenu: openSkillMenu,
+    onSubagentModel: openSubagentModel,
+    onSubagentModelSelect: props.onSubagentModelSelect,
     onRows: props.onRows,
     onStatus: props.onStatus,
   })
@@ -603,7 +614,8 @@ export function RunFooterView(props: RunFooterViewProps) {
       current.type !== "model" &&
       current.type !== "variant" &&
       current.type !== "queued-menu" &&
-      current.type !== "subagent-menu"
+      current.type !== "subagent-menu" &&
+      current.type !== "subagent-model"
     ) {
       return
     }
@@ -713,6 +725,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                             variantCycle={variantCycle()}
                             onClose={closePanel}
                             onModel={openModel}
+                            onSubagentModel={openSubagentModel}
                             onEditor={() => {
                               closePanel()
                               void composer.openEditor()
@@ -762,6 +775,18 @@ export function RunFooterView(props: RunFooterViewProps) {
                             onClose={closePanel}
                             onSelect={(model) => {
                               props.onModelSelect(model)
+                              closePanel()
+                            }}
+                          />
+                        </Match>
+                        <Match when={subagentModeling()}>
+                          <RunModelSelectBody
+                            theme={theme}
+                            providers={props.providers}
+                            current={props.currentSubagentModel}
+                            onClose={closePanel}
+                            onSelect={(model) => {
+                              props.onSubagentModelSelect(model)
                               closePanel()
                             }}
                           />

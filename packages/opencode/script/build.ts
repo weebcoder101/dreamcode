@@ -268,6 +268,29 @@ for (const item of targets) {
     }
   }
 
+  // Update bin/opencode symlink to point to the freshly built binary
+  const binSymlink = path.join(dir, "bin", "opencode")
+  const distBin = path.resolve(dir, `dist/${name}/bin/opencode`)
+  if (fs.existsSync(distBin)) {
+    try {
+      // Remove stale file or old symlink
+      if (fs.lstatSync(binSymlink).isSymbolicLink() || fs.existsSync(binSymlink)) {
+        fs.unlinkSync(binSymlink)
+      }
+    } catch {}
+    const rel = path.relative(path.dirname(binSymlink), distBin)
+    fs.symlinkSync(rel, binSymlink)
+    console.log(`Linked bin/opencode -> ${rel}`)
+  }
+
+  // Also clean up old .opencode symlink if present
+  const oldDotSymlink = path.join(dir, "bin", ".opencode")
+  try {
+    if (fs.lstatSync(oldDotSymlink).isSymbolicLink()) {
+      fs.unlinkSync(oldDotSymlink)
+    }
+  } catch {}
+
   await $`rm -rf ./dist/${name}/bin/tui`
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(

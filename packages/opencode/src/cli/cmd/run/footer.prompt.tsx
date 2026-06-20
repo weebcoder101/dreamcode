@@ -22,6 +22,7 @@ import {
   isNewCommand,
   movePromptHistory,
   pushPromptHistory,
+  slashHead,
 } from "./prompt.shared"
 import { OPENCODE_BASE_MODE, useBindings } from "@opencode-ai/tui/keymap"
 import { realignEditorPromptParts, resolveEditorSlashValue } from "./prompt.editor"
@@ -76,6 +77,8 @@ type PromptInput = {
   onExitRequest?: () => boolean
   onExit: () => void
   onSkillMenu: () => void
+  onSubagentModel: () => void
+  onSubagentModelSelect: (model: NonNullable<RunInput["model"]>) => void
   onRows: (rows: number) => void
   onStatus: (text: string) => void
 }
@@ -137,23 +140,6 @@ function extractLineRange(input: string) {
   const start = Number(match[1])
   const end = match[2] && start < Number(match[2]) ? Number(match[2]) : undefined
   return { base, line: { start, end } }
-}
-
-function slashHead(text: string) {
-  if (!text.startsWith("/")) {
-    return
-  }
-
-  for (let i = 1; i < text.length; i++) {
-    switch (text[i]) {
-      case " ":
-      case "\t":
-      case "\n":
-        return { name: text.slice(1, i), arguments: text.slice(i + 1), end: i }
-    }
-  }
-
-  return { name: text.slice(1), arguments: "", end: text.length }
 }
 
 function slashQuery(text: string, cursor: number) {
@@ -419,6 +405,7 @@ export function createPromptState(input: PromptInput): PromptState {
       } satisfies SlashOption,
       { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
       { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
+      { kind: "slash", name: "subagent", display: "/subagent", description: "switch subagent model" } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     const showSkillMenu = !shell() && skillCommands().length > 0 && !hasSkillsCommand()
@@ -854,6 +841,12 @@ export function createPromptState(input: PromptInput): PromptState {
         return
       }
 
+      if (next.name === "subagent") {
+        cancelAutocomplete()
+        input.onSubagentModel()
+        return
+      }
+
       if (next.action === "skill-menu") {
         cancelAutocomplete()
         input.onSkillMenu()
@@ -973,6 +966,7 @@ export function createPromptState(input: PromptInput): PromptState {
     if (current === "variant") return false
     if (current === "queued-menu") return false
     if (current === "subagent-menu") return false
+    if (current === "subagent-model") return false
     return true
   }
 
@@ -1180,6 +1174,29 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
 
+    // Handle /subagent BEFORE parseSlashCommand to avoid wasted IPC call
+    const head = slashHead(next.text)
+    if (head && head.name === "subagent") {
+      const arg = head.arguments?.trim()
+      if (!arg) {
+        input.onSubagentModel()
+      } else {
+        const slash = arg.indexOf("/")
+        if (slash > 0 && slash < arg.length - 1) {
+          const providerID = arg.slice(0, slash)
+          const modelID = arg.slice(slash + 1)
+          input.onSubagentModelSelect({ providerID, modelID })
+          input.onStatus(`subagent model: ${providerID}/${modelID}`)
+        } else {
+          input.onStatus(`invalid model format, expected providerID/modelID`)
+          input.onSubagentModel()
+        }
+      }
+      push(next)
+      resetDraft()
+      return
+    }
+
     const command = next.mode === "shell" ? undefined : selectedCommand(next.text, next.command)
     if (!command && next.mode !== "shell" && isExitCommand(next.text)) {
       input.onExit()
@@ -1190,6 +1207,7 @@ export function createPromptState(input: PromptInput): PromptState {
       command || next.mode === "shell" || isNewCommand(next.text)
         ? undefined
         : parseSlashCommand(next.text, input.commands())
+
     if (parsed?.type === "pending") {
       input.onStatus("loading commands")
       return

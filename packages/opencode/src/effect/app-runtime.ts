@@ -52,6 +52,7 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SensorGate } from "@/skill/sensor-gate"
+import { ChainExecutor } from "@/skill/chain-executor"
 import { ContextCompressor } from "@/session/context-compressor"
 import { PiecesLTM } from "@/pieces-ltm"
 import { Actor } from "@/actor/spawn"
@@ -104,6 +105,7 @@ export const AppLayer = Layer.mergeAll(
   ShareNext.defaultLayer,
   SessionShare.defaultLayer,
   SensorGate.defaultLayer,
+  ChainExecutor.defaultLayer,
   ContextCompressor.defaultLayer,
   PiecesLTM.defaultLayer,
 ).pipe(

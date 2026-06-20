@@ -1,16 +1,11 @@
 /**
  * sensor-gate-enforcer.ts — Dreamcode Chain Execution Plugin
  *
- * Lightweight text-only plugin that:
- * - Captures the user prompt via chat.message
- * - Parses the <sensor-gate> block from the system prompt
- * - Injects a <chain-execution> plan block with the skill chain
+ * Injects <chain-execution> plan blocks into the LLM system prompt
+ * so the model follows the sensor-gate skill chain via the skill tool.
  *
- * No subprocess calls. No blocking. The LLM follows the chain
- * instructions naturally by calling the skill tool.
+ * Format: V1 Plugin — `id` + `server()` object (not bare default function)
  */
-
-import type { Hooks } from "@opencode-ai/plugin"
 
 const sessionPrompts = new Map<string, string>()
 
@@ -65,12 +60,32 @@ function buildChainExecutionBlock(chain: string[], skillPlan: string): string {
   return lines.join("\n")
 }
 
-export default async function sensorGateEnforcer(input: any, options?: any): Promise<Hooks> {
+function buildMemoryContextBlock(): string {
+  return [
+    "<memory-context>",
+    "Available short-term memory (Session Prompts & Run Log):",
+    "",
+    "Pieces LTM tracks all workstream events (clipboard, vision, audio).",
+    "Agent evolution memory is in evolution/run_log.jsonl.",
+    "",
+    "MEMORY USAGE:",
+    "- Search LTM: pieces-ltm_workstream_events_full_text_search",
+    "- Read evolution log: evolution/run_log.jsonl",
+    "- Agent score: evolution/agent_score.json",
+    "",
+    "POST-RUN REQUIREMENTS (mandatory):",
+    "1. Log the run to evolution/run_log.jsonl with chain metadata",
+    "2. Write learning notes to evolution/pieces_writes.jsonl",
+    "</memory-context>",
+  ].join("\n")
+}
+
+async function sensorGateEnforcer(input: any, options?: any) {
   const enabled = options?.enabled !== false
   if (!enabled) return {}
 
   return {
-    "chat.message": async (chatInput, output) => {
+    "chat.message": async (chatInput: any, output: any) => {
       const prompt = output.parts
         .filter((p: any) => p?.type === "text" && typeof p.text === "string")
         .map((p: any) => p.text as string)
@@ -82,12 +97,19 @@ export default async function sensorGateEnforcer(input: any, options?: any): Pro
       sessionPrompts.set(chatInput.sessionID, prompt)
     },
 
-    "experimental.chat.system.transform": async (ctx, output) => {
+    "experimental.chat.system.transform": async (ctx: any, output: any) => {
       const gateInfo = extractSensorGate(output.system)
       if (!gateInfo || gateInfo.chain.length === 0) return
       if (gateInfo.chain.length === 1 && gateInfo.chain[0] === "context-compactor") return
 
       output.system.push(buildChainExecutionBlock(gateInfo.chain, gateInfo.skillPlan))
+      output.system.push(buildMemoryContextBlock())
     },
   }
+}
+
+// V1 plugin object format — required by readV1Plugin for file-based plugins
+export default {
+  id: "sensor-gate-enforcer",
+  server: sensorGateEnforcer,
 }

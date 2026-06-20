@@ -78,6 +78,7 @@ type RunFooterOptions = {
   agentLabel: string
   modelLabel: string
   model: RunInput["model"]
+  subagentModel: RunInput["model"]
   variant: string | undefined
   first: boolean
   history?: RunPrompt[]
@@ -91,6 +92,7 @@ type RunFooterOptions = {
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
+  onSubagentModelSelect?: (model: NonNullable<RunInput["model"]>) => void
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
   onInterrupt?: () => void
   onBackground?: () => void
@@ -106,6 +108,7 @@ const COMMAND_ROWS = RUN_COMMAND_PANEL_ROWS
 const SKILL_ROWS = RUN_COMMAND_PANEL_ROWS
 const SUBAGENT_ROWS = RUN_SUBAGENT_PANEL_ROWS
 const MODEL_ROWS = RUN_COMMAND_PANEL_ROWS
+const SUBAGENT_MODEL_ROWS = RUN_COMMAND_PANEL_ROWS
 const VARIANT_ROWS = RUN_COMMAND_PANEL_ROWS
 const NOTICE_DURATION = 3000
 const THEME_REFRESH_DELAYS = [1000, 1000] as const
@@ -188,6 +191,8 @@ export class RunFooter implements FooterApi {
   private setProviders: Setter<RunProvider[] | undefined>
   private currentModel: Accessor<RunInput["model"]>
   private setCurrentModel: Setter<RunInput["model"]>
+  private currentSubagentModel: Accessor<RunInput["model"]>
+  private setCurrentSubagentModel: Setter<RunInput["model"]>
   private variants: Accessor<string[]>
   private setVariants: Setter<string[]>
   private currentVariant: Accessor<string | undefined>
@@ -267,6 +272,9 @@ export class RunFooter implements FooterApi {
     const [currentModel, setCurrentModel] = createSignal<RunInput["model"]>(options.model)
     this.currentModel = currentModel
     this.setCurrentModel = setCurrentModel
+    const [currentSubagentModel, setCurrentSubagentModel] = createSignal<RunInput["model"]>(options.subagentModel)
+    this.currentSubagentModel = currentSubagentModel
+    this.setCurrentSubagentModel = setCurrentSubagentModel
     const [variants, setVariants] = createSignal<string[]>([])
     this.variants = variants
     this.setVariants = setVariants
@@ -315,6 +323,7 @@ export class RunFooter implements FooterApi {
               commands: footer.commands,
               providers: footer.providers,
               currentModel: footer.currentModel,
+              currentSubagentModel: footer.currentSubagentModel,
               variants: footer.variants,
               currentVariant: footer.currentVariant,
               theme: footer.theme,
@@ -336,6 +345,7 @@ export class RunFooter implements FooterApi {
               onRequestExit: footer.setRequestExitHandler,
               onExit: () => footer.close(),
               onModelSelect: footer.handleModelSelect,
+              onSubagentModelSelect: footer.handleSubagentModelSelect,
               onVariantSelect: footer.handleVariantSelect,
               onRows: footer.syncRows,
               onLayout: footer.syncLayout,
@@ -705,7 +715,9 @@ export class RunFooter implements FooterApi {
             : this.promptRoute.type === "skill"
               ? 1 + SKILL_ROWS
               : this.promptRoute.type === "model"
-                ? 1 + MODEL_ROWS
+              ? 1 + MODEL_ROWS
+              : this.promptRoute.type === "subagent-model"
+                ? 1 + SUBAGENT_MODEL_ROWS
                 : this.promptRoute.type === "variant"
                   ? 1 + VARIANT_ROWS
                   : this.promptRoute.type === "queued-menu"
@@ -814,6 +826,15 @@ export class RunFooter implements FooterApi {
 
     this.patch(patch)
     this.setNotice(result.status ?? "variant updated")
+  }
+
+  private handleSubagentModelSelect = (model: NonNullable<RunInput["model"]>): void => {
+    if (this.isClosed) {
+      return
+    }
+
+    this.setCurrentSubagentModel(model)
+    this.options.onSubagentModelSelect?.(model)
   }
 
   private handleModelSelect = (model: NonNullable<RunInput["model"]>): void => {

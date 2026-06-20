@@ -1,9 +1,12 @@
-import { Effect, Context, Layer } from "effect"
+import { Effect, Context, Layer, Duration } from "effect"
+import * as Stream from "effect/Stream"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import * as fs from "fs"
 import * as path from "path"
-import { execFileSync } from "child_process"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
+
+const SAFE_PROMPT_MAX = 100_000
 
 export interface Persona {
   name: string
@@ -410,7 +413,7 @@ export interface SensorGateResult {
   neuro_result?: string
 }
 
-function parseSensorGateOutput(output: string): SensorGateResult {
+export function parseSensorGateOutput(output: string): SensorGateResult {
   const lines = output.split("\n")
   const result: SensorGateResult = {
     intent: "",
@@ -436,36 +439,35 @@ function parseSensorGateOutput(output: string): SensorGateResult {
   for (const line of lines) {
     const trimmed = line.trim()
 
-    // Intent Classification
-    if (trimmed.startsWith("- intent:")) result.intent = trimmed.slice(10).trim()
-    if (trimmed.startsWith("- domain_tags:")) {
-      const tags = trimmed.slice(14).trim()
-      result.domain_tags = tags.split(",").map((t) => t.trim()).filter(Boolean)
-    }
-    if (trimmed.startsWith("- risk_level:")) result.risk_level = trimmed.slice(13).trim()
-    if (trimmed.startsWith("- confidence:")) result.confidence = parseFloat(trimmed.slice(12)) || 0.5
-    if (trimmed.startsWith("- time_sensitivity:")) result.time_sensitivity = trimmed.slice(19).trim()
-    if (trimmed.startsWith("- requires_tools:")) result.requires_tools = trimmed.slice(17).trim()
-    if (trimmed.startsWith("- deliverable_type:")) result.deliverable_type = trimmed.slice(19).trim()
-    if (trimmed.startsWith("- is_social_greeting:")) {
-      result.is_social_greeting = trimmed.slice(21).trim() === "true"
-    }
-
-    // Skill Resolution
-    if (trimmed.startsWith("- primary:")) result.primary_skill = trimmed.slice(10).trim()
-    if (trimmed.startsWith("- supports:")) {
-      const skills = trimmed.slice(11).trim()
-      result.support_skills = skills.split(",").map((s) => s.trim()).filter(Boolean)
-    }
-    if (trimmed.startsWith("- automation:")) result.automation = trimmed.slice(13).trim()
-    if (trimmed.startsWith("- mode:")) result.mode = trimmed.slice(7).trim()
-    if (trimmed.startsWith("- chain:")) {
-      const chain = trimmed.slice(8).trim()
-      result.chain = chain.split("→").map((s) => s.trim()).filter(Boolean)
+    const PARSERS: Record<string, (line: string, r: SensorGateResult) => void> = {
+      "- intent:": (l, r) => { r.intent = l.slice(10).trim() },
+      "- domain_tags:": (l, r) => {
+        r.domain_tags = l.slice(14).trim().split(",").map((t) => t.trim()).filter(Boolean)
+      },
+      "- risk_level:": (l, r) => { r.risk_level = l.slice(13).trim() },
+      "- confidence:": (l, r) => {
+        const val = parseFloat(l.slice(12))
+        r.confidence = Number.isFinite(val) ? val : 0.5
+      },
+      "- time_sensitivity:": (l, r) => { r.time_sensitivity = l.slice(19).trim() },
+      "- requires_tools:": (l, r) => { r.requires_tools = l.slice(17).trim() },
+      "- deliverable_type:": (l, r) => { r.deliverable_type = l.slice(19).trim() },
+      "- is_social_greeting:": (l, r) => { r.is_social_greeting = l.slice(21).trim() === "true" },
+      "- primary:": (l, r) => { r.primary_skill = l.slice(10).trim() },
+      "- supports:": (l, r) => {
+        r.support_skills = l.slice(11).trim().split(",").map((s) => s.trim()).filter(Boolean)
+      },
+      "- automation:": (l, r) => { r.automation = l.slice(13).trim() },
+      "- mode:": (l, r) => { r.mode = l.slice(7).trim() },
+      "- chain:": (l, r) => {
+        r.chain = l.slice(8).trim().split("→").map((s) => s.trim()).filter(Boolean)
+      },
+      "- decision:": (l, r) => { r.guardian_decision = l.slice(11).trim() },
     }
 
-    // Guardian AI
-    if (trimmed.startsWith("- decision:")) result.guardian_decision = trimmed.slice(11).trim()
+    for (const [prefix, parse] of Object.entries(PARSERS)) {
+      if (trimmed.startsWith(prefix)) { parse(trimmed, result); break }
+    }
   }
   const guardianHeaderIndex = lines.findIndex((l) => l.includes("[GUARDIAN]"))
   if (guardianHeaderIndex >= 0) {
@@ -521,7 +523,7 @@ function parseSensorGateOutput(output: string): SensorGateResult {
   return result
 }
 
-const HOME = process.env.HOME || process.env.USERPROFILE || ""
+const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
 
 function resolveSkillsDir(): string {
   const candidates = [
@@ -533,7 +535,9 @@ function resolveSkillsDir(): string {
   for (const dir of candidates) {
     try {
       if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir
-    } catch {}
+    } catch (e) {
+      console.warn(`[sensor-gate] error checking skills dir ${dir}:`, e)
+    }
   }
   return candidates[0]
 }
@@ -545,84 +549,143 @@ function resolveScript(relativePath: string): string | undefined {
     path.join(process.cwd(), ".dreamcode", "skills", relativePath),
   ]
   for (const p of candidates) {
-    try { if (fs.existsSync(p)) return p } catch {}
+    try {
+      if (fs.existsSync(p)) return p
+    } catch (e) {
+      console.warn(`[sensor-gate] error checking script path ${p}:`, e)
+    }
   }
   return undefined
 }
 
 const VALID_SCAN_TYPES = new Set(["security", "full_audit", "bug_hunt", "test_gap"])
 
-function runSensorGate(prompt: string, projectRoot: string): SensorGateResult | null {
+function runSensorGateEffect(
+  prompt: string,
+  projectRoot: string,
+): Effect.Effect<SensorGateResult | null> {
   const sensorGate = resolveScript("chain-orchestrator/scripts/sensor_gate.py")
+  if (!sensorGate) return Effect.succeed(null)
 
-  if (!sensorGate) return null
+  const clamped = prompt.length > SAFE_PROMPT_MAX
+    ? prompt.slice(0, SAFE_PROMPT_MAX) + "\n\n[Prompt truncated at 100K characters]"
+    : prompt
 
-  const tryRun = (timeoutMs: number): SensorGateResult | null => {
-    try {
-      const output = execFileSync("python3", [sensorGate, "--prompt", prompt], {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        stdio: ["pipe", "pipe", "pipe"],
+  const runWithTimeout = (timeoutMs: number) =>
+    Effect.gen(function* () {
+      const promptBytes = new TextEncoder().encode(clamped)
+      const child = yield* ChildProcess.make({
+        command: "python3",
+        args: [sensorGate, "--stdin"],
+        stdin: Stream.make(promptBytes),
         cwd: projectRoot,
+        stdio: ["pipe", "pipe", "pipe"],
       })
+      const output = yield* child.stdout
+        .pipe(Stream.toString)
+        .pipe(Effect.timeout(Duration.millis(timeoutMs)))
+        .pipe(Effect.catch(() => Effect.succeed("")))
+      if (!output) return null
       return parseSensorGateOutput(output)
-    } catch (e) {
-      console.warn("[sensor-gate] runSensorGate subprocess failed", { error: String(e), timeoutMs })
-      return null
-    }
-  }
+    }).pipe(
+      Effect.catch((e) => {
+        console.warn("[sensor-gate] runSensorGate subprocess failed", { error: String(e), timeoutMs })
+        return Effect.succeed(null) as Effect.Effect<SensorGateResult | null>
+      }),
+    )
 
-  const result = tryRun(150_000)
-  if (result) return result
-  return tryRun(300_000)
+  return runWithTimeout(150_000).pipe(
+    Effect.flatMap((first) => {
+      if (first !== null) return Effect.succeed(first)
+      return runWithTimeout(300_000)
+    }),
+  )
 }
 
-function runNeuroHarness(prompt: string, projectRoot: string, scanType: string): string | null {
-  const neuroHarness = resolveScript("neuro/scripts/neuro_harness.py")
-
-  if (!neuroHarness) return null
-
-  const tryRun = (timeoutMs: number): string | null => {
-    const tmpBase = process.env.XDG_RUNTIME_DIR
-      ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
-      : path.join(projectRoot, ".dreamcode", "tmp")
-    fs.mkdirSync(tmpBase, { recursive: true })
-    const tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
-    fs.chmodSync(tmpDir, 0o700)
-    const tmpFile = path.join(tmpDir, "prompt.txt")
-    try {
-      const promptResult = buildPrompt({
-        scanType,
-        files: [{ path: "user_prompt", content: prompt }],
-        context: prompt.slice(0, 500),
-      })
-
-      fs.writeFileSync(tmpFile, promptResult.userPrompt, { mode: 0o600 })
-
-      const output = execFileSync("python3", [
-        neuroHarness,
-        "--scan-type", scanType,
-        "--file", tmpFile,
-        "--task", prompt.slice(0, 200),
-      ], {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        stdio: ["pipe", "pipe", "pipe"],
-        cwd: projectRoot,
-      })
-
-      return output
-    } catch (e) {
-      console.warn("[sensor-gate] runNeuroHarness subprocess failed", { error: String(e), timeoutMs })
-      return null
-    } finally {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
-    }
+function validateNeuroOutput(output: string): string | null {
+  try {
+    const parsed = JSON.parse(output)
+    if (typeof parsed !== "object" || parsed === null) return null
+    const safe = JSON.stringify(parsed).slice(0, 50_000)
+    return safe
+  } catch {
+    return output.slice(0, 10_000)
   }
+}
 
-  const result = tryRun(150_000)
-  if (result) return result
-  return tryRun(300_000)
+function runNeuroHarnessEffect(
+  prompt: string,
+  projectRoot: string,
+  scanType: string,
+  classification?: { intent: string; mode: string; chain: string[]; risk_level: string; confidence: number; domain_tags: string[] },
+): Effect.Effect<string | null> {
+  const neuroHarness = resolveScript("neuro/scripts/neuro_harness.py")
+  if (!neuroHarness) return Effect.succeed(null)
+
+  const clamped = prompt.length > SAFE_PROMPT_MAX
+    ? prompt.slice(0, SAFE_PROMPT_MAX) + "\n\n[Prompt truncated at 100K characters]"
+    : prompt
+
+  const runWithTimeout = (timeoutMs: number) =>
+    Effect.gen(function* () {
+      const tmpBase = process.env.XDG_RUNTIME_DIR
+        ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
+        : path.join(projectRoot, ".dreamcode", "tmp")
+      try { fs.mkdirSync(tmpBase, { recursive: true }) } catch (e) {
+        console.warn("[sensor-gate] failed to create tmp base dir", { error: String(e), tmpBase })
+      }
+      const tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
+      fs.chmodSync(tmpDir, 0o700)
+      const tmpFile = path.join(tmpDir, "prompt.txt")
+      try {
+        const promptResult = buildPrompt({
+          scanType,
+          files: [{ path: "user_prompt", content: clamped }],
+          context: clamped.slice(0, 8000),
+        })
+
+        fs.writeFileSync(tmpFile, promptResult.userPrompt, { mode: 0o600 })
+
+        const automationContext = JSON.stringify({
+          task: clamped,
+          classification,
+        })
+
+        const stdinPayload = JSON.stringify({ task: clamped.slice(0, 8000), automationContext })
+        const stdinBytes = new TextEncoder().encode(stdinPayload)
+        const child = yield* ChildProcess.make({
+          command: "python3",
+          args: [
+            neuroHarness,
+            "--scan-type", scanType,
+            "--file", tmpFile,
+            "--stdin",
+          ],
+          stdin: Stream.make(stdinBytes),
+          cwd: projectRoot,
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+        const output = yield* child.stdout
+          .pipe(Stream.toString)
+          .pipe(Effect.timeout(Duration.millis(timeoutMs)))
+          .pipe(Effect.catch(() => Effect.succeed("")))
+        return output || null
+      } catch (e) {
+        console.warn("[sensor-gate] runNeuroHarness subprocess failed", { error: String(e), timeoutMs })
+        return null
+      } finally {
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+      }
+    }).pipe(
+      Effect.catch(() => Effect.succeed(null) as Effect.Effect<string | null>),
+    )
+
+  return runWithTimeout(150_000).pipe(
+    Effect.flatMap((first) => {
+      if (first !== null) return Effect.succeed(first)
+      return runWithTimeout(300_000)
+    }),
+  )
 }
 
 export interface Interface {
@@ -631,81 +694,102 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SensorGate") {}
 
-export const layer = Layer.succeed(Service, Service.of({
-  classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
-    const ctx = yield* InstanceState.contextOrNull
-    if (!ctx?.directory) return null
-    const directory = ctx.directory
-    const result = runSensorGate(prompt, directory)
-    if (!result) return null
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    return Service.of({
+      classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
+        const ctx = yield* InstanceState.contextOrNull
+        if (!ctx?.directory) return null
+        const directory = ctx.directory
+        const result = yield* runSensorGateEffect(prompt, directory)
+        if (!result) return null
 
-    // Generate personas from TypeScript when Python script doesn't output them
-    if (result.personas.length === 0) {
-      result.personas = selectPersonas(result)
-    } else {
-      // Fill in dynamic task/goals/synthesisGuide for Python-provided personas
-      result.personas = result.personas.map((p) => {
-        const profile = PERSONA_PROFILES.find((pp) => pp.name === p.name)
-        const name = p.name
-        const role = p.role
-        const focus = p.focus
-        return {
-          ...p,
-          task: p.task || (profile ? dynamicTaskFor(profile, result.intent) : `Analyze from ${role} perspective for: ${result.intent}.`),
-          goals: p.goals?.length ? p.goals : (profile ? dynamicGoalsFor(profile, result.intent) : [`Identify all ${focus} aspects`, `Provide actionable findings`]),
-          synthesisGuide: p.synthesisGuide || (profile ? dynamicSynthesisFor(profile) : `Include ${name} findings on ${focus}.`),
-        }
-      }).slice(0, 7)
-      // Enforce floor of 2 when Python provides < 2 personas
-      if (result.personas.length < 2) {
-        const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
-        for (const d of defaults) {
-          if (result.personas.length >= 2) break
-          if (!result.personas.find((pp) => pp.name === d.name)) {
-            result.personas.push({
-              name: d.name, role: d.role, focus: d.focus, skills: d.skills,
-              task: dynamicTaskFor(d, result.intent),
-              goals: dynamicGoalsFor(d, result.intent),
-              synthesisGuide: dynamicSynthesisFor(d),
-            })
+        // Generate personas from TypeScript when Python script doesn't output them
+        if (result.personas.length === 0) {
+          result.personas = selectPersonas(result)
+        } else {
+          // Fill in dynamic task/goals/synthesisGuide for Python-provided personas
+          result.personas = result.personas.map((p) => {
+            const profile = PERSONA_PROFILES.find((pp) => pp.name === p.name)
+            const name = p.name
+            const role = p.role
+            const focus = p.focus
+            return {
+              ...p,
+              task: p.task || (profile ? dynamicTaskFor(profile, result.intent) : `Analyze from ${role} perspective for: ${result.intent}.`),
+              goals: p.goals?.length ? p.goals : (profile ? dynamicGoalsFor(profile, result.intent) : [`Identify all ${focus} aspects`, `Provide actionable findings`]),
+              synthesisGuide: p.synthesisGuide || (profile ? dynamicSynthesisFor(profile) : `Include ${name} findings on ${focus}.`),
+            }
+          }).slice(0, 7)
+          // Enforce floor of 2 when Python provides < 2 personas
+          if (result.personas.length < 2) {
+            const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
+            for (const d of defaults) {
+              if (result.personas.length >= 2) break
+              if (!result.personas.find((pp) => pp.name === d.name)) {
+                result.personas.push({
+                  name: d.name, role: d.role, focus: d.focus, skills: d.skills,
+                  task: dynamicTaskFor(d, result.intent),
+                  goals: dynamicGoalsFor(d, result.intent),
+                  synthesisGuide: dynamicSynthesisFor(d),
+                })
+              }
+            }
           }
         }
-      }
-    }
 
-    const shouldRunNeuro = result.risk_level === "high" ||
-      result.mode === "DREAM_INNOVATION" ||
-      result.chain.length > 3
+        const shouldRunNeuro = result.risk_level === "high" ||
+          result.mode === "DREAM_INNOVATION" ||
+          result.chain.length > 3
 
-    if (shouldRunNeuro) {
-      const scanType = result.risk_level === "high" ? "security" : "full_audit"
-      const neuroResult = runNeuroHarness(prompt, directory, scanType)
-      if (neuroResult) {
-        if (neuroResult.includes('"status": "skipped"') || neuroResult.includes('"status":"skipped"')) {
-          console.warn("[sensor-gate] NEURO analysis skipped — NEURO_API_KEY not set. Sign up at https://neurometric.ai to get your free API key.")
-        } else {
-          result.neuro_result = neuroResult
+        if (shouldRunNeuro) {
+          const scanType = result.risk_level === "high" ? "security" : "full_audit"
+          const neuroResult = yield* runNeuroHarnessEffect(prompt, directory, scanType, {
+            intent: result.intent,
+            mode: result.mode,
+            chain: result.chain,
+            risk_level: result.risk_level,
+            confidence: result.confidence,
+            domain_tags: result.domain_tags,
+          })
+          if (neuroResult) {
+            if (neuroResult.includes('"status": "skipped"') || neuroResult.includes('"status":"skipped"')) {
+              console.warn("[sensor-gate] NEURO analysis skipped — NEURO_API_KEY not set. Sign up at https://neurometric.ai to get your free API key.")
+            } else {
+              const validated = validateNeuroOutput(neuroResult)
+              if (validated) result.neuro_result = validated
+            }
+          }
         }
-      }
-    }
 
-    // Per-persona NEURO enrichment
-    if (result.personas.length > 0 && shouldRunNeuro) {
-      const maxEnriched = result.risk_level === "high" ? result.personas.length : Math.min(3, result.personas.length)
-      for (let i = 0; i < maxEnriched; i++) {
-        const persona = result.personas[i]
-        const scanType = PERSONA_SCAN_TYPE_MAP[persona.name] || "full_audit"
-        const personaTask = `${persona.role}: ${prompt}`
-        const neuroResult = runNeuroHarness(personaTask, directory, scanType)
-        if (neuroResult) {
-          persona.neuroResult = neuroResult
+        // Per-persona NEURO enrichment
+        if (result.personas.length > 0 && shouldRunNeuro) {
+          const maxEnriched = result.risk_level === "high" ? result.personas.length : Math.min(3, result.personas.length)
+          for (let i = 0; i < maxEnriched; i++) {
+            const persona = result.personas[i]
+            const scanType = PERSONA_SCAN_TYPE_MAP[persona.name] || "full_audit"
+            const personaTask = `${persona.role}: ${prompt}`
+            const neuroResult = yield* runNeuroHarnessEffect(personaTask, directory, scanType, {
+              intent: result.intent,
+              mode: result.mode,
+              chain: result.chain,
+              risk_level: result.risk_level,
+              confidence: result.confidence,
+              domain_tags: result.domain_tags,
+            })
+            if (neuroResult) {
+              const validated = validateNeuroOutput(neuroResult)
+              if (validated) persona.neuroResult = validated
+            }
+          }
         }
-      }
-    }
 
-    return result
+        return result
+      }),
+    })
   }),
-}))
+)
 
 export const defaultLayer = layer
 

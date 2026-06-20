@@ -35,11 +35,11 @@ SCRIPTS_DIR = PROJECT_ROOT / ".opencode" / "scripts"
 # Add guardian-ai scripts to path
 _guardian_scripts = SKILLS_DIR / "guardian-ai" / "scripts"
 if str(_guardian_scripts) not in sys.path:
-    sys.path.insert(0, str(_guardian_scripts))
+    sys.path.append(str(_guardian_scripts))
 
 # Add scripts dir to path for sandbox_manager and agents_md_loader
 if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
+    sys.path.append(str(SCRIPTS_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -739,9 +739,16 @@ def run_gate(prompt: str) -> dict:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="SENSOR Gate — Codex-Compatible Runtime")
-    parser.add_argument("--prompt", required=True, help="User prompt")
+    parser.add_argument("--prompt", help="User prompt (alternative to --stdin)")
+    parser.add_argument("--stdin", action="store_true", help="Read prompt from stdin")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
-    result = run_gate(args.prompt)
+    prompt = args.prompt
+    if args.stdin and not prompt:
+        prompt = sys.stdin.read().strip()
+    if not prompt:
+        print("ERROR: --prompt or --stdin required", file=sys.stderr)
+        sys.exit(1)
+    result = run_gate(prompt)
     if args.json:
         print(json.dumps(result, indent=2))

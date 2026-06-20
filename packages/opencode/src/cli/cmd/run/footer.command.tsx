@@ -20,6 +20,7 @@ type CommandEntry =
   | (PanelEntry & { action: "subagent" })
   | (PanelEntry & { action: "variant.cycle" })
   | (PanelEntry & { action: "variant.list" })
+  | (PanelEntry & { action: "subagent-model" })
   | (PanelEntry & { action: "slash"; name: string })
   | (PanelEntry & { action: "exit" })
 
@@ -349,6 +350,7 @@ export function RunCommandMenuBody(props: {
   variantCycle: string
   onClose: () => void
   onModel: () => void
+  onSubagentModel: () => void
   onEditor: () => void
   onSkill: () => void
   onSubagent: () => void
@@ -417,6 +419,13 @@ export function RunCommandMenuBody(props: {
         category: "Agent",
         display: "Switch model",
       },
+      {
+        action: "subagent-model",
+        category: "Agent",
+        display: "Switch subagent model",
+        footer: "/subagent",
+        keywords: "subagent model",
+      },
       ...(props.queued().length > 0
         ? [
             {
@@ -478,52 +487,46 @@ export function RunCommandMenuBody(props: {
   const items = createMemo<CommandEntry[]>(() => match(query(), entries()))
   const menu = createFooterMenuState({ count: () => items().length, limit: PANEL_LIST_ROWS })
   const pick = (item: CommandEntry) => {
-    if (item.action === "model") {
-      props.onModel()
-      return
+    switch (item.action) {
+      case "model":
+        props.onModel()
+        return
+      case "subagent-model":
+        props.onSubagentModel()
+        return
+      case "editor":
+        props.onEditor()
+        return
+      case "skill":
+        props.onSkill()
+        return
+      case "subagent":
+        props.onSubagent()
+        return
+      case "queued":
+        props.onQueued()
+        return
+      case "variant.cycle":
+        props.onVariantCycle()
+        return
+      case "variant.list":
+        props.onVariant()
+        return
+      case "slash":
+        if (item.name === "new") {
+          props.onNew()
+          return
+        }
+        props.onCommand(item.name)
+        return
+      case "exit":
+        props.onExit()
+        return
+      default: {
+        const _exhaustive: never = item
+        return
+      }
     }
-
-    if (item.action === "editor") {
-      props.onEditor()
-      return
-    }
-
-    if (item.action === "skill") {
-      props.onSkill()
-      return
-    }
-
-    if (item.action === "subagent") {
-      props.onSubagent()
-      return
-    }
-
-    if (item.action === "queued") {
-      props.onQueued()
-      return
-    }
-
-    if (item.action === "variant.cycle") {
-      props.onVariantCycle()
-      return
-    }
-
-    if (item.action === "variant.list") {
-      props.onVariant()
-      return
-    }
-
-    if (item.action === "exit") {
-      props.onExit()
-      return
-    }
-
-    if (item.name === "new") {
-      props.onNew()
-      return
-    }
-
-    props.onCommand(item.name)
   }
   const select = () => {
     const item = items()[menu.selected()]

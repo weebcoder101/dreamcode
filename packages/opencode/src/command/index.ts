@@ -11,7 +11,6 @@ import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_RESEARCH from "./template/research.txt"
-import PROMPT_SUBAGENT from "./template/subagent.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -112,10 +111,9 @@ export const layer = Layer.effect(
         name: Default.SUBAGENT,
         description: "configure subagent model [providerID/modelID|off]",
         source: "command",
-        get template() {
-          return PROMPT_SUBAGENT
-        },
-        hints: hints(PROMPT_SUBAGENT),
+        // template intentionally omitted — handled client-side in footer.prompt.tsx
+        subtask: false,
+        hints: [],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

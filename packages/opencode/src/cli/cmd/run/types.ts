@@ -64,6 +64,7 @@ export type RunInput = {
   replayLimit?: number
   agent: string | undefined
   model: PromptModel | undefined
+  subagentModel: PromptModel | undefined
   variant: string | undefined
   files: RunFilePart[]
   initialInput?: string
@@ -183,6 +184,7 @@ export type FooterPromptRoute =
   | { type: "command" }
   | { type: "skill" }
   | { type: "model" }
+  | { type: "subagent-model" }
   | { type: "variant" }
 
 export type FooterSubagentTab = {

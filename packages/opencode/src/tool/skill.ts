@@ -1,11 +1,17 @@
-import { Effect, Schema } from "effect"
+/**
+ * @deprecated Use the core skill tool from @opencode-ai/core/tool/skill instead.
+ * This module is retained as a compatibility shim during migration (Phase 4).
+ * All new code should import from the core package directly.
+ */
+import { Effect, Schema, Duration, Ref } from "effect"
+import * as Stream from "effect/Stream"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import * as Tool from "./tool"
-import * as fs from "fs"
 import * as path from "path"
-import { execFileSync } from "child_process"
+import * as fs from "fs"
 import DESCRIPTION from "./skill.txt"
 
-const HOME = process.env.HOME || process.env.USERPROFILE || ""
+const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
 
 // Resolve skills directory from multiple candidate paths (global config, then CWD-relative)
 function resolveSkillsDir(): string {
@@ -45,40 +51,17 @@ const SENSOR_GATE = findSensorGate()
 
 function getAvailableSkills(): string[] {
   try {
-    if (!SENSOR_GATE || !fs.existsSync(SENSOR_GATE)) {
-      // Fallback: scan the skills directory for SKILL.md files
-      if (fs.existsSync(SKILLS_DIR)) {
-        return fs.readdirSync(SKILLS_DIR).filter((d) => {
-          try {
-            return fs.statSync(path.join(SKILLS_DIR, d)).isDirectory()
-          } catch {
-            return false
-          }
-        })
-      }
-      return []
+    if (fs.existsSync(SKILLS_DIR)) {
+      return fs.readdirSync(SKILLS_DIR).filter((d) => {
+        try {
+          return fs.statSync(path.join(SKILLS_DIR, d)).isDirectory()
+        } catch {
+          return false
+        }
+      })
     }
-    const result = execFileSync("python3", [SENSOR_GATE, "--list-skills"], {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim()
-    return result.split("\n").filter(Boolean)
-  } catch {
-    // Fallback: scan the skills directory
-    try {
-      if (fs.existsSync(SKILLS_DIR)) {
-        return fs.readdirSync(SKILLS_DIR).filter((d) => {
-          try {
-            return fs.statSync(path.join(SKILLS_DIR, d)).isDirectory()
-          } catch {
-            return false
-          }
-        })
-      }
-    } catch {}
-    return []
-  }
+  } catch {}
+  return []
 }
 
 function logSkillExecution(skill: string, result: string, score: number) {
@@ -95,9 +78,17 @@ function logSkillExecution(skill: string, result: string, score: number) {
   } catch {}
 }
 
+function sanitizeMessage(raw: string): string {
+  return raw
+    .replace(/(sk-[a-zA-Z0-9]{20,})/g, "sk-…[REDACTED]")
+    .replace(/(ghp_|gho_|github_pat_)[a-zA-Z0-9_]{36,}/g, "[REDACTED TOKEN]")
+    .replace(/(Authorization:\s*Bearer\s+)[a-zA-Z0-9_\-\.]+/gi, "$1[REDACTED]")
+    .replace(/(api[-_]?key[-_]?["']?:\s*["']?)[a-zA-Z0-9_\-\.]{16,}/gi, "$1[REDACTED]")
+}
+
 function logError(source: string, error: unknown) {
   try {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = sanitizeMessage(error instanceof Error ? error.message : String(error))
     const entry = {
       timestamp: new Date().toISOString(),
       source,
@@ -110,27 +101,34 @@ function logError(source: string, error: unknown) {
   }
 }
 
+const scoreLock = Effect.runSync(Ref.make(true))
+
 function recordScore(event: string, points: number, details: string) {
-  try {
-    const scoreDir = path.dirname(SCORE_FILE)
-    fs.mkdirSync(scoreDir, { recursive: true })
-    let score = { total: 0, history: [] as Array<{ timestamp: string; event: string; points: number; total_after: number; details: string }> }
-    if (fs.existsSync(SCORE_FILE)) {
-      score = JSON.parse(fs.readFileSync(SCORE_FILE, "utf8"))
+  Effect.runSync(Effect.gen(function* () {
+    yield* Ref.getAndSet(scoreLock, false)
+    try {
+      const scoreDir = path.dirname(SCORE_FILE)
+      fs.mkdirSync(scoreDir, { recursive: true })
+      let score = { total: 0, history: [] as Array<{ timestamp: string; event: string; points: number; total_after: number; details: string }> }
+      if (fs.existsSync(SCORE_FILE)) {
+        score = JSON.parse(fs.readFileSync(SCORE_FILE, "utf8"))
+      }
+      score.total += points
+      score.history.push({
+        timestamp: new Date().toISOString(),
+        event,
+        points,
+        total_after: score.total,
+        details,
+      })
+      score.history = score.history.slice(-100)
+      fs.writeFileSync(SCORE_FILE, JSON.stringify(score, null, 2))
+    } catch {
+      // Silently fail if scoring unavailable
+    } finally {
+      yield* Ref.set(scoreLock, true)
     }
-    score.total += points
-    score.history.push({
-      timestamp: new Date().toISOString(),
-      event,
-      points,
-      total_after: score.total,
-      details,
-    })
-    score.history = score.history.slice(-100)
-    fs.writeFileSync(SCORE_FILE, JSON.stringify(score, null, 2))
-  } catch {
-    // Silently fail if scoring unavailable
-  }
+  }))
 }
 
 function sanitizeSensorGateOutput(raw: string): string {
@@ -142,12 +140,70 @@ function sanitizeSensorGateOutput(raw: string): string {
   return lines.length > 0 ? lines.join("\n") : "Sensor gate completed (internal details suppressed)"
 }
 
+// Phase 3: Async version of sensor gate using ChildProcessSpawner
+// Prompt is passed via stdin (not argv) to avoid /proc/$PID/cmdline exposure.
+const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (prompt: string) {
+  if (!SENSOR_GATE || !fs.existsSync(SENSOR_GATE)) return ""
+  try {
+    const promptBytes = new TextEncoder().encode(prompt)
+    const child = yield* ChildProcess.make({
+      command: "python3",
+      args: [SENSOR_GATE, "--stdin"],
+      stdin: Stream.make(promptBytes),
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+    const output = yield* child.stdout
+      .pipe(Stream.toString)
+      .pipe(Effect.timeout(Duration.seconds(200)))
+      .pipe(Effect.catch(() => Effect.succeed("")))
+    return output || ""
+  } catch {
+    return ""
+  }
+})
+
+// Phase 3: Async version of skill script execution
+// Prompt is passed via stdin (not argv) to avoid /proc/$PID/cmdline exposure.
+const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (script: string, prompt: string) {
+  try {
+    const promptBytes = new TextEncoder().encode(prompt)
+    const child = yield* ChildProcess.make({
+      command: "python3",
+      args: [script, "--stdin"],
+      stdin: Stream.make(promptBytes),
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+    const output = yield* child.stdout
+      .pipe(Stream.toString)
+      .pipe(Effect.timeout(Duration.seconds(200)))
+      .pipe(Effect.catch(() => Effect.succeed("")))
+    return output || ""
+  } catch {
+    return ""
+  }
+})
+
+const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/
+
 export const Parameters = Schema.Struct({
-  name: Schema.String.annotate({ description: "Skill name from the 37-skill graph" }),
-  skill: Schema.optional(Schema.String).annotate({ description: "Skill name (deprecated, use name)" }),
-  prompt: Schema.String.annotate({ description: "Task prompt to pass to the skill" }),
-  run_sensor_gate: Schema.optional(Schema.Boolean).annotate({
-    description: "Run sensor gate classification first (default: true, MANDATORY)",
+  name: Schema.String
+    .annotate({ description: "Skill name from the 37-skill graph" })
+    .pipe(Schema.nonEmpty())
+    .pipe(Schema.maxLength(128))
+    .pipe(Schema.pattern(SKILL_NAME_PATTERN)),
+  skill: Schema.optional(
+    Schema.String
+      .pipe(Schema.maxLength(128))
+      .pipe(Schema.pattern(SKILL_NAME_PATTERN)),
+  ).annotate({ description: "Skill name (deprecated, use name)" }),
+  prompt: Schema.String
+    .pipe(Schema.maxLength(100_000))
+    .annotate({ description: "Task prompt to pass to the skill" }),
+  // Phase 3: Default run_sensor_gate to false — sensor gate classification
+  // already happens in prompt.ts before the LLM is invoked. Only run when
+  // explicitly requested or when this tool is called directly by the user.
+  run_sensor_gate: Schema.optionalWithDefault(Schema.Boolean, { default: () => false }).annotate({
+    description: "Run sensor gate classification first (default: false — classification already performed upstream)",
   }),
 })
 
@@ -156,6 +212,9 @@ type Metadata = {
   score: number
 }
 
+// Phase 4: Re-export shim. This tool is @deprecated in favor of core's SkillTool.
+// New code should import from @opencode-ai/core/tool/skill directly.
+// The local copy is retained for backward compatibility during migration.
 export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
   "skill",
   Effect.gen(function* () {
@@ -167,18 +226,19 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
           const results: string[] = []
           let score = 0
           const skillName = params.name ?? params.skill ?? ""
-          const runGate = params.run_sensor_gate !== false
+          const runGate = params.run_sensor_gate
 
+          // Phase 2 + Phase 3: Only run sensor gate if explicitly requested
           if (runGate && SENSOR_GATE && fs.existsSync(SENSOR_GATE)) {
             try {
-              const gateResult = execFileSync(
-                "python3",
-                [SENSOR_GATE, "--prompt", params.prompt],
-                { encoding: "utf8", timeout: 200_000, stdio: ["pipe", "pipe", "pipe"] }
-              )
-              results.push(`[SENSOR GATE]\n${sanitizeSensorGateOutput(gateResult)}`)
-              score += 10
-              recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${skillName}`)
+              const gateResult = yield* runSensorGateAsync(params.prompt)
+              if (gateResult) {
+                results.push(`[SENSOR GATE]\n${sanitizeSensorGateOutput(gateResult)}`)
+                score += 10
+                recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${skillName}`)
+              } else {
+                throw new Error("Sensor gate returned empty result")
+              }
             } catch (e) {
               logError("sensor_gate", e)
               results.push(`[SENSOR GATE: skipped (logged)]`)
@@ -193,11 +253,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
 
           if (fs.existsSync(skillScript)) {
             try {
-              const skillResult = execFileSync(
-                "python3",
-                [skillScript, "--prompt", params.prompt],
-                { encoding: "utf8", timeout: 200_000, stdio: ["pipe", "pipe", "pipe"] }
-              )
+              const skillResult = yield* runSkillScriptAsync(skillScript, params.prompt)
               results.push(`[SKILL: ${skillName}]\n${skillResult}`)
               score += 5
               recordScore("skill_executed", 5, `Skill ${skillName} executed`)

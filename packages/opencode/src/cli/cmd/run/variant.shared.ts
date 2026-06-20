@@ -6,6 +6,7 @@
 // The saved variant persists across sessions in ~/.local/state/opencode/model.json
 // so your last-used variant sticks. Cycling (ctrl+t) updates both the active
 // variant and the persisted file.
+import fs from "fs"
 import path from "path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Context, Effect, Layer } from "effect"
@@ -19,6 +20,7 @@ const MODEL_FILE = path.join(Global.Path.state, "model.json")
 
 type ModelState = Record<string, unknown> & {
   variant?: Record<string, string | undefined>
+  subagentModel?: { providerID: string; modelID: string }
 }
 type VariantService = {
   readonly resolveSavedVariant: (model: RunInput["model"]) => Effect.Effect<string | undefined>
@@ -212,4 +214,36 @@ export async function resolveSavedVariant(model: RunInput["model"]): Promise<str
 
 export function saveVariant(model: RunInput["model"], variant: string | undefined): void {
   void runtime.saveVariant(model, variant)
+}
+
+export function resolveSavedSubagentModel(): RunInput["model"] | undefined {
+  try {
+    const raw = fs.readFileSync(MODEL_FILE, "utf-8")
+    const data = state(JSON.parse(raw))
+    return data.subagentModel
+  } catch {
+    return undefined
+  }
+}
+
+export function saveSubagentModel(model: NonNullable<RunInput["model"]>): void {
+  try {
+    let data: ModelState = {}
+    try {
+      const raw = fs.readFileSync(MODEL_FILE, "utf-8")
+      data = state(JSON.parse(raw))
+    } catch {
+      // start fresh
+    }
+    const dir = path.dirname(MODEL_FILE)
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+    // Atomic write: write to tmp, then rename
+    const tmp = MODEL_FILE + ".tmp"
+    fs.writeFileSync(tmp, JSON.stringify({ ...data, subagentModel: { providerID: model.providerID, modelID: model.modelID } }, null, 2))
+    fs.renameSync(tmp, MODEL_FILE)
+  } catch {
+    console.warn("Failed to save subagent model")
+  }
 }

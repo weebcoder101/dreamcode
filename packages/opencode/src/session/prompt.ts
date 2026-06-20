@@ -33,9 +33,12 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
+import { Skill } from "@/skill"
 import { SensorGate, evaluateSpawnNecessity } from "@/skill/sensor-gate"
+import { ChainExecutor } from "@/skill/chain-executor"
 import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
+import { PiecesLTM } from "@/pieces-ltm"
 import { extractSubagentContext, buildSubagentContextPrompt } from "./subagent-context"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
@@ -80,6 +83,13 @@ IMPORTANT:
 - This tool provides your final answer - no further actions are taken after calling it`
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+
+function sanitizeForSystemPrompt(text: string): string {
+  return text
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/<\s*\//gi, "&lt;\\/")
+}
 
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
@@ -130,11 +140,7 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-
-    // Sanitize text before embedding in system prompt to prevent prompt injection
-    function sanitizeForSystemPrompt(text: string): string {
-      return text.replace(/[<>]/g, (ch) => (ch === "<" ? "&lt;" : "&gt;"))
-    }
+    const skillService = yield* Skill.Service
 
     const ops = Effect.fn("SessionPrompt.ops")(function* (opts?: { disableTaskTool?: boolean }) {
       return {
@@ -1418,7 +1424,7 @@ Before every response, verify your reasoning:
                 "If you are using a high-cost model, consider configuring a cheaper subagent",
                 "model (e.g. deepseek-v4-flash, mimo-v2.5) to reduce costs.",
                 "",
-                "Use **/subagent** to select a cheaper model from your saved providers,",
+                "Type **/subagent** to open the model selector and choose a cheaper model from your saved providers,",
                 "or respond with \"keep parent\" to continue using the current model.",
                 "</subagent-cost-warning>",
               ].join("\n"))
@@ -1446,30 +1452,159 @@ Before every response, verify your reasoning:
               ) ?? false
 
               if (userText.trim() && !isSynthesis) {
-                const gateResult = yield* sensorGate.classify(userText).pipe(Effect.orDie)
+                const gateResult = yield* sensorGate.classify(userText).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.as(Effect.logError("Sensor gate unavailable", { cause }), null),
+                  ),
+                )
                 if (gateResult && !gateResult.is_social_greeting) {
                   const isLowConfidence = gateResult.confidence < 0.7
 
                   const sensorBlock = [
                     "<sensor-gate>",
-                    `Intent: ${gateResult.intent}`,
-                    `Mode: ${gateResult.mode}`,
+                    `Intent: ${sanitizeForSystemPrompt(gateResult.intent)}`,
+                    `Mode: ${sanitizeForSystemPrompt(gateResult.mode)}`,
                     `Confidence: ${gateResult.confidence}`,
-                    `Primary Skill: ${gateResult.primary_skill}`,
-                    `Support Skills: ${gateResult.support_skills.join(", ")}`,
-                    `Chain: ${gateResult.chain.join(" → ")}`,
-                    `Guardian: ${gateResult.guardian_decision} (${gateResult.guardian_risk})`,
+                    `Primary Skill: ${sanitizeForSystemPrompt(gateResult.primary_skill)}`,
+                    `Support Skills: ${sanitizeForSystemPrompt(gateResult.support_skills.join(", "))}`,
+                    `Chain: ${sanitizeForSystemPrompt(gateResult.chain.join(" → "))}`,
+                    `Guardian: ${sanitizeForSystemPrompt(gateResult.guardian_decision)} (${sanitizeForSystemPrompt(gateResult.guardian_risk)})`,
                     "",
                     sanitizeForSystemPrompt(gateResult.skill_plan),
                   ]
 
                   // Add neuro analysis if available
                   if (gateResult.neuro_result) {
-                    sensorBlock.push("", "<neuro-analysis>", sanitizeForSystemPrompt(gateResult.neuro_result), "</neuro-analysis>")
+                    const safeNeuro = typeof gateResult.neuro_result === "string"
+                      ? gateResult.neuro_result.slice(0, 10_000)
+                      : JSON.stringify(gateResult.neuro_result).slice(0, 50_000)
+                    sensorBlock.push("", "<neuro-analysis>", sanitizeForSystemPrompt(safeNeuro), "</neuro-analysis>")
                   }
 
                   sensorBlock.push("</sensor-gate>")
                   system.push(sensorBlock.join("\n"))
+
+                  // Force-load skills from gateResult.chain
+                  for (const skillName of gateResult.chain) {
+                    const skillInfo = yield* skillService.require(skillName).pipe(Effect.option)
+                    if (skillInfo._tag === "Some") {
+                      system.push(`\n<loaded-skill name="${skillName}">\n${skillInfo.value.content}\n</loaded-skill>`)
+                    }
+                  }
+
+                  // ─── ChainExecutor: Execute skills programmatically ──
+                  // After loading skill content, run the chain executor
+                  // to produce execution results for each skill.
+                  if (gateResult.chain.length > 0) {
+                    const executor = yield* ChainExecutor.Service
+                    const chainResults = yield* executor.execute(gateResult.chain, userText).pipe(
+                      Effect.catch(() => Effect.succeed([])),
+                    )
+                    for (const result of chainResults) {
+                      if (result.status === "ok" && result.output) {
+                        system.push(`\n<skill-result name="${result.name}">\n${result.output.slice(0, 5000)}\n</skill-result>`)
+                      } else if (result.status === "not_found") {
+                        system.push(`\n<skill-missing name="${result.name}"/>`)
+                      } else {
+                        system.push(`\n<skill-result name="${result.name}" status="error">\n${result.output.slice(0, 2000)}\n</skill-result>`)
+                      }
+                    }
+
+                    // Phase 5: Wire orphaned Python scripts
+                    if (gateResult.mode === "DREAM_INNOVATION" || gateResult.chain.length > 3) {
+                      const pipelineResults = yield* executor.runFullPipeline(gateResult.chain, userText).pipe(
+                        Effect.catch(() => Effect.succeed([])),
+                      )
+                      for (const result of pipelineResults) {
+                        if (result.status === "ok" && result.output) {
+                          system.push(`\n<chain-executor-result name="${result.name}">\n${result.output.slice(0, 5000)}\n</chain-executor-result>`)
+                        }
+                      }
+
+                      const verifyResult = yield* executor.verify(chainResults).pipe(
+                        Effect.catch(() => Effect.succeed("")),
+                      )
+                      if (verifyResult) {
+                        system.push(`\n<chain-verification>\n${verifyResult.slice(0, 2000)}\n</chain-verification>`)
+                      }
+                    }
+
+                    // ─── Chain-Gap Detection ──────────────────────────
+                    // Hard enforcement: warn if any chain skill wasn't executed
+                    const missingSkills = gateResult.chain.filter(
+                      (name) => !chainResults.some((r) => r.name === name && r.status === "ok"),
+                    )
+                    if (missingSkills.length > 0) {
+                      system.push(
+                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${missingSkills.join(", ")}. ` +
+                        `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
+                        `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+                      )
+                    }
+
+                    // ─── Dream Enforcement ────────────────────────────
+                    // When DREAM_INNOVATION mode is active, inject explicit
+                    // thinking instructions into the system prompt.
+                    if (gateResult.mode === "DREAM_INNOVATION") {
+                      system.push(
+                        `\n<dream-enforcement>` +
+                        `\nYou are operating in DREAM_INNOVATION mode. You MUST:` +
+                        `\n1. Ground your thinking — state what you know and what the constraints are` +
+                        `\n2. Dream — produce latent insights, non-obvious connections, TRIZ contradictions` +
+                        `\n3. Multi-perspective — view from security, performance, UX, cost, architecture` +
+                        `\n4. Propose — offer exactly 3 innovations with hypothesis, experiment, failure modes, risk/reward` +
+                        `\n5. Build — pick and implement ONE proposal` +
+                        `\nDo not skip these steps. This is the default thinking mode.` +
+                        `\n</dream-enforcement>`,
+                      )
+                    }
+
+                    // ─── PiecesLTM Auto-Persist ──────────────────────
+                    // Programmatically persist every chain execution to LTM.
+                    yield* PiecesLTM.Service.persist({
+                      chainName: gateResult.chain.join(" → "),
+                      taskDescription: gateResult.intent,
+                      outcome: missingSkills.length === 0 ? "success" : "failed",
+                      memoryType: gateResult.mode === "DREAM_INNOVATION" ? "breakthrough" : "learn",
+                      metrics: {
+                        chainLength: gateResult.chain.length,
+                        mode: gateResult.mode,
+                        confidence: gateResult.confidence,
+                        skillsExecuted: chainResults.filter((r) => r.status === "ok").length,
+                        skillsMissing: missingSkills.length,
+                      },
+                      project: process.cwd(),
+                    }).pipe(Effect.catch(() => Effect.void))
+
+                    // ─── Self-Evolution: Auto-log to run_log.jsonl ──
+                    // Write structured learning signals after every chain execution.
+                    yield* Effect.tryPromise({
+                      try: () => {
+                        const evolutionDir = path.join(process.cwd(), "evolution")
+                        const logLine = JSON.stringify({
+                          timestamp: new Date().toISOString(),
+                          type: "chain_execution",
+                          prompt_excerpt: userText.slice(0, 200),
+                          chain: gateResult.chain,
+                          chain_length: gateResult.chain.length,
+                          mode: gateResult.mode,
+                          outcome: missingSkills.length === 0 ? "success" : "partial",
+                          skills_executed: chainResults.filter((r) => r.status === "ok").map((r) => r.name),
+                          skills_missing: missingSkills,
+                          confidence: gateResult.confidence,
+                          neuro_available: Boolean(gateResult.neuro_result),
+                        }) + "\n"
+                        const dir = Bun.file(evolutionDir)
+                        // ensure evolution dir exists by writing to a file inside it
+                        return Bun.write(
+                          path.join(evolutionDir, "run_log.jsonl"),
+                          logLine,
+                          { createPath: true, append: true },
+                        )
+                      },
+                      catch: () => {},
+                    })
+                  }
 
                   // ─── Persona System Injection ─────────────────────────
                   if (gateResult.personas.length > 0) {
@@ -1501,7 +1636,10 @@ Before every response, verify your reasoning:
                     ]
                     personaTeam.forEach((p, i) => {
                       personaLines.push(`${i + 1}. "${p.name}" (${p.role})`)
-                      personaLines.push(`   Task: ${p.task?.slice(0, 120) || `Analyzing ${p.focus}`}`)
+                      const taskDisplay = p.task
+                        ? (p.task.length > 120 ? p.task.slice(0, 117) + "..." : p.task)
+                        : `Analyzing ${p.focus}`
+                      personaLines.push(`   Task: ${taskDisplay}`)
                       if (p.goals?.length) {
                         personaLines.push(`   Goals: ${p.goals.join("; ")}`)
                       }
@@ -1663,7 +1801,7 @@ Before every response, verify your reasoning:
                             ...(persona.neuroResult ? [
                               "",
                               "## NEURO Analysis",
-                              persona.neuroResult,
+                              sanitizeForSystemPrompt(persona.neuroResult.slice(0, 10_000)),
                               "Use this analysis to inform your findings.",
                             ] : []),
                           ].join("\n")
@@ -1726,7 +1864,7 @@ Before every response, verify your reasoning:
                         { concurrency: 5 },
                       )
 
-                      const personaResults = tracker.getAll()
+                      const personaResults = yield* tracker.getAll()
                       synthesisText = PersonaTracker.buildSynthesisPrompt(personaResults)
                       yield* Effect.promise(() =>
                         PersonaTracker.injectSynthesis(sessionID, personaResults, sessions, model.providerID, model.id)
@@ -1998,6 +2136,8 @@ export const defaultLayer = Layer.suspend(() =>
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
         SensorGate.defaultLayer,
+        Skill.defaultLayer,
+        ChainExecutor.defaultLayer,
         ContextCompressor.defaultLayer,
       ),
     ),
@@ -2108,6 +2248,7 @@ const placeholderRegex = /\$(\d+)/g
 const quoteTrimRegex = /^["']|["']$/g
 
 const sensorGateNode = LayerNode.make(SensorGate.defaultLayer, [])
+const chainExecutorNode = LayerNode.make(ChainExecutor.defaultLayer, [])
 
 export const node = LayerNode.make(layer, [
   SessionStatus.node,
@@ -2137,6 +2278,7 @@ export const node = LayerNode.make(layer, [
   RuntimeFlags.node,
   Database.node,
   sensorGateNode,
+  chainExecutorNode,
 ])
 
 export * as SessionPrompt from "./prompt"

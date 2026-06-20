@@ -2,7 +2,6 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect, Context, Layer } from "effect"
 import * as fs from "fs"
 import * as path from "path"
-import { execFileSync } from "child_process"
 import { InstanceState } from "@/effect/instance-state"
 
 export interface CompressionResult {

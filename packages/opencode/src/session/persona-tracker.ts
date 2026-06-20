@@ -3,9 +3,11 @@
  *
  * When all persona subagents complete, injects a synthesis prompt
  * that tells the Architect to unify all specialist findings.
+ *
+ * Uses Effect Ref for atomic state management across concurrent fibers.
  */
 
-import { Effect } from "effect"
+import { Effect, Ref } from "effect"
 import { MessageID, PartID, SessionID } from "./schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -24,14 +26,14 @@ export interface PersonaResult {
 
 export interface PersonaTracker {
   readonly sessionID: string
-  readonly remaining: () => number
+  readonly remaining: () => Effect.Effect<number>
   readonly complete: (name: string, role: string, output: string, status: "completed" | "error", extra?: { task?: string; goals?: string[]; synthesisGuide?: string }) => Effect.Effect<void>
-  readonly getAll: () => PersonaResult[]
+  readonly getAll: () => Effect.Effect<PersonaResult[]>
 }
 
 export function create(sessionID: string, total: number): PersonaTracker {
-  const results: PersonaResult[] = []
-  let remaining = total
+  const resultsRef = Effect.runSync(Ref.make<PersonaResult[]>([]))
+  const remainingRef = Effect.runSync(Ref.make(total))
 
   const complete = Effect.fn("PersonaTracker.complete")(function* (
     name: string,
@@ -40,17 +42,15 @@ export function create(sessionID: string, total: number): PersonaTracker {
     status: "completed" | "error",
     extra?: { task?: string; goals?: string[]; synthesisGuide?: string },
   ) {
-    results.push({ name, role, output, status, ...extra })
-    remaining--
+    yield* Ref.update(resultsRef, (r) => [...r, { name, role, output, status, ...extra }])
+    yield* Ref.update(remainingRef, (r) => r - 1)
   })
-
-  const getAll = (): PersonaResult[] => results.slice()
 
   return {
     sessionID,
-    remaining: () => remaining,
+    remaining: () => Ref.get(remainingRef),
     complete,
-    getAll,
+    getAll: () => Ref.get(resultsRef),
   }
 }
 
