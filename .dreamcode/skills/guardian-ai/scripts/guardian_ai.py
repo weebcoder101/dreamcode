@@ -30,7 +30,15 @@ from pathlib import Path
 # Config
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path.cwd() if (Path.cwd() / ".opencode").is_dir() else next(p for p in [Path.cwd()] + list(Path.cwd().parents) if (p / ".opencode").is_dir())
+def _find_project_root() -> Path:
+    """Find project root by looking for .opencode directory."""
+    current = Path.cwd()
+    for parent in [current] + list(current.parents):
+        if (parent / ".opencode").is_dir():
+            return parent
+    return current
+
+PROJECT_ROOT = _find_project_root()
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 GUARDIAN_LOG = EVOLUTION_DIR / "guardian_ai.jsonl"
 

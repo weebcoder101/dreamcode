@@ -8,8 +8,9 @@ import path from "path"
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
 
 function validateScriptPath(resolved: string): boolean {
-  const allowed = path.resolve(HOME, ".config", "dreamcode", "skills")
-  return resolved.startsWith(allowed)
+  const allowedGlobal = path.resolve(HOME, ".config", "dreamcode", "skills")
+  const allowedProject = path.resolve(process.cwd(), ".dreamcode", "skills")
+  return resolved.startsWith(allowedGlobal) || resolved.startsWith(allowedProject)
 }
 
 export interface ChainResult {
@@ -34,15 +35,10 @@ export interface Interface {
 
 const discoverScripts = Effect.fn("ChainExecutor.discoverScripts")(function* (skillLocation: string) {
   const dir = path.dirname(skillLocation)
-  try {
-    const scripts = yield* Effect.tryPromise({
-      try: () => Glob.scan("scripts/*.py", { cwd: dir, absolute: true }),
-      catch: () => [] as string[],
-    })
-    return scripts as string[]
-  } catch {
-    return [] as string[]
-  }
+  return yield* Effect.tryPromise({
+    try: () => Glob.scan("scripts/*.py", { cwd: dir, absolute: true }),
+    catch: () => [] as string[],
+  }).pipe(Effect.map((scripts) => scripts as string[]))
 })
 
 const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (

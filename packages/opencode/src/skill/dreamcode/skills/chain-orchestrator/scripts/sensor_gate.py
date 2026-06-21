@@ -890,9 +890,18 @@ def run_gate(prompt: str) -> dict:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="SENSOR Gate — Codex-Compatible Runtime")
-    parser.add_argument("--prompt", required=True, help="User prompt")
+    parser.add_argument("--prompt", default=None, help="User prompt (or pipe via stdin with --stdin)")
+    parser.add_argument("--stdin", action="store_true", help="Read prompt from stdin")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
-    result = run_gate(args.prompt)
+
+    if args.stdin:
+        prompt = sys.stdin.read().strip()
+    elif args.prompt:
+        prompt = args.prompt
+    else:
+        parser.error("Either --prompt or --stdin is required")
+
+    result = run_gate(prompt)
     if args.json:
         print(json.dumps(result, indent=2))

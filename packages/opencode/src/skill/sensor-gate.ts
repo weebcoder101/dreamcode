@@ -6,6 +6,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
 
 const SAFE_PROMPT_MAX = 100_000
+const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
+const RATE_MAX_SPAWNS = 5
 
 export interface Persona {
   name: string
@@ -224,8 +226,8 @@ export function evaluateSpawnNecessity(
 
   // 0. User-specified agent count — if the prompt explicitly requests N subagents,
   //    honor that as a hard override (up to RATE_MAX_SPAWNS).
-  const userCountMatch = prompt.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
-  const userCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), 7) : 0
+  const userCountMatch = prompt.match(USER_AGENT_COUNT_RE)
+  const userCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), RATE_MAX_SPAWNS) : 0
   if (userCount > 0) {
     return {
       shouldSpawn: true,
@@ -402,6 +404,37 @@ export interface SensorGateResult {
   neuro_result?: string
 }
 
+// ---------------------------------------------------------------------------
+// Sensor Gate Output Parser
+// ---------------------------------------------------------------------------
+
+const PARSERS: Record<string, (line: string, r: SensorGateResult) => void> = {
+  "- intent:": (l, r) => { r.intent = l.slice("- intent:".length).trim() },
+  "- domain_tags:": (l, r) => {
+    r.domain_tags = l.slice("- domain_tags:".length).trim().split(",").map((t) => t.trim()).filter(Boolean)
+  },
+  "- risk_level:": (l, r) => { r.risk_level = l.slice("- risk_level:".length).trim() },
+  "- confidence:": (l, r) => {
+    const val = parseFloat(l.slice("- confidence:".length))
+    r.confidence = Number.isFinite(val) ? val : 0.5
+  },
+  "- complexity:": (l, r) => { r.complexity = l.slice("- complexity:".length).trim() },
+  "- time_sensitivity:": (l, r) => { r.time_sensitivity = l.slice("- time_sensitivity:".length).trim() },
+  "- requires_tools:": (l, r) => { r.requires_tools = l.slice("- requires_tools:".length).trim() },
+  "- deliverable_type:": (l, r) => { r.deliverable_type = l.slice("- deliverable_type:".length).trim() },
+  "- is_social_greeting:": (l, r) => { r.is_social_greeting = l.slice("- is_social_greeting:".length).trim() === "true" },
+  "- primary:": (l, r) => { r.primary_skill = l.slice("- primary:".length).trim() },
+  "- supports:": (l, r) => {
+    r.support_skills = l.slice("- supports:".length).trim().split(",").map((s) => s.trim()).filter(Boolean)
+  },
+  "- automation:": (l, r) => { r.automation = l.slice("- automation:".length).trim() },
+  "- mode:": (l, r) => { r.mode = l.slice("- mode:".length).trim() },
+  "- chain:": (l, r) => {
+    r.chain = l.slice("- chain:".length).trim().split("→").map((s) => s.trim()).filter(Boolean)
+  },
+  "- decision:": (l, r) => { r.guardian_decision = l.slice("- decision:".length).trim() },
+}
+
 export function parseSensorGateOutput(output: string): SensorGateResult {
   const lines = output.split("\n")
   const result: SensorGateResult = {
@@ -428,33 +461,6 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
 
   for (const line of lines) {
     const trimmed = line.trim()
-
-    const PARSERS: Record<string, (line: string, r: SensorGateResult) => void> = {
-      "- intent:": (l, r) => { r.intent = l.slice(10).trim() },
-      "- domain_tags:": (l, r) => {
-        r.domain_tags = l.slice(14).trim().split(",").map((t) => t.trim()).filter(Boolean)
-      },
-      "- risk_level:": (l, r) => { r.risk_level = l.slice(13).trim() },
-      "- confidence:": (l, r) => {
-        const val = parseFloat(l.slice(12))
-        r.confidence = Number.isFinite(val) ? val : 0.5
-      },
-      "- complexity:": (l, r) => { r.complexity = l.slice(13).trim() },
-      "- time_sensitivity:": (l, r) => { r.time_sensitivity = l.slice(19).trim() },
-      "- requires_tools:": (l, r) => { r.requires_tools = l.slice(17).trim() },
-      "- deliverable_type:": (l, r) => { r.deliverable_type = l.slice(19).trim() },
-      "- is_social_greeting:": (l, r) => { r.is_social_greeting = l.slice(21).trim() === "true" },
-      "- primary:": (l, r) => { r.primary_skill = l.slice(10).trim() },
-      "- supports:": (l, r) => {
-        r.support_skills = l.slice(11).trim().split(",").map((s) => s.trim()).filter(Boolean)
-      },
-      "- automation:": (l, r) => { r.automation = l.slice(13).trim() },
-      "- mode:": (l, r) => { r.mode = l.slice(7).trim() },
-      "- chain:": (l, r) => {
-        r.chain = l.slice(8).trim().split("→").map((s) => s.trim()).filter(Boolean)
-      },
-      "- decision:": (l, r) => { r.guardian_decision = l.slice(11).trim() },
-    }
 
     for (const [prefix, parse] of Object.entries(PARSERS)) {
       if (trimmed.startsWith(prefix)) { parse(trimmed, result); break }
@@ -551,6 +557,19 @@ function resolveScript(relativePath: string): string | undefined {
 
 const VALID_SCAN_TYPES = new Set(["security", "full_audit", "bug_hunt", "test_gap"])
 
+const INITIAL_TIMEOUT_MS = 150_000
+const RETRY_TIMEOUT_MS = 300_000
+
+/** Shared retry-with-timeout: runs the effect with INITIAL_TIMEOUT, then RETRY_TIMEOUT on null. */
+function retryWithTimeout<T>(run: (timeoutMs: number) => Effect.Effect<T | null>): Effect.Effect<T | null> {
+  return run(INITIAL_TIMEOUT_MS).pipe(
+    Effect.flatMap((first) => {
+      if (first !== null) return Effect.succeed(first)
+      return run(RETRY_TIMEOUT_MS)
+    }),
+  )
+}
+
 function runSensorGateEffect(
   prompt: string,
   projectRoot: string,
@@ -566,10 +585,15 @@ function runSensorGateEffect(
     Effect.gen(function* () {
       const output = yield* Effect.tryPromise({
         try: async () => {
-          const proc = Bun.spawn(["python3", sensorGate, "--prompt", clamped], {
+          const proc = Bun.spawn(["python3", sensorGate, "--stdin"], {
             cwd: projectRoot,
-            stdio: ["pipe", "pipe", "pipe"],
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "pipe",
           })
+          const writer = proc.stdin.getWriter()
+          await writer.write(new TextEncoder().encode(clamped))
+          await writer.close()
           return await new Response(proc.stdout).text()
         },
         catch: () => "" as string,
@@ -586,12 +610,7 @@ function runSensorGateEffect(
       }),
     )
 
-  return runWithTimeout(150_000).pipe(
-    Effect.flatMap((first) => {
-      if (first !== null) return Effect.succeed(first)
-      return runWithTimeout(300_000)
-    }),
-  )
+  return retryWithTimeout(runWithTimeout)
 }
 
 function validateNeuroOutput(output: string): string | null {
@@ -651,7 +670,7 @@ function runNeuroHarnessEffect(
               "--scan-type", scanType,
               "--file", tmpFile,
               "--task", clamped.slice(0, 8000),
-              "--automation-context", JSON.stringify(automationContext),
+              "--automation-context", automationContext,
             ], {
               cwd: projectRoot,
               stdio: ["pipe", "pipe", "pipe"],
@@ -674,12 +693,7 @@ function runNeuroHarnessEffect(
       Effect.catch(() => Effect.succeed(null) as Effect.Effect<string | null>),
     )
 
-  return runWithTimeout(150_000).pipe(
-    Effect.flatMap((first) => {
-      if (first !== null) return Effect.succeed(first)
-      return runWithTimeout(300_000)
-    }),
-  )
+  return retryWithTimeout(runWithTimeout)
 }
 
 export interface Interface {
@@ -715,13 +729,13 @@ export const layer = Layer.effect(
               goals: p.goals?.length ? p.goals : (profile ? dynamicGoalsFor(profile, result.intent) : [`Identify all ${focus} aspects`, `Provide actionable findings`]),
               synthesisGuide: p.synthesisGuide || (profile ? dynamicSynthesisFor(profile) : `Include ${name} findings on ${focus}.`),
             }
-          }).slice(0, 7)
+          }).slice(0, RATE_MAX_SPAWNS)
           // Trust Python and TS persona selection — no floor padding
         }
 
         // Detect explicit user request for N agents and ensure enough personas
-        const userCountMatch = prompt.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
-        const explicitCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), 7) : 0
+        const userCountMatch = prompt.match(USER_AGENT_COUNT_RE)
+        const explicitCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), RATE_MAX_SPAWNS) : 0
         if (explicitCount > 0 && result.personas.length < explicitCount) {
           const defaults = PERSONA_PROFILES.filter((p) =>
             !result.personas.find((pp) => pp.name === p.name)

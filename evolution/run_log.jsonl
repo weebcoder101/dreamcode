@@ -1,1 +1,19 @@
-{"timestamp":"2026-06-21T22:38:23.920Z","type":"chain_execution","prompt_excerpt":"okay push all changes to git and then build latest binary 1.2.7 ","chain":["automated-learning","devops","git","lint-fixer","pieces-ltm","security"],"chain_length":6,"mode":"DREAM_INNOVATION","outcome":"partial","skills_executed":["automated-learning","devops","lint-fixer","pieces-ltm","security"],"skills_missing":["git"],"confidence":0.5,"neuro_available":false}
+{"timestamp":"2026-06-21T23:34:37.351Z","type":"chain_execution","prompt_excerpt":"okay build version 1.2.8 now and push all cchanges to git and release final version 1.2.8 , DREAMCODE IS READY BABY,\n\nand also check that the entire dreamcode repo is ready for a fresh pc, just by ins","chain":["api","automated-learning","breakthrough-overdrive-innovation","debugging","devops","git","lint-fixer","neuro","pieces-ltm","security","testing"],"chain_length":11,"mode":"DREAM_INNOVATION","outcome":"partial","skills_executed":["breakthrough-overdrive-innovation","debugging","devops","lint-fixer","pieces-ltm","security","testing"],"skills_missing":["api","automated-learning","git","neuro"],"confidence":0.5,"neuro_available":false}
+{
+  "timestamp": "2026-06-21T23:41:00.339626+00:00",
+  "type": "release_readiness",
+  "version": "1.2.8",
+  "release_notes": "DREAMCODE v1.2.8 \u2014 Ship Ready!",
+  "blocking_issues_fixed": [
+    "neuro_chain.py:23 \u2014 /home/ronya/dreamcode bash syntax \u2192 Path.cwd() (stale .opencode/ copy)",
+    "guardian_ai.py:33 \u2014 StopIteration fallback in _find_project_root()",
+    "sensor_gate.py:893 \u2014 --stdin flag synced to canonical copy (was missing, sensor gate would crash)"
+  ],
+  "verified_not_blocking": [
+    ".env.neuro API key \u2014 already gitignored and untracked",
+    "CLI arg info leak in chain-executor.ts:170 \u2014 local-only risk, acceptable",
+    "Zero test coverage for dreamcode-specific code \u2014 deferred post-release"
+  ],
+  "all_fixes_confirmed": true,
+  "ship_ready": true
+}
