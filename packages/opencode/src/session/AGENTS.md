@@ -4,7 +4,7 @@
 
 ### Configuration
 - `MAX_PERSONA_ROUNDS = 3` (prompt.ts) - Maximum rounds of specialist analysis
-- `RATE_MAX_SPAWNS = 7` — Max persona spawns per 5-minute rolling window
+- `RATE_MAX_SPAWNS = 5` — Max persona spawns per 5-minute rolling window
 - `RATE_WINDOW_MS = 5 * 60 * 1000` — 5-minute rate limit window
 - `personaRoundMap` tracks rounds per session
 - `sensorGateFiredMap` persists across messages
@@ -20,7 +20,7 @@
 - Multi-domain, high-risk, complex chain tasks → specialists spawned
 
 ### Rate Limiting (Runtime Enforced)
-- 7 spawns per 5-minute window per session (rolling window)
+- 5 spawns per 5-minute window per session (rolling window)
 - Checked in code, not just prompt text — hard enforcement
 - Agent sees `<rate-budget>` in system prompt for self-regulation
 - When limit hit: `<rate-limit>` warning injected, task handled directly
@@ -39,6 +39,36 @@
 - If YES: IMPLEMENT NOW. Do not spawn more specialists.
 - If NO: Spawn ONLY the missing specialist(s)
 - After any gap-filling round, you MUST implement. No further spawning
+
+### `parseExplicitSpawnCount()` — user override of sensor gate (prompt.ts:195-198)
+
+A regex `/(spawn|use|run|deploy) (\d+) (agent|subagent|specialist|persona)/i` parses explicit
+"spawn N agents" from user text. If matched, it overrides `evaluateSpawnNecessity()` completely:
+the sensor gate's persona count is replaced with the user-requested number. If `gateResult.personas`
+is empty but user explicitly requested N agents, synthetic `Persona[]` entries are created
+(prompt.ts:1629-1635).
+
+### Skill loading format changed to UUID manifest (prompt.ts:1478-1486)
+
+Skills are no longer loaded as inline `<loaded-skill name="...">full content</loaded-skill>` blocks.
+Instead, a `<skill-chain>` manifest with skill names and UUID references is injected. Agents must
+use the `skill` tool at runtime to load skill content by UUID. The `skill` tool is now mandatory
+for persona/specialist workflows.
+
+### Subagent cost warning removed from system prompt
+
+The `<subagent-cost-warning>` block (formerly at prompt.ts:1418-1437) was removed. Agents no longer
+see subagent model cost hints on the first turn. Subagent model guidance is purely UI-driven now.
+
+### `evaluateSpawnNecessity()` scoring overhaul (sensor-gate.ts:218-306)
+
+The spawn necessity algorithm was significantly rewritten:
+- **Removed**: high-confidence/low-risk auto-skip (used to skip when confidence > 0.85 && risk === "low")
+- **Removed**: short conversational prompt auto-skip (used to skip when prompt < 80 chars && no code)
+- **Added**: `simplicityPatterns` regex check (`/^(fix|update|change|add|remove|bump|upgrade|downgrade)\s/i`)
+- **Changed**: chain-length scoring now filters out "always" skills (breakthrough-overdrive-innovation, pieces-ltm, automated-learning, lint-fixer, context-compactor) via `effectiveChainLen`
+- **Changed**: `suggestedCount` can now be 0 (previously minimum was 1), allowing zero-specialist spawns
+- **Changed**: multi-domain scoring: 3+ domains = +3, 2 domains = +1 (was flat +1 per domain)
 
 ### Output Requirements
 - Specialists must provide structured analysis with:

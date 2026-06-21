@@ -17,6 +17,17 @@ import { Glob } from "@opencode-ai/core/util/glob"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
 
+// Deterministic skill ID from name — stable across restarts for tool-based loading
+function skillId(name: string): string {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) {
+    const char = name.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash |= 0
+  }
+  return `skill-${Math.abs(hash).toString(36).padStart(6, "0")}`
+}
+
 const CLAUDE_EXTERNAL_DIR = ".claude"
 const AGENTS_EXTERNAL_DIR = ".agents"
 const EXTERNAL_SKILL_PATTERN = "skills/**/SKILL.md"
@@ -34,6 +45,7 @@ const CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION =
 const CUSTOMIZE_OPENCODE_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
 
 export const Info = Schema.Struct({
+  id: Schema.String,
   name: Schema.String,
   description: Schema.optional(Schema.String),
   location: Schema.String,
@@ -131,6 +143,7 @@ const add = Effect.fnUntraced(function* (state: State, match: string, events: Ev
 
   state.dirs.add(path.dirname(match))
   state.skills[md.data.name] = {
+    id: skillId(md.data.name),
     name: md.data.name,
     description: md.data.description,
     location: match,
@@ -303,6 +316,7 @@ export const layer = Layer.effect(
         // Register the built-in skill BEFORE disk discovery so a user-disk
         // skill with the same name can override it.
         s.skills[CUSTOMIZE_OPENCODE_SKILL_NAME] = {
+          id: skillId(CUSTOMIZE_OPENCODE_SKILL_NAME),
           name: CUSTOMIZE_OPENCODE_SKILL_NAME,
           description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
           location: "<built-in>",
@@ -366,11 +380,11 @@ export function fmt(list: Info[], opts: { verbose: boolean }) {
   const described = list.filter((skill) => skill.description !== undefined)
   if (described.length === 0) return "No skills are currently available."
   if (opts.verbose) {
-    const names = described.toSorted((a, b) => a.name.localeCompare(b.name)).map((s) => s.name)
+    const entries = described.toSorted((a, b) => a.name.localeCompare(b.name)).map((s) => `  - ${s.name} (id: ${s.id})`)
     return [
       "<available_skills>",
-      "Use the skill tool to load any skill by name. Available skills:",
-      ...chunk(names, 6).map((row) => row.join(", ")),
+      "Use the skill tool to load any skill by name or id. Available skills:",
+      ...entries,
       "</available_skills>",
     ].join("\n")
   }
@@ -379,7 +393,7 @@ export function fmt(list: Info[], opts: { verbose: boolean }) {
     "## Available Skills",
     ...described
       .toSorted((a, b) => a.name.localeCompare(b.name))
-      .map((skill) => `- **${skill.name}**: ${skill.description}`),
+      .map((skill) => `- **${skill.name}** (${skill.id}): ${skill.description}`),
   ].join("\n")
 }
 

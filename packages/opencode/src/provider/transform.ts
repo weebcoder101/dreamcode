@@ -1183,12 +1183,14 @@ export function options(input: {
     }
   }
 
+  const cacheKey = `session-${Bun.hash(input.sessionID).toString(36)}`
+
   if (input.model.providerID === "venice") {
-    result["promptCacheKey"] = input.sessionID
+    result["promptCacheKey"] = cacheKey
   }
 
   if (input.model.providerID === "openrouter") {
-    result["prompt_cache_key"] = input.sessionID
+    result["prompt_cache_key"] = cacheKey
   }
   if (input.model.api.npm === "@ai-sdk/gateway") {
     result["gateway"] = {

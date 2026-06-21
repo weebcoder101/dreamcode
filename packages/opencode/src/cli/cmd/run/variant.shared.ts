@@ -247,3 +247,26 @@ export function saveSubagentModel(model: NonNullable<RunInput["model"]>): void {
     console.warn("Failed to save subagent model")
   }
 }
+
+export function clearSubagentModel(): void {
+  try {
+    let data: ModelState = {}
+    try {
+      const raw = fs.readFileSync(MODEL_FILE, "utf-8")
+      data = state(JSON.parse(raw))
+    } catch {
+      return // nothing to clear
+    }
+    if (!data.subagentModel) return // already cleared
+    delete data.subagentModel
+    const dir = path.dirname(MODEL_FILE)
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
+    const tmp = MODEL_FILE + ".tmp"
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
+    fs.renameSync(tmp, MODEL_FILE)
+  } catch {
+    console.warn("Failed to clear subagent model")
+  }
+}

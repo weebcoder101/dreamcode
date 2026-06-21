@@ -1,6 +1,5 @@
 import { Effect, Context, Layer, Duration } from "effect"
-import * as Stream from "effect/Stream"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+// Stream and ChildProcess removed — replaced with Bun.spawn (compiled binary fix)
 import * as fs from "fs"
 import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
@@ -100,7 +99,7 @@ const PERSONA_PROFILES: PersonaProfile[] = [
     role: "Code Review & Standards Specialist",
     focus: "Standards compliance, diff analysis, and regression detection",
     skills: ["review", "standards", "compliance"],
-    tags: ["review", "audit", "examine", "inspect", "refactoring"],
+    tags: ["review", "audit", "examine", "inspect", "refactoring", "verification"],
     minComplexity: 1,
   },
   {
@@ -240,75 +239,69 @@ export function evaluateSpawnNecessity(
     return { shouldSpawn: false, reason: "Social greeting — no specialists needed", suggestedCount: 0 }
   }
 
-  // 2. High-confidence low-risk tasks — agent can handle directly
-  if (result.risk_level === "low" && result.confidence > 0.85 && result.mode !== "DREAM_INNOVATION") {
-    return { shouldSpawn: false, reason: "High-confidence low-risk task — agent handles directly", suggestedCount: 0 }
-  }
-
-  // 3. Trivial mode — always skip
+  // 2. Trivial mode — always skip
   if (result.mode === "TRIVIAL") {
     return { shouldSpawn: false, reason: "Trivial task — no specialists needed", suggestedCount: 0 }
   }
 
-  // 4. Short conversational prompts without code context
-  const hasCodeBlocks = prompt.includes("```") || prompt.includes("src/") || prompt.includes("import ")
-  if (prompt.length < 80 && !hasCodeBlocks) {
-    return { shouldSpawn: false, reason: "Short conversational prompt — agent handles directly", suggestedCount: 0 }
-  }
-
-  // 5. Single domain, no chain complexity
+  // 3. selectPersonas() already determined personas are useful via tag matching.
+  //    Trust that decision. Only the hard blocks above should prevent spawning.
+  //    The remaining scoring just informs the suggested count.
   const uniqueDomains = new Set(result.domain_tags.filter(Boolean)).size
-  if (uniqueDomains <= 1 && result.chain.length <= 1 && result.risk_level !== "high") {
-    reasons.push("Single domain, no chain — likely solvable without specialists")
-    score -= 2
+  const hasCodeBlocks = prompt.includes("```") || prompt.includes("src/") || prompt.includes("import ")
+
+  // Simplicity threshold: high confidence + low risk + single domain + simple phrasing
+  const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade)\s/i
+  const isSimpleTask = result.confidence >= 0.8
+    && result.risk_level === "low"
+    && uniqueDomains <= 1
+    && prompt.length < 500
+    && (result.complexity === "low" || !result.complexity)
+    && simplicityPatterns.test(prompt.trim())
+
+  if (isSimpleTask) {
+    return { shouldSpawn: false, reason: "Simple high-confidence task — agent handles directly", suggestedCount: 0 }
   }
 
-  // ─── Positive signals (spawn beneficial) ───
-
-  // Multi-domain tasks benefit from parallel specialist analysis
+  // Scale up count for multi-faceted tasks
   if (uniqueDomains >= 3) {
     reasons.push("Multi-domain task — benefits from specialists")
     score += 3
+  } else if (uniqueDomains >= 2) {
+    reasons.push("Multi-domain task")
+    score += 1
   }
 
-  // High risk = security/critical review genuinely needed
   if (result.risk_level === "high") {
     reasons.push("High risk — security/critical review needed")
     score += 2
   }
 
-  // Complex skill chain = parallel analysis beneficial
-  if (result.chain.length >= 3) {
+  // Filter "always" skills (like breakthrough-overdrive-innovation) from chain-length scoring
+  const alwaysSkills = new Set(["breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning", "lint-fixer", "context-compactor"])
+  const effectiveChainLen = result.chain.filter((s) => !alwaysSkills.has(s)).length
+  if (effectiveChainLen >= 2) {
     reasons.push("Complex skill chain — parallel analysis beneficial")
-    score += 2
+    score += effectiveChainLen >= 4 ? 3 : 2
   }
 
-  // DREAM_INNOVATION mode always benefits from specialists
   if (result.mode === "DREAM_INNOVATION") {
     reasons.push("Innovation mode — creative analysis from multiple perspectives")
     score += 2
   }
 
-  // Medium risk with multiple domains
-  if (result.risk_level === "medium" && uniqueDomains >= 2) {
-    reasons.push("Medium-risk multi-domain task")
-    score += 1
-  }
-
-  // Code-heavy prompts benefit from structured review
   if (hasCodeBlocks && prompt.length > 200) {
     reasons.push("Code-heavy prompt — benefits from structured specialist review")
     score += 1
   }
 
-  const shouldSpawn = score >= 2
-  const suggestedCount = shouldSpawn
-    ? Math.min(5, Math.max(1, Math.ceil(score / 2)))
-    : 0
+  // Allow zero specialists for simple tasks
+  // NOTE: score 0 → ceil(0/2) = 0 (no spawns). score 1 → ceil(1/2) = 1. score 2 → ceil(2/2) = 1.
+  const suggestedCount = Math.min(5, Math.max(0, Math.ceil(score / 2)))
 
   return {
-    shouldSpawn,
-    reason: reasons.join("; ") || (shouldSpawn ? "Task complexity warrants specialist analysis" : "Task is straightforward — agent handles directly"),
+    shouldSpawn: suggestedCount > 0,
+    reason: reasons.join("; ") || "Specialist analysis will provide focused coverage",
     suggestedCount,
   }
 }
@@ -320,7 +313,7 @@ function depthScore(result: SensorGateResult): number {
   const risk = result.risk_level === "high" ? 3 : result.risk_level === "medium" ? 2 : 1
   const tagDiversity = Math.min(tags, 5)
   const chainDepth = Math.min(chainLen, 4)
-  return Math.max(1, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
+  return Math.max(0, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
 }
 
 function selectPersonas(result: SensorGateResult): Persona[] {
@@ -361,24 +354,19 @@ function selectPersonas(result: SensorGateResult): Persona[] {
     if (!hasOverlap) deduped.push(candidate)
   }
 
-  // Dynamic depth-based count — now supports up to 5 specialists
+  // Dynamic depth-based count — now supports 0 specialists for simple tasks
   const dd = depthScore(result)
   let count: number
   if (mode === "DREAM_INNOVATION") {
-    count = Math.min(5, Math.max(3, Math.ceil(dd * 1.3)))
-  } else if (mode === "TRIVIAL") {
-    count = 1
-  } else {
     count = Math.min(5, Math.max(1, Math.ceil(dd * 1.2)))
+  } else if (mode === "TRIVIAL") {
+    count = 0
+  } else {
+    count = Math.min(4, Math.max(0, Math.ceil(dd)))
   }
   count = Math.min(count, deduped.length)
 
-  // Floor of 1: always provide at least one specialist perspective
-  if (count < 1 && deduped.length > 0) {
-    count = 1
-  }
-
-  if (count === 0) return []
+  if (count < 1) return []
 
   return overlapCheck(deduped.slice(0, count).map((s) => ({
     name: s.profile.name,
@@ -396,6 +384,7 @@ export interface SensorGateResult {
   domain_tags: string[]
   risk_level: string
   confidence: number
+  complexity: string
   time_sensitivity: string
   requires_tools: string
   deliverable_type: string
@@ -420,6 +409,7 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
     domain_tags: [],
     risk_level: "medium",
     confidence: 0.5,
+    complexity: "medium",
     time_sensitivity: "medium",
     requires_tools: "files",
     deliverable_type: "multi",
@@ -449,6 +439,7 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
         const val = parseFloat(l.slice(12))
         r.confidence = Number.isFinite(val) ? val : 0.5
       },
+      "- complexity:": (l, r) => { r.complexity = l.slice(13).trim() },
       "- time_sensitivity:": (l, r) => { r.time_sensitivity = l.slice(19).trim() },
       "- requires_tools:": (l, r) => { r.requires_tools = l.slice(17).trim() },
       "- deliverable_type:": (l, r) => { r.deliverable_type = l.slice(19).trim() },
@@ -573,18 +564,19 @@ function runSensorGateEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
-      const promptBytes = new TextEncoder().encode(clamped)
-      const child = yield* ChildProcess.make({
-        command: "python3",
-        args: [sensorGate, "--stdin"],
-        stdin: Stream.make(promptBytes),
-        cwd: projectRoot,
-        stdio: ["pipe", "pipe", "pipe"],
-      })
-      const output = yield* child.stdout
-        .pipe(Stream.toString)
-        .pipe(Effect.timeout(Duration.millis(timeoutMs)))
-        .pipe(Effect.catch(() => Effect.succeed("")))
+      const output = yield* Effect.tryPromise({
+        try: async () => {
+          const proc = Bun.spawn(["python3", sensorGate, "--prompt", clamped], {
+            cwd: projectRoot,
+            stdio: ["pipe", "pipe", "pipe"],
+          })
+          return await new Response(proc.stdout).text()
+        },
+        catch: () => "" as string,
+      }).pipe(
+        Effect.timeout(Duration.millis(timeoutMs)),
+        Effect.catch(() => Effect.succeed("")),
+      )
       if (!output) return null
       return parseSensorGateOutput(output)
     }).pipe(
@@ -651,24 +643,26 @@ function runNeuroHarnessEffect(
           classification,
         })
 
-        const stdinPayload = JSON.stringify({ task: clamped.slice(0, 8000), automationContext })
-        const stdinBytes = new TextEncoder().encode(stdinPayload)
-        const child = yield* ChildProcess.make({
-          command: "python3",
-          args: [
-            neuroHarness,
-            "--scan-type", scanType,
-            "--file", tmpFile,
-            "--stdin",
-          ],
-          stdin: Stream.make(stdinBytes),
-          cwd: projectRoot,
-          stdio: ["pipe", "pipe", "pipe"],
-        })
-        const output = yield* child.stdout
-          .pipe(Stream.toString)
-          .pipe(Effect.timeout(Duration.millis(timeoutMs)))
-          .pipe(Effect.catch(() => Effect.succeed("")))
+        const output = yield* Effect.tryPromise({
+          try: async () => {
+            const proc = Bun.spawn([
+              "python3",
+              neuroHarness,
+              "--scan-type", scanType,
+              "--file", tmpFile,
+              "--task", clamped.slice(0, 8000),
+              "--automation-context", JSON.stringify(automationContext),
+            ], {
+              cwd: projectRoot,
+              stdio: ["pipe", "pipe", "pipe"],
+            })
+            return await new Response(proc.stdout).text()
+          },
+          catch: () => "" as string,
+        }).pipe(
+          Effect.timeout(Duration.millis(timeoutMs)),
+          Effect.catch(() => Effect.succeed("")),
+        )
         return output || null
       } catch (e) {
         console.warn("[sensor-gate] runNeuroHarness subprocess failed", { error: String(e), timeoutMs })
@@ -722,26 +716,30 @@ export const layer = Layer.effect(
               synthesisGuide: p.synthesisGuide || (profile ? dynamicSynthesisFor(profile) : `Include ${name} findings on ${focus}.`),
             }
           }).slice(0, 7)
-          // Enforce floor of 2 when Python provides < 2 personas
-          if (result.personas.length < 2) {
-            const defaults = PERSONA_PROFILES.filter((p) => p.minComplexity <= 1)
-            for (const d of defaults) {
-              if (result.personas.length >= 2) break
-              if (!result.personas.find((pp) => pp.name === d.name)) {
-                result.personas.push({
-                  name: d.name, role: d.role, focus: d.focus, skills: d.skills,
-                  task: dynamicTaskFor(d, result.intent),
-                  goals: dynamicGoalsFor(d, result.intent),
-                  synthesisGuide: dynamicSynthesisFor(d),
-                })
-              }
-            }
+          // Trust Python and TS persona selection — no floor padding
+        }
+
+        // Detect explicit user request for N agents and ensure enough personas
+        const userCountMatch = prompt.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
+        const explicitCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), 7) : 0
+        if (explicitCount > 0 && result.personas.length < explicitCount) {
+          const defaults = PERSONA_PROFILES.filter((p) =>
+            !result.personas.find((pp) => pp.name === p.name)
+          )
+          for (const d of defaults) {
+            if (result.personas.length >= explicitCount) break
+            result.personas.push({
+              name: d.name, role: d.role, focus: d.focus, skills: d.skills,
+              task: dynamicTaskFor(d, result.intent),
+              goals: dynamicGoalsFor(d, result.intent),
+              synthesisGuide: dynamicSynthesisFor(d),
+            })
           }
         }
 
-        const shouldRunNeuro = result.risk_level === "high" ||
-          result.mode === "DREAM_INNOVATION" ||
-          result.chain.length > 3
+        // Run NEURO for ALL non-trivial tasks — neuro is cheap (Python harness, no LLM cost)
+        // Only skip for trivial mode and social greetings
+        const shouldRunNeuro = result.mode !== "TRIVIAL" && !result.is_social_greeting
 
         if (shouldRunNeuro) {
           const scanType = result.risk_level === "high" ? "security" : "full_audit"
@@ -763,11 +761,10 @@ export const layer = Layer.effect(
           }
         }
 
-        // Per-persona NEURO enrichment
+        // Per-persona NEURO enrichment — enrich ALL personas since neuro is cheap
+        // This gives each specialist agent its own tailored architectural analysis
         if (result.personas.length > 0 && shouldRunNeuro) {
-          const maxEnriched = result.risk_level === "high" ? result.personas.length : Math.min(3, result.personas.length)
-          for (let i = 0; i < maxEnriched; i++) {
-            const persona = result.personas[i]
+          for (const persona of result.personas) {
             const scanType = PERSONA_SCAN_TYPE_MAP[persona.name] || "full_audit"
             const personaTask = `${persona.role}: ${prompt}`
             const neuroResult = yield* runNeuroHarnessEffect(personaTask, directory, scanType, {

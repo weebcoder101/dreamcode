@@ -93,6 +93,7 @@ type RunFooterOptions = {
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
   onSubagentModelSelect?: (model: NonNullable<RunInput["model"]>) => void
+  onSubagentModelClear?: () => void
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
   onInterrupt?: () => void
   onBackground?: () => void
@@ -346,6 +347,7 @@ export class RunFooter implements FooterApi {
               onExit: () => footer.close(),
               onModelSelect: footer.handleModelSelect,
               onSubagentModelSelect: footer.handleSubagentModelSelect,
+              onSubagentModelClear: footer.handleSubagentModelClear,
               onVariantSelect: footer.handleVariantSelect,
               onRows: footer.syncRows,
               onLayout: footer.syncLayout,
@@ -705,28 +707,29 @@ export class RunFooter implements FooterApi {
   // get fixed extra rows; the prompt view scales with textarea line count.
   private applyHeight(): void {
     const type = this.view().type
+    const routeType = this.promptRoute.type
     const height =
       type === "permission"
         ? this.base + PERMISSION_ROWS
         : type === "question"
           ? this.base + QUESTION_ROWS
-          : this.promptRoute.type === "command"
+          : routeType === "command"
             ? 1 + COMMAND_ROWS
-            : this.promptRoute.type === "skill"
+            : routeType === "skill"
               ? 1 + SKILL_ROWS
-              : this.promptRoute.type === "model"
+              : routeType === "model"
               ? 1 + MODEL_ROWS
-              : this.promptRoute.type === "subagent-model"
+              : routeType === "subagent-model"
                 ? 1 + SUBAGENT_MODEL_ROWS
-                : this.promptRoute.type === "variant"
-                  ? 1 + VARIANT_ROWS
-                  : this.promptRoute.type === "queued-menu"
-                    ? 1 + this.subagentMenuRows
-                    : this.promptRoute.type === "subagent-menu"
+                : routeType === "variant"
+                    ? 1 + VARIANT_ROWS
+                    : routeType === "queued-menu"
                       ? 1 + this.subagentMenuRows
-                      : this.promptRoute.type === "subagent"
-                        ? this.base + SUBAGENT_INSPECTOR_ROWS
-                        : this.base + Math.max(TEXTAREA_MIN_ROWS, Math.min(PROMPT_MAX_ROWS, this.rows))
+                      : routeType === "subagent-menu"
+                        ? 1 + this.subagentMenuRows
+                        : routeType === "subagent"
+                          ? this.base + SUBAGENT_INSPECTOR_ROWS
+                          : this.base + Math.max(TEXTAREA_MIN_ROWS, Math.min(PROMPT_MAX_ROWS, this.rows))
 
     if (height !== this.renderer.footerHeight) {
       this.renderer.footerHeight = height
@@ -836,6 +839,16 @@ export class RunFooter implements FooterApi {
     this.setCurrentSubagentModel(model)
     this.options.onSubagentModelSelect?.(model)
     this.setNotice(`subagent model set to ${model.modelID}`)
+  }
+
+  private handleSubagentModelClear = (): void => {
+    if (this.isClosed) {
+      return
+    }
+
+    const parent = this.currentModel()
+    this.setCurrentSubagentModel(parent)
+    this.options.onSubagentModelClear?.()
   }
 
   private handleModelSelect = (model: NonNullable<RunInput["model"]>): void => {

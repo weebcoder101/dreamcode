@@ -423,7 +423,7 @@ export function RunCommandMenuBody(props: {
         action: "subagent-model",
         category: "Agent",
         display: "Switch subagent model",
-        footer: "/subagent",
+        footer: "",
         keywords: "subagent model",
       },
       ...(props.queued().length > 0

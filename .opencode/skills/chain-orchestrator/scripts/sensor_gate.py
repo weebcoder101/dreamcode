@@ -93,6 +93,9 @@ PATTERN_RULES = [
     (r'\b(innovate|innovation|breakthrough|novel)\b', "breakthrough-overdrive-innovation", "high"),
     (r'\b(review|audit|examine|inspect)\b', "neuro", "high"),
     (r'\b(improve|enhance|better)\b', "neuro", "medium"),
+    # ── META-SYSTEM PROMPTS ──
+    (r'\b(spawn|agent|subagent|persona)\b', "agent_system", "medium"),
+    (r'\b(verify|check|validate)\b', "verification", "medium"),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -176,6 +179,8 @@ TASK_SKILLS = {
     "automation": ["automation", "neuro"],
     "breakthrough-overdrive-innovation": ["neuro"],
     "neuro": ["neuro"],
+    "agent_system": ["neuro", "exhaustive-crosscheck"],
+    "verification": ["neuro", "testing", "exhaustive-crosscheck"],
 }
 
 
@@ -324,6 +329,7 @@ def classify_intent(prompt: str, chain_result: dict) -> str:
         "- time_sensitivity: medium",
         "- requires_tools: files",
         "- deliverable_type: multi",
+        "- confidence: 0.85",
         f"- is_social_greeting: {'true' if is_social else 'false'}",
     ]
     return "\n".join(lines)

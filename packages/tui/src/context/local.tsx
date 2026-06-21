@@ -168,11 +168,23 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return
         }
         state.pending = false
-        void writeJsonAtomic(filePath, {
-          recent: modelStore.recent,
-          favorite: modelStore.favorite,
-          variant: modelStore.variant,
-        })
+        const modelFilePath = path.join(paths.state, "model.json")
+        void readJson<Record<string, unknown>>(modelFilePath)
+          .then((existing) =>
+            writeJsonAtomic(filePath, {
+              ...(existing ?? {}),
+              recent: modelStore.recent,
+              favorite: modelStore.favorite,
+              variant: modelStore.variant,
+            }),
+          )
+          .catch(() =>
+            writeJsonAtomic(filePath, {
+              recent: modelStore.recent,
+              favorite: modelStore.favorite,
+              variant: modelStore.variant,
+            }),
+          )
       }
 
       readJson<unknown>(filePath)
@@ -405,6 +417,115 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const model = createModel()
 
+    function createSubagentModel() {
+      const [subagentStore, setSubagentStore] = createStore<{
+        ready: boolean
+        model: { providerID: string; modelID: string } | undefined
+      }>({
+        ready: false,
+        model: undefined,
+      })
+
+      const filePath = path.join(paths.state, "subagent.json")
+      const state = { pending: false }
+      let writeQueue: Promise<void> = Promise.resolve()
+
+      function syncModelJson() {
+        writeQueue = writeQueue.then(() => {
+          const modelFilePath = path.join(paths.state, "model.json")
+          return readJson<Record<string, unknown>>(modelFilePath)
+            .then((data) => {
+              return writeJsonAtomic(modelFilePath, {
+                ...(data ?? {}),
+                subagentModel: subagentStore.model ?? undefined,
+              })
+            })
+            .catch(() => {
+              return writeJsonAtomic(modelFilePath, {
+                subagentModel: subagentStore.model ?? undefined,
+              })
+            })
+        })
+        writeQueue.catch((err) => {
+          console.error("[subagent] syncModelJson failed:", err)
+        })
+      }
+
+      function save() {
+        if (!subagentStore.ready) {
+          state.pending = true
+          return
+        }
+        state.pending = false
+        writeQueue = writeQueue.then(() => writeJsonAtomic(filePath, { model: subagentStore.model }))
+        writeQueue.catch((err) => {
+          console.error("[subagent] save failed:", err)
+        })
+        syncModelJson()
+      }
+
+      readJson<unknown>(filePath)
+        .then((x) => {
+          if (!x || typeof x !== "object") return
+          const value = x as Record<string, unknown>
+          if (value.model && typeof value.model === "object") {
+            const m = value.model as Record<string, unknown>
+            if (typeof m.providerID === "string" && typeof m.modelID === "string") {
+              setSubagentStore("model", { providerID: m.providerID, modelID: m.modelID })
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn(`[subagent] Failed to read ${filePath}:`, err?.message ?? err)
+        })
+        .finally(() => {
+          setSubagentStore("ready", true)
+          if (state.pending) save()
+        })
+
+      return {
+        get ready() {
+          return subagentStore.ready
+        },
+        current(): { providerID: string; modelID: string } | undefined {
+          const m = subagentStore.model
+          if (!m) return undefined
+          return isModelValid(m) ? m : undefined
+        },
+        set(value: { providerID: string; modelID: string }) {
+          if (!isModelValid(value)) {
+            toast.show({
+              message: `Subagent model ${value.providerID}/${value.modelID} is not valid`,
+              variant: "warning",
+              duration: 3000,
+            })
+            return
+          }
+          setSubagentStore("model", { providerID: value.providerID, modelID: value.modelID })
+          save()
+        },
+        clear() {
+          setSubagentStore("model", undefined)
+          save()
+        },
+        parsed: createMemo(() => {
+          const m = subagentStore.model
+          if (!m || !isModelValid(m)) {
+            return undefined
+          }
+          const provider = sync.data.provider.find((item) => item.id === m.providerID)
+          const info = provider?.models[m.modelID]
+          return {
+            provider: provider?.name ?? m.providerID,
+            model: info?.name ?? m.modelID,
+            reasoning: info?.capabilities?.reasoning ?? false,
+          }
+        }),
+      }
+    }
+
+    const subagent = createSubagentModel()
+
     function createSession() {
       const [sessionStore, setSessionStore] = createStore<{
         ready: boolean
@@ -534,6 +655,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       agent,
       mcp,
       session,
+      subagent,
     }
     return result
   },

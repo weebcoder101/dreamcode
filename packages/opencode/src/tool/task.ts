@@ -94,13 +94,19 @@ const resolveUserSubagentModel = Effect.fnUntraced(function* () {
   const raw = yield* Effect.promise(() =>
     fs.readFile(file, "utf-8").catch(() => undefined),
   )
-  if (!raw) return undefined as { providerID: ProviderV2.ID; modelID: ModelV2.ID } | undefined
+  if (!raw) {
+    log.debug("subagent model file not found, falling back to parent model", { file })
+    return undefined as { providerID: ProviderV2.ID; modelID: ModelV2.ID } | undefined
+  }
   try {
     const data = JSON.parse(raw)
     if (data?.subagentModel?.providerID && data?.subagentModel?.modelID) {
       return { providerID: data.subagentModel.providerID as ProviderV2.ID, modelID: data.subagentModel.modelID as ModelV2.ID }
     }
-  } catch {}
+    log.debug("subagent model key missing in model.json", { file, keys: Object.keys(data) })
+  } catch {
+    log.debug("failed to parse subagent model file", { file })
+  }
   return undefined
 })
 

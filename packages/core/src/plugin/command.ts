@@ -30,10 +30,6 @@ export const Plugin = PluginV2.define({
         command.description = "deep research with parallel sub-agents [topic]"
         command.subtask = true
       })
-      editor.update("subagent", (command) => {
-        command.template = ""
-        command.description = "configure subagent model [providerID/modelID|off]"
-      })
     })
   }),
 })

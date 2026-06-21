@@ -287,6 +287,21 @@ When a Respondable error (like `ApiNotFoundError` with `httpApiStatus: 404`) is 
 
 Layer build errors are raw JS exceptions (not HTTP responses). Request handler errors go through `causeResponse` (HTTP response). These are two separate error domains.
 
+## model.json — Split-Brain Across Four Writers
+
+`~/.local/state/opencode/model.json` is a shared file written from **4 code paths** using 2 I/O paradigms:
+- **`variant.shared.ts`** (Effect async + sync fs) — writes `variant` and `subagentModel` fields
+- **`tui/src/context/local.tsx:save()`** (async Promise) — writes `recent`, `favorite`, `variant`; catch branch drops `subagentModel`
+- **`tui/src/context/local.tsx:syncModelJson()`** (async Promise, separate writeQueue) — writes `subagentModel`
+
+The TUI has TWO independent writers to `model.json` with no cross-queue coordination (TOCTOU race within a single file).
+
+**Cross-package coupling**: A file at `Global.Path.state/model.json` couples the `opencode` CLI run command, the TUI, and the provider default-model resolver (`provider.ts:1889`). Adding a new field to this file requires updating ALL four writers, plus the consumers in `tool/task.ts` and `provider.ts`.
+
+### Implicit filesystem contract: tool/task.ts reads model.json via raw fs
+
+`resolveUserSubagentModel` at `tool/task.ts:92` does a raw `JSON.parse(await fs.readFile(file, "utf-8"))` on the same file. There is no typed interface between the four writers and this consumer. A key rename (e.g. `subagentModel` → `subagent_model`) silently returns `undefined` with only a debug log.
+
 ## Build Commands
 
 ### Build opencode binary

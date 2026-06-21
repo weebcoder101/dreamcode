@@ -19,7 +19,7 @@ import { createRunDemo } from "./demo"
 import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { trace } from "./trace"
-import { cycleVariant, formatModelLabel, resolveSavedSubagentModel, resolveSavedVariant, resolveVariant, saveSubagentModel, saveVariant } from "./variant.shared"
+import { clearSubagentModel, cycleVariant, formatModelLabel, resolveSavedSubagentModel, resolveSavedVariant, resolveVariant, saveSubagentModel, saveVariant } from "./variant.shared"
 import type { LocalReplayAnchor, LocalReplayRow, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
 
 /** @internal Exported for testing */
@@ -322,6 +322,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     onSubagentModelSelect: (model) => {
       state.subagentModel = model
       saveSubagentModel(model)
+    },
+    onSubagentModelClear: () => {
+      state.subagentModel = state.model
+      clearSubagentModel()
     },
     onVariantSelect: async (variant) => {
       if (!state.model || state.variants.length === 0) {

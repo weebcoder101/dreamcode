@@ -28,7 +28,16 @@ import { OPENCODE_BASE_MODE, useBindings } from "@opencode-ai/tui/keymap"
 import { realignEditorPromptParts, resolveEditorSlashValue } from "./prompt.editor"
 import { FOOTER_MENU_ROWS, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import type { RunFooterTheme } from "./theme"
-import type { FooterState, RunAgent, RunCommand, RunPrompt, RunPromptPart, RunResource, RunTuiConfig } from "./types"
+import type {
+  FooterState,
+  RunAgent,
+  RunCommand,
+  RunInput,
+  RunPrompt,
+  RunPromptPart,
+  RunResource,
+  RunTuiConfig,
+} from "./types"
 
 const AUTOCOMPLETE_ROWS = FOOTER_MENU_ROWS
 const AUTOCOMPLETE_BOTTOM_ROWS = 1
@@ -77,8 +86,10 @@ type PromptInput = {
   onExitRequest?: () => boolean
   onExit: () => void
   onSkillMenu: () => void
+  onModel: () => void
   onSubagentModel: () => void
   onSubagentModelSelect: (model: NonNullable<RunInput["model"]>) => void
+  onSubagentModelClear: () => void
   onRows: (rows: number) => void
   onStatus: (text: string) => void
 }
@@ -101,8 +112,6 @@ export type PromptState = {
   replacePrompt: (prompt: RunPrompt) => void
   bind: (area?: TextareaRenderable) => void
 }
-
-const isSubagentSlash = (name: string) => name === "subagent" || name === "subagents"
 
 function clamp(rows: number): number {
   return Math.max(TEXTAREA_MIN_ROWS, Math.min(TEXTAREA_MAX_ROWS, rows))
@@ -291,6 +300,7 @@ export function createPromptState(input: PromptInput): PromptState {
   let type = 0
   let parts: Mention[] = []
   let marks = new Map<number, number>()
+  let selecting = false
 
   const [mode, setMode] = createSignal<MenuMode>(false)
   const [at, setAt] = createSignal(0)
@@ -407,8 +417,6 @@ export function createPromptState(input: PromptInput): PromptState {
       } satisfies SlashOption,
       { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
       { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
-      { kind: "slash", name: "subagent", display: "/subagent", description: "switch subagent model" } satisfies SlashOption,
-      { kind: "slash", name: "subagents", display: "/subagents", description: "switch subagent model" } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     const showSkillMenu = !shell() && skillCommands().length > 0 && !hasSkillsCommand()
@@ -831,129 +839,125 @@ export function createPromptState(input: PromptInput): PromptState {
   }
 
   const select = (item?: PromptOption) => {
-    // Always check for /subagent[s] by text content before relying on option
-    // ordering, which can be racey when query() hasn't propagated yet.
-    if (!item && area && !area.isDestroyed) {
-      const currentText = area.plainText
-      const head = slashHead(currentText)
-      if (head && isSubagentSlash(head.name)) {
-        cancelAutocomplete()
-        input.onSubagentModel()
-        return
-      }
-    }
-
-    const next = item ?? options()[menu.selected()]
-    if (!next || !area || area.isDestroyed) {
+    if (selecting) {
       return
     }
-
-    if (next.kind === "slash") {
-      if (next.action === "editor") {
-        void openEditor({
-          value: resolveEditorSlashValue(area.plainText),
-        })
+    selecting = true
+    try {
+      const next = item ?? options()[menu.selected()]
+      if (!next || !area || area.isDestroyed) {
         return
       }
 
-      if (isSubagentSlash(next.name)) {
-        cancelAutocomplete()
-        input.onSubagentModel()
-        return
-      }
+      if (next.kind === "slash") {
+        if (next.action === "editor") {
+          void openEditor({
+            value: resolveEditorSlashValue(area.plainText),
+          })
+          return
+        }
 
-      if (next.action === "skill-menu") {
-        cancelAutocomplete()
-        input.onSkillMenu()
+        if (next.action === "skill-menu") {
+          cancelAutocomplete()
+          input.onSkillMenu()
+          return
+        }
+
+        if (next.name === "test") {
+          cancelAutocomplete()
+          input.onModel()
+          return
+        }
+
+        const cursor = area.cursorOffset
+        const head = slashHead(area.plainText)
+        const local = !shell() && (next.name === "new" || next.name === "exit")
+        const separator = !shell() && !local && head && /\s/.test(area.plainText[head.end] ?? "") ? "" : " "
+        const text = `/${next.name}${separator}`
+
+        area.cursorOffset = 0
+        const start = area.logicalCursor
+        area.cursorOffset =
+          shell() || !head
+            ? cursor
+            : local
+              ? Bun.stringWidth(area.plainText)
+              : Bun.stringWidth(area.plainText.slice(0, head.end))
+        const end = area.logicalCursor
+
+        area.deleteRange(start.row, start.col, end.row, end.col)
+        area.insertText(text)
+        area.cursorOffset = Bun.stringWidth(text)
+        hide()
+        syncDraft()
+        if (!shell()) {
+          submitPrompt(clonePrompt(draft))
+          return
+        }
+
+        scheduleRows()
+        area.focus()
         return
       }
 
       const cursor = area.cursorOffset
-      const head = slashHead(area.plainText)
-      const local = !shell() && (next.name === "new" || next.name === "exit")
-      const separator = !shell() && !local && head && /\s/.test(area.plainText[head.end] ?? "") ? "" : " "
-      const text = `/${next.name}${separator}`
-
-      area.cursorOffset = 0
+      const tail = displayCharAt(area.plainText, cursor)
+      const append = "@" + next.value + (tail === " " ? "" : " ")
+      area.cursorOffset = at()
       const start = area.logicalCursor
-      area.cursorOffset =
-        shell() || !head
-          ? cursor
-          : local
-            ? Bun.stringWidth(area.plainText)
-            : Bun.stringWidth(area.plainText.slice(0, head.end))
+      area.cursorOffset = cursor
       const end = area.logicalCursor
-
       area.deleteRange(start.row, start.col, end.row, end.col)
-      area.insertText(text)
-      area.cursorOffset = Bun.stringWidth(text)
-      hide()
-      syncDraft()
-      if (!shell()) {
-        submitPrompt(clonePrompt(draft))
-        return
+      area.insertText(append)
+
+      const text = "@" + next.value
+      const startOffset = at()
+      const endOffset = startOffset + Bun.stringWidth(text)
+      const part = structuredClone(next.part)
+      if (part.type === "agent") {
+        part.source = {
+          start: startOffset,
+          end: endOffset,
+          value: text,
+        }
+      }
+      if (part.type === "file" && part.source?.text) {
+        part.source.text.start = startOffset
+        part.source.text.end = endOffset
+        part.source.text.value = text
       }
 
-      scheduleRows()
-      area.focus()
-      return
-    }
+      if (part.type === "file") {
+        const prev = parts.findIndex((item) => item.type === "file" && item.url === part.url)
+        if (prev !== -1) {
+          const mark = [...marks.entries()].find((item) => item[1] === prev)?.[0]
+          if (mark !== undefined) {
+            area.extmarks.delete(mark)
+          }
+          parts = parts.filter((_, idx) => idx !== prev)
+          marks = new Map(
+            [...marks.entries()]
+              .filter((item) => item[0] !== mark)
+              .map((item) => [item[0], item[1] > prev ? item[1] - 1 : item[1]]),
+          )
+        }
+      }
 
-    const cursor = area.cursorOffset
-    const tail = displayCharAt(area.plainText, cursor)
-    const append = "@" + next.value + (tail === " " ? "" : " ")
-    area.cursorOffset = at()
-    const start = area.logicalCursor
-    area.cursorOffset = cursor
-    const end = area.logicalCursor
-    area.deleteRange(start.row, start.col, end.row, end.col)
-    area.insertText(append)
-
-    const text = "@" + next.value
-    const startOffset = at()
-    const endOffset = startOffset + Bun.stringWidth(text)
-    const part = structuredClone(next.part)
-    if (part.type === "agent") {
-      part.source = {
+      const id = area.extmarks.create({
         start: startOffset,
         end: endOffset,
-        value: text,
-      }
+        virtual: true,
+        typeId: type,
+      })
+      marks.set(id, parts.length)
+      parts.push(part)
+      hide()
+      syncDraft()
+      scheduleRows()
+      area.focus()
+    } finally {
+      selecting = false
     }
-    if (part.type === "file" && part.source?.text) {
-      part.source.text.start = startOffset
-      part.source.text.end = endOffset
-      part.source.text.value = text
-    }
-
-    if (part.type === "file") {
-      const prev = parts.findIndex((item) => item.type === "file" && item.url === part.url)
-      if (prev !== -1) {
-        const mark = [...marks.entries()].find((item) => item[1] === prev)?.[0]
-        if (mark !== undefined) {
-          area.extmarks.delete(mark)
-        }
-        parts = parts.filter((_, idx) => idx !== prev)
-        marks = new Map(
-          [...marks.entries()]
-            .filter((item) => item[0] !== mark)
-            .map((item) => [item[0], item[1] > prev ? item[1] - 1 : item[1]]),
-        )
-      }
-    }
-
-    const id = area.extmarks.create({
-      start: startOffset,
-      end: endOffset,
-      virtual: true,
-      typeId: type,
-    })
-    marks.set(id, parts.length)
-    parts.push(part)
-    hide()
-    syncDraft()
-    scheduleRows()
-    area.focus()
   }
 
   const expand = () => {
@@ -1189,31 +1193,6 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
 
-    // Handle /subagent /subagents BEFORE parseSlashCommand to avoid wasted IPC call
-    const head = slashHead(next.text)
-    if (head && isSubagentSlash(head.name)) {
-      const arg = head.arguments?.trim()
-      if (!arg) {
-        input.onSubagentModel()
-        resetDraft()
-        return
-      }
-      const slash = arg.indexOf("/")
-      if (slash > 0 && slash < arg.length - 1) {
-        const providerID = arg.slice(0, slash)
-        const modelID = arg.slice(slash + 1)
-        input.onSubagentModelSelect({ providerID, modelID })
-        input.onStatus(`subagent model set to ${modelID}`)
-      } else {
-        input.onStatus("invalid subagent format — use provider/model, e.g. openai/gpt-4")
-        input.onSubagentModel()
-        return
-      }
-      push(next)
-      resetDraft()
-      return
-    }
-
     const command = next.mode === "shell" ? undefined : selectedCommand(next.text, next.command)
     if (!command && next.mode !== "shell" && isExitCommand(next.text)) {
       input.onExit()
@@ -1253,6 +1232,11 @@ export function createPromptState(input: PromptInput): PromptState {
   }
 
   const onSubmit = () => {
+    // Prevent prompt submission when autocomplete is visible — the
+    // keymap handles Enter for autocomplete selection instead.
+    if (visible()) {
+      return
+    }
     syncDraft()
     submitPrompt(clonePrompt(draft))
   }

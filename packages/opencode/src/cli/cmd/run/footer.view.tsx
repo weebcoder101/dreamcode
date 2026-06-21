@@ -105,6 +105,7 @@ type RunFooterViewProps = {
   onExit: () => void
   onModelSelect: (model: NonNullable<RunInput["model"]>) => void
   onSubagentModelSelect: (model: NonNullable<RunInput["model"]>) => void
+  onSubagentModelClear: () => void
   onVariantSelect: (variant: string | undefined) => void
   onRows: (rows: number) => void
   onLayout: (input: { route: FooterPromptRoute; autocomplete: boolean; subagentRows: number }) => void
@@ -173,6 +174,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const foregroundSubagents = createMemo(
     () => props.backgroundSubagents && activeTabs().some((item) => !item.background),
   )
+
   const model = createMemo(() => {
     const current = props.currentModel()
     return current ? modelInfo(props.providers(), current) : { model: props.state().model, provider: undefined }
@@ -384,8 +386,10 @@ export function RunFooterView(props: RunFooterViewProps) {
     onExitRequest: props.onExitRequest,
     onExit: props.onExit,
     onSkillMenu: openSkillMenu,
+    onModel: openModel,
     onSubagentModel: openSubagentModel,
     onSubagentModelSelect: props.onSubagentModelSelect,
+    onSubagentModelClear: props.onSubagentModelClear,
     onRows: props.onRows,
     onStatus: props.onStatus,
   })

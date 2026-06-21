@@ -1383,6 +1383,9 @@ export function Prompt(props: PromptProps) {
                 }
               }}
               onSubmit={() => {
+                // Prevent prompt submission when autocomplete is visible - the
+                // keymap handles Enter for autocomplete selection instead.
+                if (auto()?.visible) return
                 // IME: double-defer so the last composed character (e.g. Korean
                 // hangul) is flushed to plainText before we read it for submission.
                 setTimeout(() => setTimeout(() => submit(), 0), 0)

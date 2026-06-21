@@ -4,8 +4,6 @@
  * All new code should import from the core package directly.
  */
 import { Effect, Schema, Duration, Ref } from "effect"
-import * as Stream from "effect/Stream"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import * as Tool from "./tool"
 import * as path from "path"
 import * as fs from "fs"
@@ -144,43 +142,49 @@ function sanitizeSensorGateOutput(raw: string): string {
 // Prompt is passed via stdin (not argv) to avoid /proc/$PID/cmdline exposure.
 const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (prompt: string) {
   if (!SENSOR_GATE || !fs.existsSync(SENSOR_GATE)) return ""
-  try {
-    const promptBytes = new TextEncoder().encode(prompt)
-    const child = yield* ChildProcess.make({
-      command: "python3",
-      args: [SENSOR_GATE, "--stdin"],
-      stdin: Stream.make(promptBytes),
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    const output = yield* child.stdout
-      .pipe(Stream.toString)
-      .pipe(Effect.timeout(Duration.seconds(200)))
-      .pipe(Effect.catch(() => Effect.succeed("")))
-    return output || ""
-  } catch {
-    return ""
-  }
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(["python3", SENSOR_GATE!, "--stdin"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const writer = proc.stdin.getWriter()
+      await writer.write(new TextEncoder().encode(prompt))
+      await writer.close()
+      const text = await proc.stdout.text()
+      await proc.exited
+      return text || ""
+    },
+    catch: (err) => new Error(String(err)),
+  }).pipe(
+    Effect.timeout(Duration.seconds(200)),
+    Effect.catch(() => Effect.succeed("")),
+  )
 })
 
 // Phase 3: Async version of skill script execution
 // Prompt is passed via stdin (not argv) to avoid /proc/$PID/cmdline exposure.
 const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (script: string, prompt: string) {
-  try {
-    const promptBytes = new TextEncoder().encode(prompt)
-    const child = yield* ChildProcess.make({
-      command: "python3",
-      args: [script, "--stdin"],
-      stdin: Stream.make(promptBytes),
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    const output = yield* child.stdout
-      .pipe(Stream.toString)
-      .pipe(Effect.timeout(Duration.seconds(200)))
-      .pipe(Effect.catch(() => Effect.succeed("")))
-    return output || ""
-  } catch {
-    return ""
-  }
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(["python3", script, "--stdin"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const writer = proc.stdin.getWriter()
+      await writer.write(new TextEncoder().encode(prompt))
+      await writer.close()
+      const text = await proc.stdout.text()
+      await proc.exited
+      return text || ""
+    },
+    catch: (err) => new Error(String(err)),
+  }).pipe(
+    Effect.timeout(Duration.seconds(200)),
+    Effect.catch(() => Effect.succeed("")),
+  )
 })
 
 export const Parameters = Schema.Struct({

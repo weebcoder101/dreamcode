@@ -158,6 +158,7 @@ async function renderFooter(
     theme?: () => RunTheme
     providers?: RunProvider[]
     currentModel?: RunInput["model"]
+    currentSubagentModel?: RunInput["model"]
     currentVariant?: string
     subagents?: FooterSubagentState
     backgroundSubagents?: boolean
@@ -166,6 +167,8 @@ async function renderFooter(
     state?: Partial<FooterState>
     onCycle?: () => void
     onSubmit?: (prompt: RunPrompt) => boolean
+    onSubagentModelSelect?: (model: NonNullable<RunInput["model"]>) => void
+    onSubagentModelClear?: () => void
   } = {},
 ) {
   const [view] = createSignal<FooterView>({ type: "prompt" })
@@ -191,6 +194,7 @@ async function renderFooter(
           commands={() => input.commands ?? []}
           providers={() => input.providers}
           currentModel={() => input.currentModel}
+          currentSubagentModel={() => input.currentSubagentModel ?? input.currentModel}
           variants={() => []}
           currentVariant={() => input.currentVariant}
           state={state}
@@ -210,6 +214,8 @@ async function renderFooter(
           onInputClear={() => {}}
           onExit={() => {}}
           onModelSelect={() => {}}
+          onSubagentModelSelect={input.onSubagentModelSelect ?? (() => {})}
+          onSubagentModelClear={input.onSubagentModelClear ?? (() => {})}
           onVariantSelect={() => {}}
           onRows={() => {}}
           onLayout={() => {}}

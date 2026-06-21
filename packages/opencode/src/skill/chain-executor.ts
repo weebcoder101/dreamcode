@@ -1,7 +1,5 @@
 import { Effect, Context, Layer, Duration } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import * as Stream from "effect/Stream"
-import { ChildProcess } from "effect/unstable/process"
 import { InstanceState } from "@/effect/instance-state"
 import { Skill } from "@/skill"
 import { Glob } from "@opencode-ai/core/util/glob"
@@ -55,19 +53,26 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   if (!validateScriptPath(path.resolve(script))) {
     return "[SKIPPED] Script path outside allowed skills directory"
   }
-  const promptBytes = new TextEncoder().encode(prompt)
-  const child = yield* ChildProcess.make({
-    command: "python3",
-    args: [script, "--stdin"],
-    stdin: Stream.make(promptBytes),
-    cwd,
-    stdio: ["pipe", "pipe", "pipe"],
-  })
-  const output = yield* child.stdout
-    .pipe(Stream.toString)
-    .pipe(Effect.timeout(Duration.seconds(150)))
-    .pipe(Effect.catch(() => Effect.succeed("")))
-  return output
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(["python3", script, "--stdin"], {
+        cwd,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const writer = proc.stdin.getWriter()
+      await writer.write(new TextEncoder().encode(prompt))
+      await writer.close()
+      const text = await proc.stdout.text()
+      await proc.exited
+      return text || ""
+    },
+    catch: (err) => new Error(String(err)),
+  }).pipe(
+    Effect.timeout(Duration.seconds(150)),
+    Effect.catch(() => Effect.succeed("")),
+  )
 })
 
 const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced")(function* (
@@ -78,17 +83,23 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
   if (!validateScriptPath(path.resolve(script))) {
     return ""
   }
-  const child = yield* ChildProcess.make({
-    command: "python3",
-    args: [script, ...args],
-    cwd,
-    stdio: ["pipe", "pipe", "pipe"],
-  })
-  const output = yield* child.stdout
-    .pipe(Stream.toString)
-    .pipe(Effect.timeout(Duration.seconds(300)))
-    .pipe(Effect.catch(() => Effect.succeed("")))
-  return output
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const proc = Bun.spawn(["python3", script, ...args], {
+        cwd,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const text = await proc.stdout.text()
+      await proc.exited
+      return text || ""
+    },
+    catch: (err) => new Error(String(err)),
+  }).pipe(
+    Effect.timeout(Duration.seconds(300)),
+    Effect.catch(() => Effect.succeed("")),
+  )
 })
 
 export const execute = Effect.fn("ChainExecutor.execute")(function* (
@@ -228,4 +239,4 @@ export const defaultLayer = layer
 
 export const node = LayerNode.make(layer, [])
 
-export * as ChainExecutor from "./chain-executor"
+export const ChainExecutor = { Service, layer, defaultLayer, node }

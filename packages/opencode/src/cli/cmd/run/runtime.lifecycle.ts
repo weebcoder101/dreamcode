@@ -73,6 +73,7 @@ export type LifecycleInput = {
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
   onSubagentModelSelect?: (model: NonNullable<RunInput["model"]>) => void
+  onSubagentModelClear?: () => void
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
   onInterrupt?: () => void
   onBackground?: () => void
@@ -255,6 +256,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       onCycleVariant: input.onCycleVariant,
       onModelSelect: input.onModelSelect,
       onSubagentModelSelect: input.onSubagentModelSelect,
+      onSubagentModelClear: input.onSubagentModelClear,
       onVariantSelect: input.onVariantSelect,
       onInterrupt: input.onInterrupt,
       onBackground: input.onBackground,

@@ -158,6 +158,17 @@ const failingAccountLayer = Layer.mock(Account.Service, {
 
 This is much shorter than stubbing every method with `Effect.void` / `Effect.succeed(...)` placeholders, and it keeps the test focused on the behaviour under test.
 
+## Testing Gaps — subagent-model.test.ts
+
+The test file `test/cli/run/subagent-model.test.ts` has critical coverage gaps:
+
+- **Zero integration tests**: Only checks function signatures and a tautological type assertion (`returns undefined or a valid model object` passes regardless of model.json content). No `it.live` or `it.instance` tests that exercise actual file read/write.
+- **No cross-writer tests**: `model.json` has 3+ concurrent writers (variant.shared.ts async Effect, variant.shared.ts sync fs, TUI local.tsx async) but no test verifies writes from one path don't clobber fields written by another.
+- **No error-condition tests**: `saveSubagentModel`, `clearSubagentModel`, `resolveSavedSubagentModel` all have try/catch blocks but no tests verify behavior under permission errors, malformed JSON, or missing directories.
+- **No atomicity verification**: The tmp+rename atomic write pattern has no crash-recovery or tmp-file-cleanup tests.
+
+**TODO**: Convert to integration tests using `it.live` with temp directory and real file I/O. Add tests that verify `saveSubagentModel` + `saveVariant` don't clobber each other's fields.
+
 ## Synchronizing With Concurrent Work
 
 ### The Anti-Pattern

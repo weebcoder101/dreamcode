@@ -326,11 +326,33 @@ def _is_social_greeting(prompt: str) -> bool:
 
 def classify_intent(prompt: str, chain_result: dict) -> str:
     is_social = _is_social_greeting(prompt)
+
+    # Compute confidence from detected patterns
+    total_patterns = len(PATTERN_RULES)
+    matched = 0
+    prompt_lower = prompt.lower()
+    for pattern, _task_type, _priority in PATTERN_RULES:
+        if re.search(pattern, prompt_lower):
+            matched += 1
+    confidence_score = round(min(matched / max(total_patterns, 1) + 0.3, 0.95), 2) if matched > 0 else 0.6
+
+    complexity = chain_result.get("complexity", "low")
+
+    # risk_level now maps properly — allows "low" for simple tasks
+    if complexity == "low" and confidence_score >= 0.75:
+        risk_level = "low"
+    elif complexity == "high":
+        risk_level = "high"
+    else:
+        risk_level = "medium"
+
     lines = [
         "[SENSOR] Intent Classification",
         f"- intent: {prompt[:80]}",
         f"- domain_tags: {', '.join(chain_result['detected_tasks'][:8])}",
-        f"- risk_level: {'high' if chain_result['complexity'] == 'high' else 'medium'}",
+        f"- risk_level: {risk_level}",
+        f"- confidence: {confidence_score}",
+        f"- complexity: {complexity}",
         "- time_sensitivity: medium",
         "- requires_tools: files",
         "- deliverable_type: multi",
@@ -344,15 +366,20 @@ def classify_intent(prompt: str, chain_result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def resolve_skills(chain_result: dict) -> str:
-    primary = chain_result["primary_task"]
     chain = chain_result["chain"]
+    detected = chain_result.get("detected_tasks", [])
+    primary = chain_result["primary_task"]
 
-    # Dream is always the thinking mode — override primary if not trivial
-    if primary not in ("communication",):
+    # Dream mode only when breakthrough-overdrive-innovation is in the chain
+    # (which only happens for genuinely complex/innovative tasks, see build_dynamic_graph)
+    has_innovation = "breakthrough-overdrive-innovation" in chain
+    if has_innovation:
         primary = "breakthrough-overdrive-innovation"
         mode = "DREAM_INNOVATION"
-    else:
+    elif not detected or set(detected) <= {"communication"}:
         mode = "TRIVIAL"
+    else:
+        mode = "STANDARD"
 
     supports = [s for s in chain if s != primary][:2]
     lines = [
@@ -361,7 +388,7 @@ def resolve_skills(chain_result: dict) -> str:
         f"- supports: {', '.join(supports)}",
         "- automation: none",
         f"- mode: {mode}",
-        f"- why: Detected {', '.join(chain_result['detected_tasks'][:3])} tasks — dream thinking is default",
+        f"- why: Detected {', '.join(detected[:3])} tasks",
         f"- chain: {' → '.join(chain)}",
     ]
     return "\n".join(lines)

@@ -51,6 +51,8 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { Skill } from "@/skill"
+import { ChainExecutor } from "@/skill/chain-executor"
+import { PiecesLTM } from "@/pieces-ltm"
 import { Snapshot } from "@/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
@@ -246,6 +248,8 @@ export function createRoutes(
       SessionCompaction.defaultLayer,
       ContextCompressor.defaultLayer,
       SensorGate.defaultLayer,
+      ChainExecutor.defaultLayer,
+      PiecesLTM.defaultLayer,
       SessionPrompt.defaultLayer,
       SessionRevert.defaultLayer,
       SessionShare.defaultLayer,

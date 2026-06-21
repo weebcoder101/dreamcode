@@ -37,6 +37,7 @@ import { SyncProvider, useSync } from "./context/sync"
 import { DataProvider } from "./context/data"
 import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
+import { DialogSubagentModel } from "./component/dialog-subagent-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
@@ -100,6 +101,7 @@ const appGlobalBindingCommands = [
 const appBindingCommands = [
   "command.palette.show",
   "model.list",
+  "subagent.model.list",
   "model.cycle_recent",
   "model.cycle_recent_reverse",
   "model.cycle_favorite",
@@ -648,6 +650,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashAliases: ["mo"],
         run: () => {
           dialog.replace(() => <DialogModel />)
+        },
+      },
+      {
+        name: "subagent.model.list",
+        title: "Switch subagent model",
+        suggested: true,
+        category: "Agent",
+        slashName: "subagent",
+        slashAliases: ["sa", "sub"],
+        run: () => {
+          dialog.replace(() => <DialogSubagentModel />)
         },
       },
       {

@@ -319,6 +319,7 @@ export const CommandMap = {
   model_provider_list: "model.dialog.provider",
   model_favorite_toggle: "model.dialog.favorite",
   model_list: "model.list",
+  subagent_model_list: "subagent.model.list",
   model_cycle_recent: "model.cycle_recent",
   model_cycle_recent_reverse: "model.cycle_recent_reverse",
   model_cycle_favorite: "model.cycle_favorite",

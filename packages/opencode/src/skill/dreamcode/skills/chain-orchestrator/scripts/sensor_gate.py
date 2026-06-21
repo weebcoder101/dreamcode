@@ -19,27 +19,34 @@ Usage:
 """
 
 import json
-import os
 import re
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
-SKILLS_DIR = PROJECT_ROOT / ".opencode" / "skills"
+def _find_project_root() -> Path:
+    """Find project root by looking for .opencode directory."""
+    current = Path.cwd()
+    for parent in [current] + list(current.parents):
+        if (parent / ".opencode").is_dir():
+            return parent
+    return current
+
+PROJECT_ROOT = _find_project_root()
+SKILLS_DIR = PROJECT_ROOT / ".dreamcode" / "skills"
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
-CONFIG_PATH = PROJECT_ROOT / ".opencode" / "config" / "opencode.yaml"
-SCRIPTS_DIR = PROJECT_ROOT / ".opencode" / "scripts"
+CONFIG_PATH = PROJECT_ROOT / ".dreamcode" / "config" / "opencode.yaml"
+SCRIPTS_DIR = PROJECT_ROOT / ".dreamcode" / "scripts"
 
 # Add guardian-ai scripts to path
 _guardian_scripts = SKILLS_DIR / "guardian-ai" / "scripts"
 if str(_guardian_scripts) not in sys.path:
-    sys.path.append(str(_guardian_scripts))
+    sys.path.insert(0, str(_guardian_scripts))
 
 # Add scripts dir to path for sandbox_manager and agents_md_loader
 if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.append(str(SCRIPTS_DIR))
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +210,12 @@ def build_dynamic_graph(prompt: str) -> dict:
         for skill in TASK_SKILLS.get(task["task_type"], []):
             needed_skills.add(skill)
     
-    # Always include dream
-    needed_skills.add("breakthrough-overdrive-innovation")
+    # Only include dream/innovation when task actually requires it
+    # (not for trivial communication-only tasks)
+    task_types = {t["task_type"] for t in tasks}
+    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
+    if task_types & INNOVATION_TASKS:
+        needed_skills.add("breakthrough-overdrive-innovation")
     
     # Resolve dependencies — add prerequisites
     resolved = set()
@@ -236,6 +247,21 @@ def build_dynamic_graph(prompt: str) -> dict:
     
     # Topological sort — respect dependencies
     chain = _topological_sort(resolved)
+    
+    # MINIMUM SKILL FLOOR — trivial tasks need fewer skills
+    task_types = {t["task_type"] for t in tasks}
+    TRIVIAL_TASKS = {"communication"}
+    if task_types <= TRIVIAL_TASKS:
+        # Trivial: just the needed skills, no forced chain
+        pass
+    else:
+        # Non-trivial: ensure at least neuro + LTM persistence
+        MINIMUM_CHAIN = ["neuro", "pieces-ltm"]
+        if len(chain) < 2:
+            for skill in MINIMUM_CHAIN:
+                if skill not in chain:
+                    chain.append(skill)
+            chain = _topological_sort(set(chain))
     
     # Determine complexity
     complexity = "high" if len(tasks) > 3 else "medium" if len(tasks) > 1 else "low"
@@ -300,11 +326,33 @@ def _is_social_greeting(prompt: str) -> bool:
 
 def classify_intent(prompt: str, chain_result: dict) -> str:
     is_social = _is_social_greeting(prompt)
+
+    # Compute confidence from detected patterns
+    total_patterns = len(PATTERN_RULES)
+    matched = 0
+    prompt_lower = prompt.lower()
+    for pattern, _task_type, _priority in PATTERN_RULES:
+        if re.search(pattern, prompt_lower):
+            matched += 1
+    confidence_score = round(min(matched / max(total_patterns, 1) + 0.3, 0.95), 2) if matched > 0 else 0.6
+
+    complexity = chain_result.get("complexity", "low")
+
+    # risk_level now maps properly — allows "low" for simple tasks
+    if complexity == "low" and confidence_score >= 0.75:
+        risk_level = "low"
+    elif complexity == "high":
+        risk_level = "high"
+    else:
+        risk_level = "medium"
+
     lines = [
         "[SENSOR] Intent Classification",
         f"- intent: {prompt[:80]}",
         f"- domain_tags: {', '.join(chain_result['detected_tasks'][:8])}",
-        f"- risk_level: {'high' if chain_result['complexity'] == 'high' else 'medium'}",
+        f"- risk_level: {risk_level}",
+        f"- confidence: {confidence_score}",
+        f"- complexity: {complexity}",
         "- time_sensitivity: medium",
         "- requires_tools: files",
         "- deliverable_type: multi",
@@ -318,15 +366,20 @@ def classify_intent(prompt: str, chain_result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def resolve_skills(chain_result: dict) -> str:
-    primary = chain_result["primary_task"]
     chain = chain_result["chain"]
+    detected = chain_result.get("detected_tasks", [])
+    primary = chain_result["primary_task"]
 
-    # Dream is always the thinking mode — override primary if not trivial
-    if primary not in ("communication",):
+    # Dream mode only when breakthrough-overdrive-innovation is in the chain
+    # (which only happens for genuinely complex/innovative tasks, see build_dynamic_graph)
+    has_innovation = "breakthrough-overdrive-innovation" in chain
+    if has_innovation:
         primary = "breakthrough-overdrive-innovation"
         mode = "DREAM_INNOVATION"
-    else:
+    elif not detected or set(detected) <= {"communication"}:
         mode = "TRIVIAL"
+    else:
+        mode = "STANDARD"
 
     supports = [s for s in chain if s != primary][:2]
     lines = [
@@ -335,9 +388,103 @@ def resolve_skills(chain_result: dict) -> str:
         f"- supports: {', '.join(supports)}",
         "- automation: none",
         f"- mode: {mode}",
-        f"- why: Detected {', '.join(chain_result['detected_tasks'][:3])} tasks — dream thinking is default",
+        f"- why: Detected {', '.join(detected[:3])} tasks",
         f"- chain: {' → '.join(chain)}",
     ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2.7: Dynamic Persona Generation
+# ---------------------------------------------------------------------------
+
+PERSONA_TEMPLATES = {
+    "security": {"name": "The Sentinel", "role": "Security & Threat Analysis Specialist", "focus": "auth bypass, injection attacks, CVE analysis, OWASP Top 10, secrets exposure"},
+    "auth": {"name": "The Sentinel", "role": "Security & Authentication Specialist", "focus": "authentication flows, token security, session management, RBAC"},
+    "api": {"name": "The Diplomat", "role": "API Design & Contract Specialist", "focus": "REST conventions, error handling, rate limiting, versioning, OpenAPI"},
+    "rest": {"name": "The Diplomat", "role": "API Design Specialist", "focus": "endpoint design, HTTP semantics, content negotiation"},
+    "database": {"name": "The Cartographer", "role": "Data Architecture Specialist", "focus": "schema design, query optimization, migrations, N+1 detection"},
+    "sql": {"name": "The Cartographer", "role": "Data Architecture Specialist", "focus": "query analysis, index usage, transaction safety"},
+    "frontend": {"name": "The Artisan", "role": "Frontend & UX Specialist", "focus": "component patterns, accessibility, responsive design, state management"},
+    "ui": {"name": "The Artisan", "role": "UI/UX Specialist", "focus": "user flows, visual hierarchy, interaction patterns"},
+    "react": {"name": "The Artisan", "role": "React Architecture Specialist", "focus": "hooks, component composition, rendering optimization"},
+    "performance": {"name": "The Optimizer", "role": "Performance & Efficiency Specialist", "focus": "profiling, caching strategies, algorithmic complexity, memory usage"},
+    "speed": {"name": "The Optimizer", "role": "Performance Specialist", "focus": "latency reduction, throughput optimization, resource management"},
+    "testing": {"name": "The Examiner", "role": "Quality Assurance Specialist", "focus": "test coverage, mocking strategies, edge cases, integration tests"},
+    "pytest": {"name": "The Examiner", "role": "Test Architecture Specialist", "focus": "test fixtures, parametrize patterns, coverage gaps"},
+    "architecture": {"name": "The Architect", "role": "System Design Specialist", "focus": "abstraction layers, dependency injection, separation of concerns"},
+    "design": {"name": "The Architect", "role": "Design Pattern Specialist", "focus": "SOLID principles, GoF patterns, domain-driven design"},
+    "refactor": {"name": "The Sculptor", "role": "Code Quality & Refactoring Specialist", "focus": "code smells, cyclomatic complexity,Extract Method, Replace Conditional"},
+    "debugging": {"name": "The Detective", "role": "Diagnostic & Root Cause Specialist", "focus": "root cause analysis, stack trace interpretation, logging strategies"},
+    "devops": {"name": "The Navigator", "role": "Infrastructure & Deployment Specialist", "focus": "CI/CD pipelines, containerization, monitoring, scaling"},
+    "docker": {"name": "The Navigator", "role": "Containerization Specialist", "focus": "Dockerfile optimization, multi-stage builds, security scanning"},
+    "documentation": {"name": "The Chronicler", "role": "Documentation Specialist", "focus": "API docs, architecture decision records, onboarding guides"},
+    "code-quality": {"name": "The Sculptor", "role": "Code Quality Specialist", "focus": "linting rules, code review standards, technical debt"},
+    "error": {"name": "The Detective", "role": "Error Handling Specialist", "focus": "error boundaries, retry strategies, graceful degradation"},
+    "logging": {"name": "The Chronicler", "role": "Observability Specialist", "focus": "structured logging, tracing, metrics collection"},
+}
+
+MAX_PERSONAS = 7
+
+
+def generate_personas(chain_result: dict, prompt: str) -> str:
+    """Stage 2.7: Generate dynamic agent personas based on task analysis."""
+    detected_tasks = chain_result.get("detected_tasks", [])
+    domain_tags = chain_result.get("domain_tags", [])
+    chain = chain_result.get("chain", [])
+    complexity = chain_result.get("complexity", "low")
+
+    # Collect all relevant domain tags from tasks and chain
+    all_tags = set(domain_tags)
+    for task in detected_tasks:
+        all_tags.add(task)
+    for skill in chain:
+        all_tags.add(skill)
+
+    # Match tags to persona templates
+    matched_personas = []
+    seen_names = set()
+    for tag in all_tags:
+        tag_lower = tag.lower().replace("-", "_").replace(" ", "_")
+        if tag_lower in PERSONA_TEMPLATES:
+            template = PERSONA_TEMPLATES[tag_lower]
+            if template["name"] not in seen_names:
+                matched_personas.append(template.copy())
+                seen_names.add(template["name"])
+
+    # Determine how many subagents based on complexity
+    if complexity == "low" or len(matched_personas) <= 1:
+        num_personas = min(1, len(matched_personas))
+    elif complexity == "medium":
+        num_personas = min(3, len(matched_personas))
+    else:
+        num_personas = min(MAX_PERSONAS, len(matched_personas))
+
+    # Always include a general analyst if we have room
+    if num_personas < MAX_PERSONAS and len(matched_personas) < 3:
+        analyst = {"name": "The Analyst", "role": "General Analysis Specialist", "focus": "holistic review, cross-cutting concerns, integration points"}
+        if "The Analyst" not in seen_names:
+            matched_personas.append(analyst)
+            num_personas += 1
+
+    # Cap at MAX_PERSONAS
+    matched_personas = matched_personas[:MAX_PERSONAS]
+
+    if not matched_personas:
+        matched_personas = [{"name": "The Analyst", "role": "General Analysis Specialist", "focus": "holistic review and analysis"}]
+
+    # Build output block
+    lines = [
+        "[PERSONA] Dynamic Agent Personas",
+        f"- count: {len(matched_personas)}",
+        "- personas:",
+    ]
+    for p in matched_personas:
+        lines.append(f"  - name: {p['name']}")
+        lines.append(f"    role: {p['role']}")
+        lines.append(f"    focus: {p['focus']}")
+        lines.append(f"    skills: {', '.join(chain[:3])}")
+
     return "\n".join(lines)
 
 
@@ -546,7 +693,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         elif skill == "neuro":
             lines.extend([
                 f"STEP {step_num}: {skill}",
-                f"  Run: python3 .opencode/skills/neuro/scripts/neuro_harness.py --task \"{prompt[:60]}\" --phase pre_patch",
+                f"  Run: python3 .dreamcode/skills/neuro/scripts/neuro_harness.py --task \"{prompt[:60]}\" --phase pre_patch",
                 f"  For each file, run NEURO review.",
                 f"  Parse the output and apply the top 3 recommendations.",
                 "",
@@ -554,7 +701,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         elif skill == "code-hardener":
             lines.extend([
                 f"STEP {step_num}: {skill}",
-                f"  Run: python3 .opencode/skills/neuro/scripts/neuro_harness.py --task \"HARDEN: {prompt[:60]}\" --phase post_patch",
+                f"  Run: python3 .dreamcode/skills/neuro/scripts/neuro_harness.py --task \"HARDEN: {prompt[:60]}\" --phase post_patch",
                 f"  Apply hardening: type annotations, error handling, input validation.",
                 "",
             ])
@@ -607,7 +754,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         "FINAL STEP: Persist results to Pieces LTM.",
         "  Primary: Use the PiecesLTM Service (inside opencode runtime):",
         "    PiecesLTM.Service.persist({ chainName: '...', taskDescription: '...', outcome: 'success' })",
-        "  Fallback: Run: python3 .opencode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
+        "  Fallback: Run: python3 .dreamcode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
         f"    --chain \"{', '.join(chain)}\" --task \"{prompt[:80]}\" --outcome success",
         "",
         "After ALL steps complete, respond to the user with:",
@@ -655,7 +802,7 @@ def log_chain(prompt: str, chain: list[str]) -> None:
 def record_sensor_gate_run() -> None:
     """Record that sensor gate was run — this is MANDATORY."""
     try:
-        sys.path.insert(0, str(PROJECT_ROOT / ".opencode" / "automations"))
+        sys.path.insert(0, str(PROJECT_ROOT / ".dreamcode" / "automations"))
         from agent_score import record_event
         record_event("sensor_gate_run", "Sensor gate executed")
     except ImportError:
@@ -689,6 +836,9 @@ def run_gate(prompt: str) -> dict:
     if _is_social_greeting(prompt):
         return {"is_social_greeting": True, "response": "Hey! What can I help you with?"}
 
+    # Stage 2.7: Dynamic Persona Generation
+    persona_block = generate_personas(chain_result, prompt)
+
     # Stage 2.5: AGENTS.md load
     agents_md_block = load_agents_md()
 
@@ -718,7 +868,7 @@ def run_gate(prompt: str) -> dict:
     instructions_block = emit_agent_instructions(prompt, chain_result)
 
     # Output all blocks
-    output = f"{intent_block}\n\n{skill_block}\n\n{agents_md_block}\n\n{guardian_block}\n\n{enforcement_block}\n\n{plan_block}\n\n{instructions_block}"
+    output = f"{intent_block}\n\n{skill_block}\n\n{persona_block}\n\n{agents_md_block}\n\n{guardian_block}\n\n{enforcement_block}\n\n{plan_block}\n\n{instructions_block}"
     print(output)
 
     return {
@@ -726,6 +876,7 @@ def run_gate(prompt: str) -> dict:
         "blocked": False,
         "guardian_decision": guardian_result.get("decision") if guardian_result else "UNKNOWN",
         "chain": chain_result["chain"],
+        "personas": persona_block,
         "primary": chain_result["primary_task"],
         "complexity": chain_result["complexity"],
         "output": output,
@@ -739,16 +890,9 @@ def run_gate(prompt: str) -> dict:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="SENSOR Gate — Codex-Compatible Runtime")
-    parser.add_argument("--prompt", help="User prompt (alternative to --stdin)")
-    parser.add_argument("--stdin", action="store_true", help="Read prompt from stdin")
+    parser.add_argument("--prompt", required=True, help="User prompt")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
-    prompt = args.prompt
-    if args.stdin and not prompt:
-        prompt = sys.stdin.read().strip()
-    if not prompt:
-        print("ERROR: --prompt or --stdin required", file=sys.stderr)
-        sys.exit(1)
-    result = run_gate(prompt)
+    result = run_gate(args.prompt)
     if args.json:
         print(json.dumps(result, indent=2))

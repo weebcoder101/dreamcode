@@ -34,7 +34,7 @@ import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
-import { SensorGate, evaluateSpawnNecessity } from "@/skill/sensor-gate"
+import { SensorGate, evaluateSpawnNecessity, type Persona } from "@/skill/sensor-gate"
 import { ChainExecutor } from "@/skill/chain-executor"
 import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
@@ -85,10 +85,13 @@ IMPORTANT:
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
 function sanitizeForSystemPrompt(text: string): string {
+  // Escape HTML/XML metacharacters to prevent prompt injection via tag injection.
+  // Order matters: & first to avoid double-escaping.
   return text
+    .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/<\s*\//gi, "&lt;\\/")
+    .replace(/"/g, "&quot;")
 }
 
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
@@ -141,6 +144,8 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const { db } = database
     const skillService = yield* Skill.Service
+    const chainExecutor = yield* ChainExecutor.Service
+    const piecesLTM = yield* PiecesLTM.PiecesLTM
 
     const ops = Effect.fn("SessionPrompt.ops")(function* (opts?: { disableTaskTool?: boolean }) {
       return {
@@ -164,10 +169,10 @@ export const layer = Layer.effect(
     const MAX_PERSONA_ROUNDS = 3
 
     // ─── Rolling-Window Rate Limiter ─────────────────────────────────
-    // Max 7 persona spawns per 5-minute window per session.
+    // Max 5 persona spawns per 5-minute window per session.
     // Prevents compute cost explosion from rapid-fire specialist requests.
     const RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
-    const RATE_MAX_SPAWNS = 7
+    const RATE_MAX_SPAWNS = 5
     const spawnHistory = new Map<SessionID, Array<{ timestamp: number; count: number }>>()
 
     function checkRateLimit(sessionID: SessionID): { allowed: boolean; remaining: number; resetMs: number } {
@@ -188,6 +193,11 @@ export const layer = Layer.effect(
       const history = spawnHistory.get(sessionID) ?? []
       history.push({ timestamp: Date.now(), count })
       spawnHistory.set(sessionID, history)
+    }
+
+    function parseExplicitSpawnCount(text: string): number {
+      const match = text.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
+      return match ? Math.min(parseInt(match[1], 10), RATE_MAX_SPAWNS) : 0
     }
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -1411,25 +1421,6 @@ Before every response, verify your reasoning:
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
-            // ─── Subagent Model Warning (first query, root session) ─────
-            // Warn user about subagent model costs on the first turn so they
-            // can set a cheaper model via /subagent before any subagents spawn.
-            if (step === 1 && !session.parentID) {
-              system.push([
-                "",
-                "<subagent-cost-warning>",
-                "## Subagent Model Configuration",
-                "",
-                "Subagents currently inherit your parent session model, which may be expensive.",
-                "If you are using a high-cost model, consider configuring a cheaper subagent",
-                "model (e.g. deepseek-v4-flash, mimo-v2.5) to reduce costs.",
-                "",
-                "Type **/subagent** to open the model selector and choose a cheaper model from your saved providers,",
-                "or respond with \"keep parent\" to continue using the current model.",
-                "</subagent-cost-warning>",
-              ].join("\n"))
-            }
-
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
             // Runs classification + skill chain selection on every user message.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
@@ -1457,8 +1448,14 @@ Before every response, verify your reasoning:
                     Effect.as(Effect.logError("Sensor gate unavailable", { cause }), null),
                   ),
                 )
+                const explicitSpawnCount = parseExplicitSpawnCount(userText)
                 if (gateResult && !gateResult.is_social_greeting) {
                   const isLowConfidence = gateResult.confidence < 0.7
+
+                  // Compute spawn necessity early so we can gate chain executor too
+                  const spawnEval = explicitSpawnCount > 0
+                    ? { shouldSpawn: true, reason: `User explicitly requested ${explicitSpawnCount} specialist agents`, suggestedCount: explicitSpawnCount }
+                    : evaluateSpawnNecessity(gateResult, userText)
 
                   const sensorBlock = [
                     "<sensor-gate>",
@@ -1484,21 +1481,40 @@ Before every response, verify your reasoning:
                   sensorBlock.push("</sensor-gate>")
                   system.push(sensorBlock.join("\n"))
 
-                  // Force-load skills from gateResult.chain
+                  // Skill manifest: UUIDs + dependency graph, not full content
+                  // Agent loads skills via the `skill` tool at runtime using UUIDs
+                  const manifestSkills: string[] = []
                   for (const skillName of gateResult.chain) {
                     const skillInfo = yield* skillService.require(skillName).pipe(Effect.option)
                     if (skillInfo._tag === "Some") {
-                      system.push(`\n<loaded-skill name="${skillName}">\n${skillInfo.value.content}\n</loaded-skill>`)
+                      manifestSkills.push(`  - ${skillName} (id: ${skillInfo.value.id})`)
+                    } else {
+                      manifestSkills.push(`  - ${skillName} (id: unknown — not found)`)
                     }
                   }
+                  const chainSkillNames = gateResult.chain.join(", ")
+                  system.push(
+                    `\n<skill-chain>` +
+                    `\nChain skills for this task: ${chainSkillNames}` +
+                    `\n${manifestSkills.join("\n")}` +
+                    `\n</skill-chain>` +
+                    `\n<chain-mandatory>` +
+                    `\nCRITICAL: You MUST load EACH skill from the chain above using the \`skill\` tool BEFORE proceeding with your analysis.` +
+                    `\nYour FIRST action must be: call \`skill\` for each skill in the chain. Only after ALL chain skills are loaded may you begin analysis.` +
+                    `\nFailure to load chain skills will result in incomplete analysis and is forbidden.` +
+                    `\n</chain-mandatory>`,
+                  )
 
                   // ─── ChainExecutor: Execute skills programmatically ──
                   // After loading skill content, run the chain executor
                   // to produce execution results for each skill.
-                  if (gateResult.chain.length > 0) {
-                    const executor = yield* ChainExecutor.Service
-                    const chainResults = yield* executor.execute(gateResult.chain, userText).pipe(
-                      Effect.catch(() => Effect.succeed([])),
+                  // Only runs when spawn is actually needed — saves ~7 Python spawns per trivial task.
+                  if (spawnEval.shouldSpawn && gateResult.chain.length > 0) {
+                    const chainResults = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
+                      Effect.catch((e) => {
+                        console.warn("[chain-executor] execute() failed:", e)
+                        return Effect.succeed([])
+                      }),
                     )
                     for (const result of chainResults) {
                       if (result.status === "ok" && result.output) {
@@ -1510,10 +1526,13 @@ Before every response, verify your reasoning:
                       }
                     }
 
-                    // Phase 5: Wire orphaned Python scripts
-                    if (gateResult.mode === "DREAM_INNOVATION" || gateResult.chain.length > 3) {
-                      const pipelineResults = yield* executor.runFullPipeline(gateResult.chain, userText).pipe(
-                        Effect.catch(() => Effect.succeed([])),
+                    // Phase 5: Wire orphaned Python scripts — only for truly complex tasks
+                    if (gateResult.complexity === "high" || gateResult.chain.length > 3) {
+                      const pipelineResults = yield* chainExecutor.runFullPipeline(gateResult.chain, userText).pipe(
+                        Effect.catch((e) => {
+                          console.warn("[chain-executor] runFullPipeline() failed:", e)
+                          return Effect.succeed([])
+                        }),
                       )
                       for (const result of pipelineResults) {
                         if (result.status === "ok" && result.output) {
@@ -1521,8 +1540,11 @@ Before every response, verify your reasoning:
                         }
                       }
 
-                      const verifyResult = yield* executor.verify(chainResults).pipe(
-                        Effect.catch(() => Effect.succeed("")),
+                      const verifyResult = yield* chainExecutor.verify(chainResults).pipe(
+                        Effect.catch((e) => {
+                          console.warn("[chain-executor] verify() failed:", e)
+                          return Effect.succeed("")
+                        }),
                       )
                       if (verifyResult) {
                         system.push(`\n<chain-verification>\n${verifyResult.slice(0, 2000)}\n</chain-verification>`)
@@ -1542,26 +1564,9 @@ Before every response, verify your reasoning:
                       )
                     }
 
-                    // ─── Dream Enforcement ────────────────────────────
-                    // When DREAM_INNOVATION mode is active, inject explicit
-                    // thinking instructions into the system prompt.
-                    if (gateResult.mode === "DREAM_INNOVATION") {
-                      system.push(
-                        `\n<dream-enforcement>` +
-                        `\nYou are operating in DREAM_INNOVATION mode. You MUST:` +
-                        `\n1. Ground your thinking — state what you know and what the constraints are` +
-                        `\n2. Dream — produce latent insights, non-obvious connections, TRIZ contradictions` +
-                        `\n3. Multi-perspective — view from security, performance, UX, cost, architecture` +
-                        `\n4. Propose — offer exactly 3 innovations with hypothesis, experiment, failure modes, risk/reward` +
-                        `\n5. Build — pick and implement ONE proposal` +
-                        `\nDo not skip these steps. This is the default thinking mode.` +
-                        `\n</dream-enforcement>`,
-                      )
-                    }
-
                     // ─── PiecesLTM Auto-Persist ──────────────────────
                     // Programmatically persist every chain execution to LTM.
-                    yield* PiecesLTM.Service.persist({
+                    yield* piecesLTM.persist({
                       chainName: gateResult.chain.join(" → "),
                       taskDescription: gateResult.intent,
                       outcome: missingSkills.length === 0 ? "success" : "failed",
@@ -1607,9 +1612,10 @@ Before every response, verify your reasoning:
                   }
 
                   // ─── Persona System Injection ─────────────────────────
-                  if (gateResult.personas.length > 0) {
-                    // ─── Spawn Necessity Check ────────────────────────
-                    const spawnEval = evaluateSpawnNecessity(gateResult, userText)
+                  // Also enter when user explicitly requests N agents, even without
+                  // sensor gate personas — explicit "spawn N agents" must not be lost.
+                  if (explicitSpawnCount > 0 || gateResult.personas.length > 0) {
+                    // ─── Spawn Necessity Check (reuses early-computed spawnEval) ─
                     if (!spawnEval.shouldSpawn) {
                       // Agent handles directly — inject sensor gate info but skip persona spawning
                       system.push(`\n<spawn-decision>SPAWN SKIPPED: ${spawnEval.reason}. Handle this task directly using the skill plan above.</spawn-decision>`)
@@ -1626,7 +1632,17 @@ Before every response, verify your reasoning:
 
                     // Rate limit: truncate persona count to remaining budget
                     const rateCheck = checkRateLimit(sessionID)
-                    const personaTeam = gateResult.personas.slice(0, Math.min(spawnEval.suggestedCount, rateCheck.remaining))
+                    const personaTeam = explicitSpawnCount > 0 && gateResult.personas.length === 0
+                      ? Array.from({ length: Math.min(explicitSpawnCount, rateCheck.remaining) }, (_, i): Persona => ({
+                          name: `Specialist ${i + 1}`,
+                          role: "Agent",
+                          focus: "Analyzing the user's request",
+                          skills: [],
+                          task: "Analyze the user's request from your specialist perspective",
+                          goals: [],
+                          synthesisGuide: "",
+                        }))
+                      : gateResult.personas.slice(0, Math.min(spawnEval.suggestedCount, rateCheck.remaining))
                     recordSpawn(sessionID, personaTeam.length)
 
                     const personaLines = [
@@ -1734,27 +1750,28 @@ Before every response, verify your reasoning:
                       // instead of passing the full 200K+ token msgs array.
                       const subagentCtx = extractSubagentContext(msgs)
 
+                      // Pre-compute once — shared across all concurrent persona calls
+                      const contextBlock = buildSubagentContextPrompt(subagentCtx)
+
+                      // Pre-sanitize gateResult values once (avoids N× redundant regex runs)
+                      const safeMode = sanitizeForSystemPrompt(gateResult.mode)
+                      const safeComplexity = sanitizeForSystemPrompt(gateResult.complexity)
+                      const safeChain = sanitizeForSystemPrompt(gateResult.chain.join(" → "))
+
                       yield* Effect.forEach(
                         personaTeam,
                         Effect.fnUntraced(function* (persona, i) {
                           const part = personaParts[i]
-                          const others = personaTeam.filter((_, j) => j !== i)
-                          const otherContext = others.length > 0
-                            ? [
-                                "",
-                                "Other specialists on this task:",
-                                ...others.map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
-                                "",
-                                "Do NOT duplicate work. Cover ONLY your assigned focus area.",
-                              ].join("\n")
+                          // Static string — identical across ALL concurrent persona calls
+                          // so KV-cache prefix is shared. Persona-specific details go
+                          // in the DYNAMIC section at the end of the prompt.
+                          const otherContext = personaTeam.length > 1
+                            ? "\nOther specialist agents are analyzing related aspects of this task from their own focus areas.\nDo NOT duplicate work. Cover ONLY your assigned focus area.\n"
                             : ""
 
                           const goalsBlock = persona.goals?.length
                             ? ["", "## Goals", ...persona.goals.map((g) => `- ${g}`)].join("\n")
                             : ""
-
-                          // Build compacted context for this persona — file paths, recent exchange, current task
-                          const contextBlock = buildSubagentContextPrompt(subagentCtx)
 
                           // Cache-optimized prompt ordering: STATIC sections first so all
                           // concurrent persona calls share the same KV-cache prefix.
@@ -1787,14 +1804,32 @@ Before every response, verify your reasoning:
                             // === SEMI-STATIC: context block (same for all personas in same turn) ===
                             contextBlock,
                             "",
+                            // Skill chain context — pass gateResult info so subagent knows the skill chain
+                            ...(gateResult ? [
+                              "## Skill Chain Context",
+                              `Mode: ${safeMode}`,
+                              `Complexity: ${safeComplexity}`,
+                              `Chain: ${safeChain}`,
+                              `Use the \`skill\` tool to load any skill by name or UUID from the chain as needed.`,
+                              "",
+                            ] : []),
                             "## User Prompt",
-                            userText.trim(),
+                            sanitizeForSystemPrompt(userText.trim()),
                             "",
                             // === DYNAMIC SECTIONS (diverges per persona) at the very end ===
                             `## Your Identity`,
                             `You are "${persona.name}" — ${persona.role}.`,
                             `Your focus area: ${persona.focus}.`,
-                            "",
+                            ...(personaTeam.length > 1
+                              ? [
+                                  "",
+                                  "## Other Specialists",
+                                  ...personaTeam
+                                    .filter((_, j) => j !== i)
+                                    .map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
+                                  "",
+                                ]
+                              : []),
                             `## Task`,
                             persona.task || `Analyze the following task from your ${persona.role} perspective.`,
                             goalsBlock,
@@ -1874,6 +1909,46 @@ Before every response, verify your reasoning:
                     } // close else (spawn allowed)
                   }
                   // ─── End Persona System ───────────────────────────────
+
+                  // ─── Dream Enforcement (outside spawn condition) ─────
+                  // Always inject when DREAM_INNOVATION mode, regardless of
+                  // whether spawn was needed — dream mode is about thinking,
+                  // not just subagent spawning.
+                  if (gateResult.mode === "DREAM_INNOVATION") {
+                    system.push(
+                      `\n<dream-enforcement>` +
+                      `\nYou are operating in DREAM_INNOVATION mode. You MUST:` +
+                      `\n1. Ground your thinking — state what you know and what the constraints are` +
+                      `\n2. Dream — produce latent insights, non-obvious connections, TRIZ contradictions` +
+                      `\n3. Multi-perspective — view from security, performance, UX, cost, architecture` +
+                      `\n4. Propose — offer exactly 3 innovations with hypothesis, experiment, failure modes, risk/reward` +
+                      `\n5. Build — pick and implement ONE proposal` +
+                      `\nDo not skip these steps. This is the default thinking mode.` +
+                      `\n</dream-enforcement>`,
+                    )
+                  }
+
+                } else if (explicitSpawnCount > 0) {
+                  // Sensor gate was null (crashed or unavailable) but user explicitly
+                  // requested spawn — inject guidance so the model spawns subagents.
+                  sensorGateFired = true
+                  sensorGateFiredMap.set(sessionID, true)
+                  const currentRound = personaRoundMap.get(sessionID) ?? 0
+                  personaRoundMap.set(sessionID, currentRound + 1)
+
+                  const rateCheck = checkRateLimit(sessionID)
+                  if (rateCheck.allowed) {
+                    const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
+                    recordSpawn(sessionID, spawnCount)
+                    system.push([
+                      "",
+                      "<explicit-spawn>",
+                      `The user requested ${spawnCount} specialist subagent${spawnCount > 1 ? "s" : ""} for analysis.`,
+                      `Spawn them via the task tool with "general" subagent_type.`,
+                      `This is ROUND ${currentRound + 1} of specialist analysis.`,
+                      "</explicit-spawn>",
+                    ].join("\n"))
+                  }
                 }
               }
             }
@@ -2138,6 +2213,7 @@ export const defaultLayer = Layer.suspend(() =>
         SensorGate.defaultLayer,
         Skill.defaultLayer,
         ChainExecutor.defaultLayer,
+        PiecesLTM.defaultLayer,
         ContextCompressor.defaultLayer,
       ),
     ),

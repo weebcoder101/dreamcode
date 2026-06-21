@@ -56,7 +56,6 @@ export const Default = {
   INIT: "init",
   REVIEW: "review",
   RESEARCH: "research",
-  SUBAGENT: "subagent",
 } as const
 
 export interface Interface {
@@ -106,14 +105,6 @@ export const layer = Layer.effect(
         },
         subtask: false,
         hints: hints(PROMPT_RESEARCH),
-      }
-      commands[Default.SUBAGENT] = {
-        name: Default.SUBAGENT,
-        description: "configure subagent model [providerID/modelID|off]",
-        source: "command",
-        // template intentionally omitted — handled client-side in footer.prompt.tsx
-        subtask: false,
-        hints: [],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

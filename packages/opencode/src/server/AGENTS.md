@@ -20,6 +20,12 @@ The opencode server has two distinct initialization paths:
 
 There is NO retry mechanism. Process restart is required after a layer build failure.
 
+## Required layer registration for skill execution
+
+`ChainExecutor.defaultLayer` and `PiecesLTM.defaultLayer` must be explicitly registered in
+`server.ts:251-252` for in-process server skill execution to work. Missing these causes skill
+chain execution to fail with missing service errors (`Layer.build` failures).
+
 ## Compiled binary in-process server
 
 In `--single` (compiled) mode, `Server.Default()` uses the in-process `HttpApiApp.webHandler()` directly.
