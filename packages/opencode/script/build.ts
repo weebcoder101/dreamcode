@@ -297,8 +297,8 @@ for (const item of targets) {
   binaries[name] = Script.version
 }
 
-// Create dev symlink bin/opencode → native binary (single build only)
-if (singleFlag && targets.length > 0) {
+// Create dev symlink bin/opencode → native binary (single / win32 build)
+if ((singleFlag || win32Flag) && targets.length > 0) {
   const linkTarget = targets[0]
   const name = [
     pkg.name,
