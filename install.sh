@@ -85,6 +85,12 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     fi
   fi
 else
+  if [ -d "$INSTALL_DIR" ]; then
+    echo -e "${RED}$INSTALL_DIR exists but is not a git repo.${NC}"
+    echo -e "${ORANGE}Remove it with: rm -rf $INSTALL_DIR${NC}"
+    echo -e "${ORANGE}Or set DREAMCODE_DIR to a different path.${NC}"
+    exit 1
+  fi
   echo -e "${CYAN}Cloning DreamCode...${NC}"
   git clone https://github.com/weebcoder101/dreamcode.git "$INSTALL_DIR"
   cd "$INSTALL_DIR"
@@ -106,8 +112,8 @@ fi
 echo -e "${CYAN}Building...${NC}"
 cd packages/opencode
 export OPENCODE_VERSION="1.2.9"
-if ! bun run build --single; then
-  echo -e "${RED}Build failed. See errors above. Retry manually: cd packages/opencode && bun run build --single${NC}"
+if ! bun run build --single --skip-embed-web-ui --skip-install; then
+  echo -e "${RED}Build failed. See errors above. Retry manually: cd packages/opencode && bun run build --single --skip-embed-web-ui --skip-install${NC}"
   exit 1
 fi
 
@@ -133,22 +139,6 @@ if [ -f "$NATIVE_BIN" ]; then
   ln -sf "$DIST_BIN" "$LOCAL_BIN/dreamcode"
   echo -e "${GREEN}Linked ~/.local/bin/dreamcode → ${DIST_BIN}${NC}"
 
-  # Add ~/.local/bin to shell RC if not on PATH
-  if [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
-    export PATH="$LOCAL_BIN:$PATH"
-    SHELL_RC=""
-    case "$(basename "$SHELL")" in
-      zsh)  SHELL_RC="$HOME/.zshrc" ;;
-      bash) SHELL_RC="$HOME/.bashrc" ;;
-      fish) SHELL_RC="$HOME/.config/fish/config.fish" ;;
-    esac
-    if [[ -n "$SHELL_RC" ]] && [[ -f "$SHELL_RC" ]]; then
-      if ! grep -q "\.local/bin" "$SHELL_RC" 2>/dev/null; then
-        echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
-        echo -e "${GREEN}Added ~/.local/bin to $SHELL_RC${NC}"
-      fi
-    fi
-  fi
 fi
 
 # ─── Global binary via bun/npm (secondary, for .bun/bin) ────
@@ -159,23 +149,35 @@ else
   npm install -g . 2>/dev/null || true
 fi
 
-# ─── PATH ───────────────────────────────────────────────────
-INSTALL_BIN="$HOME/.bun/bin"
-if [[ ":$PATH:" != *":$INSTALL_BIN:"* ]]; then
-  export PATH="$INSTALL_BIN:$PATH"
-  SHELL_RC=""
+# ─── PATH (add ~/.local/bin and ~/.bun/bin if missing) ──────
+path_add_to_rc() {
+  local dir="$1"
+  local pattern="$2"
+  if [[ ":$PATH:" != *":$dir:"* ]]; then
+    export PATH="$dir:$PATH"
+  fi
+  local rc=""
   case "$(basename "$SHELL")" in
-    zsh)  SHELL_RC="$HOME/.zshrc" ;;
-    bash) SHELL_RC="$HOME/.bashrc" ;;
-    fish) SHELL_RC="$HOME/.config/fish/config.fish" ;;
+    zsh)  rc="$HOME/.zshrc" ;;
+    bash) rc="$HOME/.bashrc" ;;
+    fish) rc="$HOME/.config/fish/config.fish" ;;
   esac
-  if [[ -n "$SHELL_RC" ]] && [[ -f "$SHELL_RC" ]]; then
-    if ! grep -q "$INSTALL_BIN" "$SHELL_RC" 2>/dev/null; then
-      echo "export PATH=\"$INSTALL_BIN:\$PATH\"" >> "$SHELL_RC"
-      echo -e "${GREEN}Added $INSTALL_BIN to $SHELL_RC${NC}"
+  if [[ -n "$rc" ]] && [[ -f "$rc" ]]; then
+    if ! grep -q "$pattern" "$rc" 2>/dev/null; then
+      case "$(basename "$SHELL")" in
+        fish)
+          echo "set -gx PATH $dir \$PATH" >> "$rc"
+          ;;
+        *)
+          echo "export PATH=\"$dir:\$PATH\"" >> "$rc"
+          ;;
+      esac
+      echo -e "${GREEN}Added $dir to $rc${NC}"
     fi
   fi
-fi
+}
+path_add_to_rc "$HOME/.local/bin" "\.local/bin"
+path_add_to_rc "$HOME/.bun/bin" "$HOME/.bun/bin"
 
 # ─── Config dir ─────────────────────────────────────────────
 CONFIG_DIR="$HOME/.config/dreamcode"
