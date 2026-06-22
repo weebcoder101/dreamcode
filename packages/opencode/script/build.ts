@@ -347,6 +347,15 @@ if (singleFlag || win32Flag) {
 
 if (Script.release || win32Flag) {
   for (const key of Object.keys(binaries)) {
+    // Bundle Python skill scripts alongside the binary in the release archive
+    const skillsSrc = path.resolve(import.meta.dir, "../src/skill/dreamcode/skills")
+    const skillsDest = path.resolve(`dist/${key}/bin/skills`)
+    if (fs.existsSync(skillsSrc)) {
+      fs.cpSync(skillsSrc, skillsDest, { recursive: true, force: true })
+      const pyCount = fs.readdirSync(skillsDest, { recursive: true }).filter((f) => f.endsWith(".py")).length
+      console.log(`Bundled ${pyCount} Python skill scripts for ${key}`)
+    }
+
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
     } else {
@@ -355,7 +364,10 @@ if (Script.release || win32Flag) {
     }
   }
   if (Script.release) {
-    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
+    const ghRepo = process.env.GH_REPO
+    if (!ghRepo) throw new Error("GH_REPO env var is required for release upload")
+    if (!/^[\w.-]+\/[\w.-]+$/.test(ghRepo)) throw new Error(`GH_REPO must be in owner/repo format, got: ${ghRepo}`)
+    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${ghRepo}`
   }
 }
 

@@ -183,6 +183,113 @@ if ($BuildFromSource) {
   Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
 }
 
+# ─── Phase 1d: Install Python scripts to skills directory ─────────────
+# The Python scripts (sensor_gate.py, neuro_harness.py, etc.) are needed
+# for persona/skill/chain functionality. The resolver checks
+# %USERPROFILE%\.dreamcode\skills (among others) at runtime.
+$SKILLS_DST = "$env:USERPROFILE\.dreamcode\skills"
+
+# Source candidates:
+#   1. Bundled alongside the binary in the extracted archive (pre-built)
+#   2. Source repo path (BuildFromSource)
+$bundledSkills = "$extractDir\skills"
+$repoSkills = "$INSTALL_DIR\packages\opencode\src\skill\dreamcode\skills"
+$skillsSource = $null
+
+if (-not $BuildFromSource -and (Test-Path $bundledSkills)) {
+  $skillsSource = $bundledSkills
+  Write-Color "Found bundled skills in release archive." $MUTED
+} elseif ($BuildFromSource -and (Test-Path $repoSkills)) {
+  $skillsSource = $repoSkills
+  Write-Color "Found skills in source repo." $MUTED
+}
+
+if ($skillsSource) {
+  Write-Color "Installing Python scripts to skills directory..." $CYAN
+  try {
+    # Create destination if it doesn't exist
+    New-Item -ItemType Directory -Force -Path $SKILLS_DST | Out-Null
+    
+    # Copy all skill directories recursively
+    Copy-Item -Path "$skillsSource\*" -Destination $SKILLS_DST -Recurse -Force
+    
+    # Count installed scripts
+    $scriptCount = (Get-ChildItem -Path $SKILLS_DST -Filter "*.py" -Recurse).Count
+    Write-Color "Installed $scriptCount Python scripts to $SKILLS_DST" $GREEN
+  } catch {
+    Write-Color "WARN: Failed to install Python scripts: $_" $ORANGE
+    Write-Color "Personas and skill chains may not work without Python scripts." $ORANGE
+  }
+} else {
+  Write-Color "WARN: No Python skills source found." $ORANGE
+  Write-Color "If using a pre-built release, the skills should be bundled in the archive." $ORANGE
+  Write-Color "If building from source, ensure the repo is complete." $ORANGE
+  Write-Color "Personas and skill chains will be disabled without Python scripts." $ORANGE
+  Write-Color "To fix: download a full release or set `$env:DREAMCODE_DIR to your repo root." $ORANGE
+}
+
+# ─── Phase 1e: Verify Python availability ─────────────────────────────
+# Check if Python is available on the system
+$pythonAvailable = $false
+$pythonCmd = $null
+
+# Try py -3 (Python Launcher for Windows)
+if (Get-Command py -ErrorAction SilentlyContinue) {
+  try {
+    $pyVersion = & py -3 --version 2>&1 | Out-String
+    if ($pyVersion -match "Python 3") {
+      $pythonAvailable = $true
+      $pythonCmd = "py -3"
+      Write-Color "Python 3 found via Python Launcher: $pythonCmd" $GREEN
+    }
+  } catch {}
+}
+
+# Try python
+if (-not $pythonAvailable -and (Get-Command python -ErrorAction SilentlyContinue)) {
+  try {
+    $pyVersion = & python --version 2>&1 | Out-String
+    if ($pyVersion -match "Python 3") {
+      $pythonAvailable = $true
+      $pythonCmd = "python"
+      Write-Color "Python 3 found: $pythonCmd" $GREEN
+    }
+  } catch {}
+}
+
+# Try python3
+if (-not $pythonAvailable -and (Get-Command python3 -ErrorAction SilentlyContinue)) {
+  try {
+    $pyVersion = & python3 --version 2>&1 | Out-String
+    if ($pyVersion -match "Python 3") {
+      $pythonAvailable = $true
+      $pythonCmd = "python3"
+      Write-Color "Python 3 found: $pythonCmd" $GREEN
+    }
+  } catch {}
+}
+
+if (-not $pythonAvailable) {
+  Write-Color "" $ORANGE
+  Write-Color "WARNING: Python 3 not found on your system!" $RED
+  Write-Color "The persona/skill/chain features require Python 3." $ORANGE
+  Write-Color "" $ORANGE
+  Write-Color "To install Python 3 on Windows:" $CYAN
+  Write-Color "  1. Download from https://www.python.org/downloads/" $CYAN
+  Write-Color "  2. Run the installer" $CYAN
+  Write-Color "  3. CHECK THE BOX: 'Add Python to PATH'" $CYAN
+  Write-Color "  4. Restart your terminal" $CYAN
+  Write-Color "" $ORANGE
+  Write-Color "Or install via winget:" $CYAN
+  Write-Color "  winget install Python.Python.3.12" $CYAN
+  Write-Color "" $ORANGE
+  Write-Color "Without Python, you can still use DreamCode for basic tasks." $MUTED
+  Write-Color "Personas and skill chains will be disabled." $MUTED
+} else {
+  Write-Color "" $MUTED
+  Write-Color "Python 3 verified: $pythonCmd" $GREEN
+}
+
 # ─── Phase 2: Add to user PATH (only if binary was installed) ──────────
 $installSucceeded = Test-Path "$BIN_DIR\$APP.exe"
 if ($installSucceeded) {
@@ -222,6 +329,21 @@ if (Test-Path $fullPath) {
   }
 } else {
   Write-Color "  ERROR: $fullPath not found!" $RED
+}
+
+# Verify skills installation
+$skillsInstalled = Test-Path "$SKILLS_DST\chain-orchestrator\scripts\sensor_gate.py"
+if ($skillsInstalled) {
+  Write-Color "  Skills: $SKILLS_DST (installed)" $GREEN
+} else {
+  Write-Color "  Skills: $SKILLS_DST (not found)" $ORANGE
+}
+
+# Verify Python
+if ($pythonAvailable) {
+  Write-Color "  Python: $pythonCmd (available)" $GREEN
+} else {
+  Write-Color "  Python: NOT FOUND (personas disabled)" $RED
 }
 
 Write-Color "" $CYAN

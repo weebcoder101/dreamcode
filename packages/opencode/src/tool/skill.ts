@@ -12,24 +12,12 @@ import * as Tool from "./tool"
 import * as path from "path"
 import * as fs from "fs"
 import DESCRIPTION from "./skill.txt"
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir as resolveSkillsDirImpl } from "@/skill/python-resolver"
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
 
-// Resolve skills directory from multiple candidate paths (global config, then CWD-relative)
-function resolveSkillsDir(): string {
-  const candidates = [
-    path.join(HOME, ".config", "dreamcode", "skills"),
-    path.join(HOME, ".dreamcode", "skills"),
-    path.join(process.cwd(), ".dreamcode", "skills"),
-    path.join(process.cwd(), ".opencode", "skills"),
-  ]
-  for (const dir of candidates) {
-    try {
-      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir
-    } catch {}
-  }
-  return candidates[0] // fallback to global config path
-}
+// Re-export resolveSkillsDir from python-resolver
+const resolveSkillsDir = resolveSkillsDirImpl
 
 const SKILLS_DIR = resolveSkillsDir()
 const CHAIN_LOG = path.join(HOME, ".dreamcode", "chain_log.jsonl")
@@ -162,9 +150,12 @@ const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (promp
   } catch {
     tmpFile = ""
   }
+  // Cross-platform Python resolution
+  const pythonCmd = resolvePythonCommand()
+  const versionArgs = getPythonArgs()
   const args = tmpFile
-    ? ["python3", SENSOR_GATE!, "--prompt-file", tmpFile]
-    : ["python3", SENSOR_GATE!, "--prompt", prompt]
+    ? [pythonCmd, ...versionArgs, SENSOR_GATE!, "--prompt-file", tmpFile]
+    : [pythonCmd, ...versionArgs, SENSOR_GATE!, "--prompt", prompt]
   return yield* Effect.tryPromise({
     try: async () => {
       const proc = Bun.spawn(args, {
@@ -213,9 +204,12 @@ const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (scr
   } catch {
     tmpFile = ""
   }
+  // Cross-platform Python resolution
+  const pythonCmd = resolvePythonCommand()
+  const versionArgs = getPythonArgs()
   const args = tmpFile
-    ? ["python3", script, "--prompt-file", tmpFile]
-    : ["python3", script, "--prompt", prompt]
+    ? [pythonCmd, ...versionArgs, script, "--prompt-file", tmpFile]
+    : [pythonCmd, ...versionArgs, script, "--prompt", prompt]
   return yield* Effect.tryPromise({
     try: async () => {
       const proc = Bun.spawn(args, {

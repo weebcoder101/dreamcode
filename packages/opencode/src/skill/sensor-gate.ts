@@ -4,6 +4,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl } from "./python-resolver"
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
@@ -520,43 +521,8 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
   return result
 }
 
-const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
-
-function resolveSkillsDir(): string {
-  const candidates = [
-    path.join(HOME, ".config", "dreamcode", "skills"),
-    path.join(HOME, ".dreamcode", "skills"),
-    path.join(HOME, ".config", "opencode", "skills"),
-    path.join(HOME, ".opencode", "skills"),
-    path.join(process.cwd(), ".dreamcode", "skills"),
-    path.join(process.cwd(), ".opencode", "skills"),
-  ]
-  for (const dir of candidates) {
-    try {
-      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir
-    } catch (e) {
-      console.warn(`[sensor-gate] error checking skills dir ${dir}:`, e)
-    }
-  }
-  return candidates[0]
-}
-
-function resolveScript(relativePath: string): string | undefined {
-  const skillsDir = resolveSkillsDir()
-  const candidates = [
-    path.join(skillsDir, relativePath),
-    path.join(process.cwd(), ".dreamcode", "skills", relativePath),
-    path.join(process.cwd(), ".opencode", "skills", relativePath),
-  ]
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p
-    } catch (e) {
-      console.warn(`[sensor-gate] error checking script path ${p}:`, e)
-    }
-  }
-  return undefined
-}
+// Re-export resolveSkillsDir and resolveScript from python-resolver for backward compatibility
+export { resolveSkillsDir, resolveScript } from "./python-resolver"
 
 const VALID_SCAN_TYPES = new Set(["security", "full_audit", "bug_hunt", "test_gap"])
 
@@ -577,7 +543,7 @@ function runSensorGateEffect(
   prompt: string,
   projectRoot: string,
 ): Effect.Effect<SensorGateResult | null> {
-  const sensorGate = resolveScript("chain-orchestrator/scripts/sensor_gate.py")
+  const sensorGate = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
   if (!sensorGate) return Effect.succeed(null)
 
   const clamped = prompt.length > SAFE_PROMPT_MAX
@@ -606,9 +572,12 @@ function runSensorGateEffect(
         tmpFile = ""
       }
 
+      // Cross-platform Python resolution
+      const pythonCmd = resolvePythonCommand()
+      const versionArgs = getPythonArgs()
       const args = tmpFile
-        ? ["python3", sensorGate, "--prompt-file", tmpFile]
-        : ["python3", sensorGate, "--prompt", clamped]
+        ? [pythonCmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
+        : [pythonCmd, ...versionArgs, sensorGate, "--prompt", clamped]
 
       let proc: ReturnType<typeof Bun.spawn> | undefined
       const output = yield* Effect.tryPromise({
@@ -678,7 +647,7 @@ function runNeuroHarnessEffect(
   scanType: string,
   classification?: { intent: string; mode: string; chain: string[]; risk_level: string; confidence: number; domain_tags: string[] },
 ): Effect.Effect<string | null> {
-  const neuroHarness = resolveScript("neuro/scripts/neuro_harness.py")
+  const neuroHarness = resolveScriptImpl("neuro/scripts/neuro_harness.py")
   if (!neuroHarness) return Effect.succeed(null)
 
   const clamped = prompt.length > SAFE_PROMPT_MAX
@@ -710,10 +679,15 @@ function runNeuroHarnessEffect(
           classification,
         })
 
+        // Cross-platform Python resolution
+        const pythonCmd = resolvePythonCommand()
+        const versionArgs = getPythonArgs()
+
         const output = yield* Effect.tryPromise({
           try: async () => {
             const proc = Bun.spawn([
-              "python3",
+              pythonCmd,
+              ...versionArgs,
               neuroHarness,
               "--scan-type", scanType,
               "--file", tmpFile,

@@ -4,6 +4,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Skill } from "@/skill"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
+import { resolvePythonCommand, getPythonArgs } from "./python-resolver"
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
 
@@ -54,9 +55,12 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   // and writer.close() doesn't send EOF through them, causing Python's
   // sys.stdin.read() to block forever. --prompt arg avoids this entirely.
   // Most skill scripts already support --prompt (required=True).
+  // Cross-platform Python resolution
+  const pythonCmd = resolvePythonCommand()
+  const versionArgs = getPythonArgs()
   return yield* Effect.tryPromise({
     try: async () => {
-      const proc = Bun.spawn(["python3", script, "--prompt", prompt], {
+      const proc = Bun.spawn([pythonCmd, ...versionArgs, script, "--prompt", prompt], {
         cwd,
         stdin: "ignore",
         stdout: "pipe",
@@ -81,9 +85,12 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
   if (!validateScriptPath(path.resolve(script), cwd)) {
     return ""
   }
+  // Cross-platform Python resolution
+  const pythonCmd = resolvePythonCommand()
+  const versionArgs = getPythonArgs()
   return yield* Effect.tryPromise({
     try: async () => {
-      const proc = Bun.spawn(["python3", script, ...args], {
+      const proc = Bun.spawn([pythonCmd, ...versionArgs, script, ...args], {
         cwd,
         stdin: "ignore",
         stdout: "pipe",
