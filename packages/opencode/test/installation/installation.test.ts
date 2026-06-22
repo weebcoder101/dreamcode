@@ -3,7 +3,6 @@ import { Effect, Layer, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Installation } from "../../src/installation"
-import { InstallationChannel } from "@opencode-ai/core/installation/version"
 import { AppProcess } from "@opencode-ai/core/process"
 import { testEffect } from "../lib/effect"
 
@@ -85,13 +84,13 @@ describe("installation", () => {
     testEffect(
       testLayer((request) => {
         npmCalls.push(request.url)
-        return jsonResponse({ version: "1.5.0" })
+        return jsonResponse({ tag_name: "v1.5.0" })
       }),
-    ).effect("reads npm versions via registry", () =>
+    ).effect("reads npm versions via GitHub releases", () =>
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("npm")
         expect(result).toBe("1.5.0")
-        expect(npmCalls).toContain(`https://registry.npmjs.org/dreamcode/${InstallationChannel}`)
+        expect(npmCalls[0]).toContain("api.github.com/repos/weebcoder101/dreamcode")
       }),
     )
 
@@ -99,13 +98,13 @@ describe("installation", () => {
     testEffect(
       testLayer((request) => {
         bunCalls.push(request.url)
-        return jsonResponse({ version: "1.6.0" })
+        return jsonResponse({ tag_name: "v1.6.0" })
       }),
-    ).effect("reads bun versions via registry", () =>
+    ).effect("reads bun versions via GitHub releases", () =>
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("bun")
         expect(result).toBe("1.6.0")
-        expect(bunCalls).toContain(`https://registry.npmjs.org/dreamcode/${InstallationChannel}`)
+        expect(bunCalls[0]).toContain("api.github.com/repos/weebcoder101/dreamcode")
       }),
     )
 
@@ -113,13 +112,13 @@ describe("installation", () => {
     testEffect(
       testLayer((request) => {
         pnpmCalls.push(request.url)
-        return jsonResponse({ version: "1.7.0" })
+        return jsonResponse({ tag_name: "v1.7.0" })
       }),
-    ).effect("reads pnpm versions via registry", () =>
+    ).effect("reads pnpm versions via GitHub releases", () =>
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("pnpm")
         expect(result).toBe("1.7.0")
-        expect(pnpmCalls).toContain(`https://registry.npmjs.org/dreamcode/${InstallationChannel}`)
+        expect(pnpmCalls[0]).toContain("api.github.com/repos/weebcoder101/dreamcode")
       }),
     )
 
