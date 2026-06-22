@@ -1,7 +1,11 @@
 /**
  * @deprecated Use the core skill tool from @opencode-ai/core/tool/skill instead.
- * This module is retained as a compatibility shim during migration (Phase 4).
- * All new code should import from the core package directly.
+ * This module is retained as a compatibility shim during migration.
+ * TODO: Remove this file entirely once migration to core skill system is complete.
+ *
+ * IMPORTANT: This file provides an ALTERNATE execution path that double-executes
+ * skills when the core skill system (src/skill/index.ts) is also loaded.
+ * Guard against this with a lazy runtime check in the execute function.
  */
 import { Effect, Schema, Duration, Ref } from "effect"
 import * as Tool from "./tool"
@@ -266,6 +270,22 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
+          // ─── Runtime Guard ─────────────────────────────────────────
+          // Prevent dual execution when core skill system is active.
+          // The deprecated tool uses a separate execution path (Bun.spawn, file I/O,
+          // Evolution score files) that conflicts with the core skill service.
+          // This lazy check avoids module-level circular imports.
+          try {
+            const { Skill } = yield* Effect.promise(async () => await import("@/skill"))
+            if (typeof Skill?.Service === "function") {
+              return {
+                title: `Skill: ${params.name ?? params.skill ?? ""}`,
+                output: "[SKILL TOOL: deprecated — delegated to core skill system]",
+                metadata: { skill_executed: "", score: 0 },
+              }
+            }
+          } catch {}
+
           const results: string[] = []
           let score = 0
           const skillName = params.name ?? params.skill ?? ""

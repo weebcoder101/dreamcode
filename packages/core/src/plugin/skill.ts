@@ -23,7 +23,7 @@ export const Plugin = PluginV2.define({
           skill: new SkillV2.Info({
             name: "customize-opencode",
             description:
-              "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.",
+              "Use ONLY when the user is editing or creating dreamcode's own configuration: dreamcode.json, dreamcode.jsonc, files under .dreamcode/, or files under ~/.config/dreamcode/. Also use when creating or fixing dreamcode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring dreamcode itself.",
             location: AbsolutePath.make("/builtin/customize-opencode.md"),
             content: CustomizeOpencodeContent,
           }),

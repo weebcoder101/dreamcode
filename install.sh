@@ -237,7 +237,7 @@ case "$ARCH" in
   x86_64) ARCH="x64" ;;
   aarch64|arm64) ARCH="arm64" ;;
 esac
-NATIVE_BIN="dist/opencode-${PLATFORM}-${ARCH}/bin/opencode"
+NATIVE_BIN="dist/dreamcode-${PLATFORM}-${ARCH}/bin/dreamcode"
 
 # ─── Post-build verification ──────────────────────────────────────────
 echo -e "${CYAN}Verifying build output...${NC}"
@@ -283,8 +283,8 @@ echo -e "${CYAN}Creating symlinks...${NC}"
 
 # Absolute symlink inside repo (for package.json "bin" field)
 mkdir -p "$(pwd)/bin"
-ln -sf "$DIST_BIN" "$(pwd)/bin/opencode"
-echo -e "${GREEN}Linked repo bin/opencode → ${DIST_BIN}${NC}"
+ln -sf "$DIST_BIN" "$(pwd)/bin/dreamcode"
+echo -e "${GREEN}Linked repo bin/dreamcode → ${DIST_BIN}${NC}"
 
 # Absolute symlink in ~/.local/bin — THE canonical entry point
 LOCAL_BIN="$HOME/.local/bin"

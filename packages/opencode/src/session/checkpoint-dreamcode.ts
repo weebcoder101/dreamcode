@@ -2,7 +2,7 @@ import * as fs from "fs"
 import * as path from "path"
 
 interface Checkpoint { id: string; session_id: string; timestamp: string; summary: string; files_changed: string[]; skills_executed: string[]; score: number }
-const CHECKPOINT_DIR = path.join(process.cwd(), ".opencode", "checkpoints")
+const CHECKPOINT_DIR = path.join(process.cwd(), ".dreamcode", "checkpoints")
 
 export function saveCheckpoint(checkpoint: Omit<Checkpoint, "id" | "timestamp">): Checkpoint {
   fs.mkdirSync(CHECKPOINT_DIR, { recursive: true })

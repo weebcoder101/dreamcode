@@ -61,12 +61,12 @@ if (-not $BuildFromSource) {
     $tag = $release.tag_name
     Write-Color "Latest release: $tag" $MUTED
   } catch {
-    Write-Color "WARN: Could not fetch latest release. Using v1.2.9." $ORANGE
-    $tag = "v1.2.9"
+    Write-Color "WARN: Could not fetch latest release. Using v1.3.0." $ORANGE
+    $tag = "v1.3.0"
   }
 
   # Find the windows-x64 asset (build system produces .zip for Windows)
-  $assetName = "opencode-windows-x64.zip"
+  $assetName = "dreamcode-windows-x64.zip"
   $downloadUrl = "https://github.com/$OWNER/$REPO/releases/download/$tag/$assetName"
   $tempArchive = "$tempDir\$assetName"
   $extractDir = "$tempDir\extracted"
@@ -95,7 +95,7 @@ if (-not $BuildFromSource -and (Test-Path $tempArchive)) {
   }
 
   if (-not $BuildFromSource) {
-    $binaryPath = Get-ChildItem -Recurse -Filter "opencode.exe" -Path $extractDir | Select-Object -First 1
+    $binaryPath = Get-ChildItem -Recurse -Filter "dreamcode.exe" -Path $extractDir | Select-Object -First 1
     if (-not $binaryPath) {
       Write-Color "ERROR: Binary not found in extracted archive" $RED
       $BuildFromSource = $true
@@ -171,7 +171,7 @@ if ($BuildFromSource) {
   bun run build --single --skip-embed-web-ui --skip-install
 
   # Verify binary
-  $NATIVE_BIN = "dist\opencode-windows-x64\bin\opencode.exe"
+  $NATIVE_BIN = "dist\dreamcode-windows-x64\bin\dreamcode.exe"
   if (-not (Test-Path $NATIVE_BIN)) {
     Write-Color "ERROR: Build did not produce expected binary at $NATIVE_BIN" $RED
     exit 1

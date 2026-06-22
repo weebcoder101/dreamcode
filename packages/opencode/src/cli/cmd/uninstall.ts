@@ -131,11 +131,11 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
     const cmds: Record<string, string> = {
       npm: "npm uninstall -g dreamcode",
       pnpm: "pnpm uninstall -g dreamcode",
-      bun: "bun remove -g opencode-ai",
-      yarn: "yarn global remove opencode-ai",
-      brew: "brew uninstall opencode",
-      choco: "choco uninstall opencode",
-      scoop: "scoop uninstall opencode",
+      bun: "bun remove -g dreamcode",
+      yarn: "yarn global remove dreamcode",
+      brew: "brew uninstall dreamcode",
+      choco: "choco uninstall dreamcode",
+      scoop: "scoop uninstall dreamcode",
     }
     prompts.log.info(`  ✓ Package: ${cmds[method] || method}`)
   }
@@ -180,19 +180,19 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
 
   if (method !== "curl" && method !== "unknown") {
     const cmds: Record<string, string[]> = {
-      npm: ["npm", "uninstall", "-g", "opencode-ai"],
-      pnpm: ["pnpm", "uninstall", "-g", "opencode-ai"],
-      bun: ["bun", "remove", "-g", "opencode-ai"],
-      yarn: ["yarn", "global", "remove", "opencode-ai"],
-      brew: ["brew", "uninstall", "opencode"],
-      choco: ["choco", "uninstall", "opencode"],
-      scoop: ["scoop", "uninstall", "opencode"],
+      npm: ["npm", "uninstall", "-g", "dreamcode"],
+      pnpm: ["pnpm", "uninstall", "-g", "dreamcode"],
+      bun: ["bun", "remove", "-g", "dreamcode"],
+      yarn: ["yarn", "global", "remove", "dreamcode"],
+      brew: ["brew", "uninstall", "dreamcode"],
+      choco: ["choco", "uninstall", "dreamcode"],
+      scoop: ["scoop", "uninstall", "dreamcode"],
     }
 
     const cmd = cmds[method]
     if (cmd) {
       spinner.start(`Running ${cmd.join(" ")}...`)
-      const result = await Process.run(method === "choco" ? ["choco", "uninstall", "opencode", "-y", "-r"] : cmd, {
+      const result = await Process.run(method === "choco" ? ["choco", "uninstall", "dreamcode", "-y", "-r"] : cmd, {
         nothrow: true,
       })
       if (result.code !== 0) {
@@ -212,11 +212,22 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
   if (method === "curl" && targets.binary) {
     UI.empty()
     prompts.log.message("To finish removing the binary, run:")
-    prompts.log.info(`  rm "${targets.binary}"`)
-
-    const binDir = path.dirname(targets.binary)
-    if (binDir.includes(".opencode")) {
-      prompts.log.info(`  rmdir "${binDir}" 2>/dev/null`)
+    if (process.platform === "win32") {
+      prompts.log.info(`  Remove-Item "${targets.binary}"`)
+      const binDir = path.dirname(targets.binary)
+      if (binDir.includes(".dreamcode") || binDir.includes(".opencode")) {
+        prompts.log.info(`  Remove-Item "${binDir}" -Recurse -Force`)
+      }
+      prompts.log.info("")
+      prompts.log.info("If dreamcode.cmd shim exists, also run:")
+      const cmdShim = path.join(path.dirname(targets.binary), "dreamcode.cmd")
+      prompts.log.info(`  Remove-Item "${cmdShim}"`)
+    } else {
+      prompts.log.info(`  rm "${targets.binary}"`)
+      const binDir = path.dirname(targets.binary)
+      if (binDir.includes(".dreamcode") || binDir.includes(".opencode")) {
+        prompts.log.info(`  rmdir "${binDir}" 2>/dev/null`)
+      }
     }
   }
 
@@ -266,7 +277,7 @@ async function getShellConfigFile(): Promise<string | null> {
     if (!exists) continue
 
     const content = await Filesystem.readText(file).catch(() => "")
-    if (content.includes("# opencode") || content.includes(".opencode/bin")) {
+    if (content.includes("# opencode") || content.includes("# dreamcode") || content.includes(".opencode/bin") || content.includes(".dreamcode/bin")) {
       return file
     }
   }
@@ -284,21 +295,21 @@ async function cleanShellConfig(file: string) {
   for (const line of lines) {
     const trimmed = line.trim()
 
-    if (trimmed === "# opencode") {
+    if (trimmed === "# dreamcode" || trimmed === "# opencode") {
       skip = true
       continue
     }
 
     if (skip) {
       skip = false
-      if (trimmed.includes(".opencode/bin") || trimmed.includes("fish_add_path")) {
+      if (trimmed.includes(".dreamcode/bin") || trimmed.includes(".opencode/bin") || trimmed.includes("fish_add_path")) {
         continue
       }
     }
 
     if (
-      (trimmed.startsWith("export PATH=") && trimmed.includes(".opencode/bin")) ||
-      (trimmed.startsWith("fish_add_path") && trimmed.includes(".opencode"))
+      (trimmed.startsWith("export PATH=") && (trimmed.includes(".dreamcode/bin") || trimmed.includes(".opencode/bin"))) ||
+      (trimmed.startsWith("fish_add_path") && (trimmed.includes(".dreamcode") || trimmed.includes(".opencode")))
     ) {
       continue
     }

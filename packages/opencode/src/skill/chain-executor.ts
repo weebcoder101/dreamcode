@@ -7,9 +7,9 @@ import path from "path"
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
 
-function validateScriptPath(resolved: string): boolean {
+function validateScriptPath(resolved: string, cwd?: string): boolean {
   const allowedGlobal = path.resolve(HOME, ".config", "dreamcode", "skills")
-  const allowedProject = path.resolve(process.cwd(), ".dreamcode", "skills")
+  const allowedProject = path.resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
   return resolved.startsWith(allowedGlobal) || resolved.startsWith(allowedProject)
 }
 
@@ -46,7 +46,7 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   prompt: string,
   cwd: string,
 ) {
-  if (!validateScriptPath(path.resolve(script))) {
+  if (!validateScriptPath(path.resolve(script), cwd)) {
     return "[SKIPPED] Script path outside allowed skills directory"
   }
   // Pass prompt as --prompt argument instead of piping via stdin.
@@ -78,7 +78,7 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
   args: string[],
   cwd: string,
 ) {
-  if (!validateScriptPath(path.resolve(script))) {
+  if (!validateScriptPath(path.resolve(script), cwd)) {
     return ""
   }
   return yield* Effect.tryPromise({
@@ -157,10 +157,11 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
   const skillsDir = path.join(HOME, ".config", "dreamcode", "skills")
   const executorScript = path.join(skillsDir, "chain-orchestrator", "scripts", "orchestrator.py")
 
-  // First run the normal chain execution
-  const results = yield* execute(chain, userPrompt)
+  // Run the full pipeline — caller already handles normal chain execution via execute()
+  // to prevent double execution of skill scripts.
+  const results: ChainResult[] = []
 
-  // Then if the Python executor script exists, run the full pipeline
+  // If the Python executor script exists, run the full pipeline
   try {
     const exists = yield* Effect.tryPromise({
       try: () => Bun.file(executorScript).exists(),

@@ -1597,14 +1597,14 @@ Before every response, verify your reasoning:
                         skillsExecuted: chainResults.filter((r) => r.status === "ok").length,
                         skillsMissing: missingSkills.length,
                       },
-                      project: process.cwd(),
+                      project: ctx.directory,
                     }).pipe(Effect.catch(() => Effect.void))
 
                     // ─── Self-Evolution: Auto-log to run_log.jsonl ──
                     // Write structured learning signals after every chain execution.
                     yield* Effect.tryPromise({
                       try: () => {
-                        const evolutionDir = path.join(process.cwd(), "evolution")
+                        const evolutionDir = path.join(ctx.directory, "evolution")
                         const logLine = JSON.stringify({
                           timestamp: new Date().toISOString(),
                           type: "chain_execution",

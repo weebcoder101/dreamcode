@@ -526,6 +526,8 @@ function resolveSkillsDir(): string {
   const candidates = [
     path.join(HOME, ".config", "dreamcode", "skills"),
     path.join(HOME, ".dreamcode", "skills"),
+    path.join(HOME, ".config", "opencode", "skills"),
+    path.join(HOME, ".opencode", "skills"),
     path.join(process.cwd(), ".dreamcode", "skills"),
     path.join(process.cwd(), ".opencode", "skills"),
   ]
@@ -544,6 +546,7 @@ function resolveScript(relativePath: string): string | undefined {
   const candidates = [
     path.join(skillsDir, relativePath),
     path.join(process.cwd(), ".dreamcode", "skills", relativePath),
+    path.join(process.cwd(), ".opencode", "skills", relativePath),
   ]
   for (const p of candidates) {
     try {

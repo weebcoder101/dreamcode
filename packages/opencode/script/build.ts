@@ -241,8 +241,8 @@ for (const item of targets) {
       autoloadTsconfig: true,
       autoloadPackageJson: true,
       target: name.replace(pkg.name, "bun") as any,
-      outfile: `dist/${name}/bin/opencode`,
-      execArgv: [`--user-agent=opencode/${Script.version}`, "--use-system-ca", "--"],
+      outfile: `dist/${name}/bin/dreamcode`,
+      execArgv: [`--user-agent=dreamcode/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
     files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
@@ -260,7 +260,7 @@ for (const item of targets) {
   })
 
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
-    const binaryPath = `dist/${name}/bin/opencode`
+    const binaryPath = `dist/${name}/bin/dreamcode`
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
@@ -310,14 +310,15 @@ if ((singleFlag || win32Flag) && targets.length > 0) {
     .filter(Boolean)
     .join("-")
   const binDir = path.join(dir, "bin")
-  const distBin = path.resolve(dir, `dist/${name}/bin/opencode`)
+  const distBin = path.resolve(dir, `dist/${name}/bin/dreamcode`)
   if (linkTarget.os === "win32") {
     // Windows: create .cmd shim instead of symlink (symlinks require admin/Developer Mode)
     const shimPath = path.join(binDir, `dreamcode.cmd`)
     fs.mkdirSync(binDir, { recursive: true })
     const relToDist = path.relative(binDir, path.resolve(dir, `dist/${name}/bin`)).replace(/\//g, "\\")
-    fs.writeFileSync(shimPath, `@"%~dp0${relToDist}\\opencode.exe" %*\r\n`)
-    console.log(`Created Windows shim bin/dreamcode.cmd -> ${relToDist}\\opencode.exe`)
+    fs.writeFileSync(shimPath, `@"%~dp0${relToDist}\\dreamcode.exe" %*\r\n`)
+    // Path is double-quoted via @ prefix; safe for spaces/special chars
+    console.log(`Created Windows shim bin/dreamcode.cmd -> ${relToDist}\\dreamcode.exe`)
   } else {
     const binSymlink = path.join(binDir, "dreamcode")
     if (fs.existsSync(distBin)) {
