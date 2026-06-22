@@ -96,14 +96,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     const upgrade = Effect.fn("GlobalHttpApi.upgrade")(function* (ctx: { payload: typeof GlobalUpgradeInput.Type }) {
       const method = yield* installation.method()
-      if (method === "unknown") {
-        return {
-          status: 400,
-          body: { success: false as const, error: "Unknown installation method" },
-        }
-      }
-      const target = ctx.payload.target || (yield* installation.latest(method))
-      const result = yield* installation.upgrade(method, target).pipe(
+      const effectiveMethod = method === "unknown" ? "curl" : method
+      const target = ctx.payload.target || (yield* installation.latest(effectiveMethod))
+      const result = yield* installation.upgrade(effectiveMethod, target).pipe(
         Effect.as({ status: 200, body: { success: true as const, version: target } }),
         Effect.catch((err) =>
           Effect.succeed({

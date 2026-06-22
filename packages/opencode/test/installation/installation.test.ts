@@ -217,7 +217,7 @@ describe("installation", () => {
         expect(error.message).toBe(error.stderr)
         expect(error.stderr).not.toContain("secret")
         expect(error.stderr).not.toContain("script output")
-        expect(curlUpgradeCalls[0]).toContain("dreamcode.ai/install")
+        expect(curlUpgradeCalls[0]).toContain("weebcoder101/dreamcode/main/install.sh")
       }),
     )
 

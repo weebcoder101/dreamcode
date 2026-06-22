@@ -27,7 +27,7 @@ export async function upgrade() {
 
   const kind = Installation.getReleaseType(InstallationVersion, latest)
 
-  if (config.autoupdate === "notify" || kind !== "patch") {
+  if (config.autoupdate === "notify" || kind !== "patch" || method === "unknown") {
     GlobalBus.emit("event", {
       directory: "global",
       payload: {
@@ -37,8 +37,6 @@ export async function upgrade() {
     })
     return
   }
-
-  if (method === "unknown") return
   await Installation.upgrade(method, latest)
     .then(() =>
       GlobalBus.emit("event", {
