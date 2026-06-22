@@ -9,42 +9,73 @@ An open-source AI coding agent with native dream thinking, 37-skill dynamic grap
 ## Quick Install
 
 ### One-line install (recommended)
+
+**Linux / macOS (bash):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh | bash
 ```
 
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.ps1 | iex
+```
+
+**Windows (WSL2):**
+```bash
+# Inside WSL2 terminal — same as Linux
+curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh | bash
+```
+
 ### Or clone and install
+
+**Linux / macOS (bash):**
 ```bash
 git clone https://github.com/weebcoder101/dreamcode && cd dreamcode && bash install.sh
 ```
 
+**Windows (PowerShell / cmd):**
+```powershell
+git clone https://github.com/weebcoder101/dreamcode; cd dreamcode; .\install.ps1
+```
+
 ### Manual build (for developers)
+
+**Linux / macOS:**
 ```bash
 git clone https://github.com/weebcoder101/dreamcode
 cd dreamcode
 bun install
-cd packages/opencode && OPENCODE_VERSION=1.2.8 bun run build --single
-npm install -g .  # or: bun install -g .
+cd packages/opencode && OPENCODE_VERSION=1.2.9 bun run build --single
+# The binary is at dist/opencode-<platform>-<arch>/bin/opencode
+```
+
+**Windows (PowerShell):**
+```powershell
+.\install.ps1 -BuildFromSource
 ```
 
 ### Requirements
-- **bun** ≥ 1.3.x (auto-installed by install.sh)
-- **Python** ≥ 3.10 (for skill scripts; optional, falls back gracefully)
-- **pip3** (for Python dependencies; optional)
-- **unzip** (auto-installed by install.sh)
-- **firejail** (optional; for sandbox mode)
+
+| Requirement | Linux | macOS | Windows |
+|-------------|-------|-------|---------|
+| **bun** ≥ 1.3.x | Auto-installed | Auto-installed | Auto-installed (source build) |
+| **Python** ≥ 3.10 | Optional | Optional | Optional |
+| **pip3** | Optional | Optional | N/A |
+| **unzip** | Auto-installed | Auto-installed | Built-in |
 
 ### Platform Support
-| Platform | Binary | Status |
-|----------|--------|--------|
-| Linux x64 | `opencode-linux-x64` | ✅ Primary |
-| Linux arm64 | `opencode-linux-arm64` | ✅ |
-| macOS x64 | `opencode-darwin-x64` | ✅ |
-| macOS arm64 | `opencode-darwin-arm64` | ✅ |
-| Windows x64 | `opencode-windows-x64` | ✅ |
-| Windows arm64 | `opencode-windows-arm64` | ✅ |
+
+| Platform | Binary | Installer | Status |
+|----------|--------|-----------|--------|
+| Linux x64 | `opencode-linux-x64` | `install.sh` | ✅ Primary |
+| Linux arm64 | `opencode-linux-arm64` | `install.sh` | ✅ |
+| macOS x64 (Intel) | `opencode-darwin-x64` | `install.sh` | ✅ |
+| macOS arm64 (Apple Silicon) | `opencode-darwin-arm64` | `install.sh` | ✅ |
+| Windows x64 | `opencode-windows-x64` | `install.ps1` | ✅ |
+| Windows arm64 | `opencode-windows-arm64` | `install.ps1` | ⚠️ Requires `-BuildFromSource` |
 
 ### Post-install
+
 After install, run:
 ```bash
 # Start dreamcode in any project directory
@@ -54,10 +85,22 @@ dreamcode
 OPENAI_API_KEY=your-key dreamcode
 ```
 
+**Windows PowerShell:**
+```powershell
+# Start dreamcode in any project directory
+dreamcode
+
+# Or with an API key
+$env:OPENAI_API_KEY = "your-key"; dreamcode
+```
+
 ### Troubleshooting Install
+
 - **Build fails on fresh clone**: Run `cd packages/opencode && bun run build --single` — ensures `bin/` directory exists for the symlink.
-- **`dreamcode: command not found`**: Add `~/.bun/bin` to your PATH, or re-run install.sh.
+- **`dreamcode: command not found`** (Linux/macOS): Add `~/.local/bin` and `~/.bun/bin` to your PATH, or re-run install.sh.
+- **`dreamcode` not recognized** (Windows): Open a **new** PowerShell terminal — PATH changes apply to new sessions.
 - **Python skills not working**: Run `pip3 install -r .dreamcode/requirements.txt`
+- **Sandbox mode not available** (macOS): firejail is Linux-only; set `sandbox: false` in config.yaml.
 
 ## What DreamCode Is
 

@@ -154,6 +154,14 @@ if ! command -v unzip &> /dev/null; then
 fi
 
 # ─── Firejail (only if sandbox requested) ─────────────────────────────
+# firejail is Linux-only — skip entirely on macOS/Darwin
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ "$SANDBOX_ENABLED" == "on" ]]; then
+    echo -e "${ORANGE}WARN: Sandbox mode (firejail) is Linux-only. Disabling.${NC}"
+  fi
+  SANDBOX_ENABLED="off"
+fi
+
 if [[ "$SANDBOX_ENABLED" == "on" ]]; then
   if ! command -v firejail &> /dev/null; then
     echo -e "${CYAN}Installing firejail (sandbox requested)...${NC}"
