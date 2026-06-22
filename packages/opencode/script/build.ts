@@ -334,6 +334,16 @@ if ((singleFlag || win32Flag) && targets.length > 0) {
   }
 }
 
+// Register globally so `dreamcode` works from anywhere after build
+if (singleFlag || win32Flag) {
+  try {
+    await $`bun link`
+    console.log(`Registered: bun link → dreamcode is now globally available`)
+  } catch {
+    console.warn(`Warning: bun link failed — run "bun link" manually to use dreamcode globally`)
+  }
+}
+
 if (Script.release || win32Flag) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
