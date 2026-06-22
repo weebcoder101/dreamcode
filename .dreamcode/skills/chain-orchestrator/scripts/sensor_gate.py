@@ -892,15 +892,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SENSOR Gate — Codex-Compatible Runtime")
     parser.add_argument("--prompt", default=None, help="User prompt (or pipe via stdin with --stdin)")
     parser.add_argument("--stdin", action="store_true", help="Read prompt from stdin")
+    parser.add_argument("--prompt-file", default=None, help="Read prompt from a file (avoids stdin pipe issues in compiled binaries)")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
 
-    if args.stdin:
+    if args.prompt_file:
+        try:
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
+        except Exception as e:
+            parser.error(f"Failed to read prompt file: {e}")
+    elif args.stdin:
         prompt = sys.stdin.read().strip()
     elif args.prompt:
         prompt = args.prompt
     else:
-        parser.error("Either --prompt or --stdin is required")
+        parser.error("Either --prompt, --stdin, or --prompt-file is required")
 
     result = run_gate(prompt)
     if args.json:

@@ -33,7 +33,10 @@ const IS_PREVIEW = CHANNEL !== "latest"
 
 const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
-  if (IS_PREVIEW) return `1.1.0`
+  if (IS_PREVIEW) {
+    console.warn(`[Script] No OPENCODE_VERSION env set and CHANNEL="${CHANNEL}" — using fallback 1.1.0. Install via dreamcode/install.sh to get the correct version.`)
+    return `1.1.0`
+  }
   const version = await fetch("https://registry.npmjs.org/opencode-ai/latest")
     .then((res) => {
       if (!res.ok) throw new Error(res.statusText)

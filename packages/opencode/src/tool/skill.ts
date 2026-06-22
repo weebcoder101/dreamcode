@@ -139,24 +139,51 @@ function sanitizeSensorGateOutput(raw: string): string {
 }
 
 // Phase 3: Async version of sensor gate using ChildProcessSpawner
-// Prompt is passed via stdin (not argv) to avoid /proc/$PID/cmdline exposure.
+// Prompt is written to a temp file instead of stdin pipe to avoid Bun.spawn
+// Unix socket EOF issue in compiled binaries.
 const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (prompt: string) {
   if (!SENSOR_GATE || !fs.existsSync(SENSOR_GATE)) return ""
+  const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
+  const tmpBase = process.env.XDG_RUNTIME_DIR
+    ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
+    : path.join(HOME, ".dreamcode", "tmp")
+  let tmpDir = ""
+  let tmpFile = ""
+  try {
+    fs.mkdirSync(tmpBase, { recursive: true })
+    tmpDir = fs.mkdtempSync(path.join(tmpBase, "sg-"))
+    fs.chmodSync(tmpDir, 0o700)
+    tmpFile = path.join(tmpDir, "prompt.txt")
+    fs.writeFileSync(tmpFile, prompt, "utf-8")
+  } catch {
+    tmpFile = ""
+  }
+  const args = tmpFile
+    ? ["python3", SENSOR_GATE!, "--prompt-file", tmpFile]
+    : ["python3", SENSOR_GATE!, "--prompt", prompt]
   return yield* Effect.tryPromise({
     try: async () => {
-      const proc = Bun.spawn(["python3", SENSOR_GATE!, "--stdin"], {
-        stdin: "pipe",
+      const proc = Bun.spawn(args, {
         stdout: "pipe",
         stderr: "pipe",
       })
-      const writer = proc.stdin.getWriter()
-      await writer.write(new TextEncoder().encode(prompt))
-      await writer.close()
       const text = await proc.stdout.text()
       await proc.exited
+      // Clean up temp file
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile) } catch {}
+        try { fs.rmdirSync(tmpDir) } catch {}
+      }
       return text || ""
     },
-    catch: (err) => new Error(String(err)),
+    catch: (err) => {
+      // Clean up temp file on error too
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile) } catch {}
+        try { fs.rmdirSync(tmpDir) } catch {}
+      }
+      return new Error(String(err))
+    },
   }).pipe(
     Effect.timeout(Duration.seconds(200)),
     Effect.catch(() => Effect.succeed("")),
@@ -164,23 +191,50 @@ const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (promp
 })
 
 // Phase 3: Async version of skill script execution
-// Prompt is passed via stdin (not argv) to avoid /proc/$PID/cmdline exposure.
+// Prompt is written to a temp file instead of stdin pipe to avoid Bun.spawn
+// Unix socket EOF issue in compiled binaries.
 const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (script: string, prompt: string) {
+  const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
+  const tmpBase = process.env.XDG_RUNTIME_DIR
+    ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
+    : path.join(HOME, ".dreamcode", "tmp")
+  let tmpDir = ""
+  let tmpFile = ""
+  try {
+    fs.mkdirSync(tmpBase, { recursive: true })
+    tmpDir = fs.mkdtempSync(path.join(tmpBase, "sk-"))
+    fs.chmodSync(tmpDir, 0o700)
+    tmpFile = path.join(tmpDir, "prompt.txt")
+    fs.writeFileSync(tmpFile, prompt, "utf-8")
+  } catch {
+    tmpFile = ""
+  }
+  const args = tmpFile
+    ? ["python3", script, "--prompt-file", tmpFile]
+    : ["python3", script, "--prompt", prompt]
   return yield* Effect.tryPromise({
     try: async () => {
-      const proc = Bun.spawn(["python3", script, "--stdin"], {
-        stdin: "pipe",
+      const proc = Bun.spawn(args, {
         stdout: "pipe",
         stderr: "pipe",
       })
-      const writer = proc.stdin.getWriter()
-      await writer.write(new TextEncoder().encode(prompt))
-      await writer.close()
       const text = await proc.stdout.text()
       await proc.exited
+      // Clean up temp file
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile) } catch {}
+        try { fs.rmdirSync(tmpDir) } catch {}
+      }
       return text || ""
     },
-    catch: (err) => new Error(String(err)),
+    catch: (err) => {
+      // Clean up temp file on error too
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile) } catch {}
+        try { fs.rmdirSync(tmpDir) } catch {}
+      }
+      return new Error(String(err))
+    },
   }).pipe(
     Effect.timeout(Duration.seconds(200)),
     Effect.catch(() => Effect.succeed("")),

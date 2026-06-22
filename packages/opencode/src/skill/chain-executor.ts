@@ -49,17 +49,19 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   if (!validateScriptPath(path.resolve(script))) {
     return "[SKIPPED] Script path outside allowed skills directory"
   }
+  // Pass prompt as --prompt argument instead of piping via stdin.
+  // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
+  // and writer.close() doesn't send EOF through them, causing Python's
+  // sys.stdin.read() to block forever. --prompt arg avoids this entirely.
+  // Most skill scripts already support --prompt (required=True).
   return yield* Effect.tryPromise({
     try: async () => {
-      const proc = Bun.spawn(["python3", script, "--stdin"], {
+      const proc = Bun.spawn(["python3", script, "--prompt", prompt], {
         cwd,
-        stdin: "pipe",
+        stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
       })
-      const writer = proc.stdin.getWriter()
-      await writer.write(new TextEncoder().encode(prompt))
-      await writer.close()
       const text = await proc.stdout.text()
       await proc.exited
       return text || ""
