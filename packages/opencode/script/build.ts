@@ -268,21 +268,6 @@ for (const item of targets) {
     }
   }
 
-  // Update bin/opencode symlink to point to the freshly built binary
-  const binSymlink = path.join(dir, "bin", "opencode")
-  const distBin = path.resolve(dir, `dist/${name}/bin/opencode`)
-  if (fs.existsSync(distBin)) {
-    try {
-      // Remove stale file or old symlink
-      if (fs.lstatSync(binSymlink).isSymbolicLink() || fs.existsSync(binSymlink)) {
-        fs.unlinkSync(binSymlink)
-      }
-    } catch {}
-    const rel = path.relative(path.dirname(binSymlink), distBin)
-    fs.symlinkSync(rel, binSymlink)
-    console.log(`Linked bin/opencode -> ${rel}`)
-  }
-
   // Also clean up old .opencode symlink if present
   const oldDotSymlink = path.join(dir, "bin", ".opencode")
   try {
@@ -307,6 +292,33 @@ for (const item of targets) {
     ),
   )
   binaries[name] = Script.version
+}
+
+// Create dev symlink bin/opencode → native binary (single build only)
+if (singleFlag && targets.length > 0) {
+  const linkTarget = targets[0]
+  const name = [
+    pkg.name,
+    linkTarget.os === "win32" ? "windows" : linkTarget.os,
+    linkTarget.arch,
+    linkTarget.avx2 === false ? "baseline" : undefined,
+    linkTarget.abi === undefined ? undefined : linkTarget.abi,
+  ]
+    .filter(Boolean)
+    .join("-")
+  const binSymlink = path.join(dir, "bin", "opencode")
+  const distBin = path.resolve(dir, `dist/${name}/bin/opencode`)
+  if (fs.existsSync(distBin)) {
+    try {
+      if (fs.existsSync(binSymlink)) {
+        fs.unlinkSync(binSymlink)
+      }
+    } catch {}
+    fs.mkdirSync(path.dirname(binSymlink), { recursive: true })
+    const rel = path.relative(path.dirname(binSymlink), distBin)
+    fs.symlinkSync(rel, binSymlink)
+    console.log(`Linked bin/opencode -> ${rel}`)
+  }
 }
 
 if (Script.release) {

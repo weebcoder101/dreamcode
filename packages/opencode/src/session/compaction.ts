@@ -39,6 +39,9 @@ export const Event = {
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
+// During compaction, tool outputs are compressed to save token budget for the LLM.
+// 500 chars is enough context for summarization — full outputs are preserved in DB.
+const COMPACT_TOOL_OUTPUT_MAX_CHARS = 500
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
@@ -362,7 +365,7 @@ export const layer = Layer.effect(
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
-        toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+        toolOutputMaxChars: COMPACT_TOOL_OUTPUT_MAX_CHARS,
       })
 
       // RIT Compaction: compress conversation history in background
@@ -378,7 +381,7 @@ export const layer = Layer.effect(
           : JSON.stringify(
               yield* MessageV2.toModelMessagesEffect(history.slice(tailIndex), model, {
                 stripMedia: true,
-                toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+                toolOutputMaxChars: COMPACT_TOOL_OUTPUT_MAX_CHARS,
               }),
             )
       const ctx = yield* InstanceState.context

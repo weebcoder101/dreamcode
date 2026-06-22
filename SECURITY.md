@@ -1,47 +1,66 @@
-# Security
+# Security Policy
 
-## IMPORTANT
+## Sandbox Model
 
-We do not accept AI generated security reports. We receive a large number of
-these and we absolutely do not have the resources to review them all. If you
-submit one that will be an automatic ban from the project.
+DreamCode runs with **full filesystem access by default** (sandbox is opt-in). This is intentional — DreamCode reads, writes, and executes code as part of its agent workflow.
 
-## Threat Model
+To enable sandbox mode:
 
-### Overview
+```bash
+export DREAMCODE_SANDBOX=on
+# Or in ~/.config/dreamcode/config.yaml:
+# sandbox: true
+```
 
-OpenCode is an AI-powered coding assistant that runs locally on your machine. It provides an agent system with access to powerful tools including shell execution, file operations, and web access.
+When sandbox is ON, commands execute inside [firejail](https://firejail.wordpress.com/) isolation.
 
-### No Sandbox
+### What Sandbox Protects Against
 
-OpenCode does **not** sandbox the agent. The permission system exists as a UX feature to help users stay aware of what actions the agent is taking - it prompts for confirmation before executing commands, writing files, etc. However, it is not designed to provide security isolation.
+- Accidental host-wide damage from shell commands
+- Unauthorized filesystem access by malicious prompts
+- External process visibility (process isolation)
 
-If you need true isolation, run OpenCode inside a Docker container or VM.
+### What Sandbox Does NOT Protect Against
 
-### Server Mode
+- Prompt injection attacks (the AI model itself may be compromised)
+- Malicious npm/bun packages installed by the agent
+- Credential exfiltration if the AI model's output channel is compromised
+- Kernel-level escapes from firejail
 
-Server mode is opt-in only. When enabled, set `OPENCODE_SERVER_PASSWORD` to require HTTP Basic Auth. Without this, the server runs unauthenticated (with a warning). It is the end user's responsibility to secure the server - any functionality it provides is not a vulnerability.
+## Credential Storage
 
-### Out of Scope
+API keys and OAuth tokens are stored **unencrypted** in SQLite at `~/.local/state/opencode/`.
+Any process with filesystem access can extract these credentials.
 
-| Category                        | Rationale                                                               |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| **Server access when opted-in** | If you enable server mode, API access is expected behavior              |
-| **Sandbox escapes**             | The permission system is not a sandbox (see above)                      |
-| **LLM provider data handling**  | Data sent to your configured LLM provider is governed by their policies |
-| **MCP server behavior**         | External MCP servers you configure are outside our trust boundary       |
-| **Malicious config files**      | Users control their own config; modifying it is not an attack vector    |
+**Recommended mitigations:**
+- Use environment variables for API keys (e.g., `OPENAI_API_KEY`, `NEURO_API_KEY`)
+- Restrict access to `~/.local/state/opencode/`
+- Use full-disk encryption
 
----
+## Reporting a Vulnerability
 
-# Reporting Security Issues
+DreamCode is a community fork. To report a security issue:
 
-We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
+1. **Do not** open a public GitHub issue for critical vulnerabilities.
+2. Open a [GitHub Issue](https://github.com/weebcoder101/dreamcode/issues) with `[security]` in the title for general concerns.
+3. For critical vulnerabilities, email the repository owner directly or open a draft security advisory on GitHub.
 
-To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/anomalyco/opencode/security/advisories/new) tab.
+We aim to acknowledge reports within 48 hours and triage within 1 week.
 
-The team will send a response indicating the next steps in handling your report. After the initial reply to your report, the security team will keep you informed of the progress towards a fix and full announcement, and may ask for additional information or guidance.
+## Known Security Limitations
 
-## Escalation
+| Issue | Status | Notes |
+|-------|--------|-------|
+| Credentials stored unencrypted | Known | AES-256-GCM encryption planned |
+| No sandbox by default | Intentional | Opt-in for compatibility |
+| Prompt injection surface | Known | Mitigated by sensor gate classification |
+| `ps aux` CLI arg leak | Known | `--prompt` visible in process listing; local-only risk |
+| No runtime code signing | Known | Verify binary checksums on download |
 
-If you do not receive an acknowledgement of your report within 6 business days, you may send an email to security@anoma.ly
+## Dependency Security
+
+DreamCode vendors hundreds of npm dependencies. We recommend:
+
+- Run `bun audit` regularly
+- Use `DREAMCODE_SANDBOX=on` when testing third-party plugins
+- Pin dependencies in production deployments

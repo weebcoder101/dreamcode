@@ -2,9 +2,9 @@ name: Install + Build Test
 
 on:
   push:
-    branches: [main, dreamcode-fork]
+    branches: [dev, main, dreamcode-fork]
   pull_request:
-    branches: [main]
+    branches: [dev, main]
 
 jobs:
   install-test:
@@ -24,7 +24,7 @@ jobs:
         run: bun install
 
       - name: Build
-        run: bun run build
+        run: bun run build --single --skip-embed-web-ui --skip-install
         working-directory: packages/opencode
 
       - name: Install globally

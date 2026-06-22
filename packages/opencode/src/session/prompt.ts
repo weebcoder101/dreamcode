@@ -1294,6 +1294,25 @@ Before every response, verify your reasoning:
             continue
           }
 
+          // /compact command — bypass sensor gate, trigger compaction directly
+          if (!session.parentID) {
+            const userText = msgs
+              .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
+              .flatMap((m) => m.parts)
+              .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
+              .map((p) => p.text)
+              .join("\n")
+            if (userText.trim().startsWith("/compact")) {
+              yield* compaction.create({
+                sessionID,
+                agent: lastUser.agent,
+                model: lastUser.model,
+                auto: false,
+              })
+              continue
+            }
+          }
+
           const agent = yield* agents.get(lastUser.agent)
           if (!agent) {
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)

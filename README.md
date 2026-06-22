@@ -8,15 +8,56 @@ An open-source AI coding agent with native dream thinking, 37-skill dynamic grap
 
 ## Quick Install
 
+### One-line install (recommended)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh | bash
 ```
 
-Or clone:
-
+### Or clone and install
 ```bash
 git clone https://github.com/weebcoder101/dreamcode && cd dreamcode && bash install.sh
 ```
+
+### Manual build (for developers)
+```bash
+git clone https://github.com/weebcoder101/dreamcode
+cd dreamcode
+bun install
+cd packages/opencode && OPENCODE_VERSION=1.2.8 bun run build --single
+npm install -g .  # or: bun install -g .
+```
+
+### Requirements
+- **bun** ≥ 1.3.x (auto-installed by install.sh)
+- **Python** ≥ 3.10 (for skill scripts; optional, falls back gracefully)
+- **pip3** (for Python dependencies; optional)
+- **unzip** (auto-installed by install.sh)
+- **firejail** (optional; for sandbox mode)
+
+### Platform Support
+| Platform | Binary | Status |
+|----------|--------|--------|
+| Linux x64 | `opencode-linux-x64` | ✅ Primary |
+| Linux arm64 | `opencode-linux-arm64` | ✅ |
+| macOS x64 | `opencode-darwin-x64` | ✅ |
+| macOS arm64 | `opencode-darwin-arm64` | ✅ |
+| Windows x64 | `opencode-windows-x64` | ✅ |
+| Windows arm64 | `opencode-windows-arm64` | ✅ |
+
+### Post-install
+After install, run:
+```bash
+# Start dreamcode in any project directory
+dreamcode
+
+# Or with an API key
+OPENAI_API_KEY=your-key dreamcode
+```
+
+### Troubleshooting Install
+- **Build fails on fresh clone**: Run `cd packages/opencode && bun run build --single` — ensures `bin/` directory exists for the symlink.
+- **`dreamcode: command not found`**: Add `~/.bun/bin` to your PATH, or re-run install.sh.
+- **Python skills not working**: Run `pip3 install -r .dreamcode/requirements.txt`
 
 ## What DreamCode Is
 
@@ -141,7 +182,20 @@ DreamCode is designed for Antigravity IDE. Open your project in Antigravity and 
 
 ## Documentation
 
-For the complete walkthrough of every feature, see **[GUIDE.md](GUIDE.md)** — covers architecture, all 37 skills, NEURO setup, Pieces LTM, and advanced patterns.
+| Guide | Description |
+|-------|-------------|
+| **[GUIDE.md](GUIDE.md)** | Complete walkthrough — architecture, 37 skills, NEURO, Pieces LTM, advanced patterns |
+| **[SECURITY.md](SECURITY.md)** | Security policy, sandbox model, credential storage, vulnerability reporting |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Development setup, PR guidelines, coding conventions |
+| **[AGENTS.md](AGENTS.md)** | Build system, architecture, code patterns (internal developers) |
+| **[docs/](docs/)** | Detailed guides for specific features |
+
+### Key Topics
+- **[Dream Thinking](docs/dream-thinking.md)** — The 6-phase engine behind DREAM_INNOVATION mode
+- **[37 Skills Reference](docs/skills.md)** — Complete catalog with activation conditions and config
+- **[Configuration Reference](docs/config.md)** — Full YAML schema with all options
+- **[NEURO API Setup](docs/neuro.md)** — 120+ specialized models, free to use
+- **[Sensor Gate](docs/sensor-gate.md)** — Intent classification, chain selection, spawn decisions
 
 ## Credits
 

@@ -78,7 +78,12 @@ fi
 INSTALL_DIR="${DREAMCODE_DIR:-$HOME/.dreamcode}"
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "${CYAN}Updating existing DreamCode install...${NC}"
-  cd "$INSTALL_DIR" && git pull origin main 2>/dev/null || git pull origin dreamcode-fork
+  cd "$INSTALL_DIR"
+  if ! git pull origin main 2>/dev/null; then
+    if ! git pull origin dreamcode-fork 2>/dev/null; then
+      echo -e "${ORANGE}WARN: git pull failed — using existing clone${NC}"
+    fi
+  fi
 else
   echo -e "${CYAN}Cloning DreamCode...${NC}"
   git clone https://github.com/weebcoder101/dreamcode.git "$INSTALL_DIR"
@@ -91,12 +96,19 @@ bun install
 
 echo -e "${CYAN}Installing Python dependencies for skill scripts...${NC}"
 if [ -f "$INSTALL_DIR/.dreamcode/requirements.txt" ]; then
-  pip3 install -r "$INSTALL_DIR/.dreamcode/requirements.txt" 2>/dev/null || echo -e "${ORANGE}WARN: pip install failed, some skills may not work${NC}"
+  if command -v pip3 &> /dev/null; then
+    pip3 install -r "$INSTALL_DIR/.dreamcode/requirements.txt" 2>/dev/null || echo -e "${ORANGE}WARN: pip install failed, some skills may not work${NC}"
+  else
+    echo -e "${ORANGE}WARN: pip3 not found — Python skill scripts may not work. Install python3-pip and re-run.${NC}"
+  fi
 fi
 
 echo -e "${CYAN}Building...${NC}"
 cd packages/opencode
-bun run build 2>/dev/null || echo -e "${ORANGE}WARN: Build script not found, skipping${NC}"
+if ! bun run build; then
+  echo -e "${RED}Build failed. See errors above. Retry manually: cd packages/opencode && bun run build --single${NC}"
+  exit 1
+fi
 
 # ─── Create binary symlink ──────────────────────────────────
 PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -107,13 +119,18 @@ case "$ARCH" in
 esac
 NATIVE_BIN="dist/opencode-${PLATFORM}-${ARCH}/bin/opencode"
 if [ -f "$NATIVE_BIN" ]; then
+  mkdir -p "$(pwd)/bin"
   ln -sf "../dist/opencode-${PLATFORM}-${ARCH}/bin/opencode" "$(pwd)/bin/opencode"
   echo -e "${GREEN}Linked native binary: ${PLATFORM}-${ARCH}${NC}"
 fi
 
 # ─── Global binary ──────────────────────────────────────────
 echo -e "${CYAN}Installing dreamcode binary globally...${NC}"
-npm install -g . 2>/dev/null || echo -e "${ORANGE}WARN: npm install -g failed, you may need to run manually${NC}"
+if command -v bun &> /dev/null && bun --version &> /dev/null; then
+  bun install -g . 2>/dev/null || echo -e "${ORANGE}WARN: bun install -g failed, you may need to run manually${NC}"
+else
+  npm install -g . 2>/dev/null || echo -e "${ORANGE}WARN: npm install -g failed, you may need to run manually${NC}"
+fi
 
 # ─── PATH ───────────────────────────────────────────────────
 INSTALL_BIN="$HOME/.bun/bin"
