@@ -58,13 +58,18 @@ function testLayer(
 
 describe("installation", () => {
   describe("latest", () => {
-    testEffect(testLayer(() => jsonResponse({ tag_name: "v1.2.3" }))).effect(
-      "reads release version from GitHub releases",
-      () =>
-        Effect.gen(function* () {
-          const result = yield* Installation.use.latest("unknown")
-          expect(result).toBe("1.2.3")
-        }),
+    const ghCalls: string[] = []
+    testEffect(
+      testLayer((request) => {
+        ghCalls.push(request.url)
+        return jsonResponse({ tag_name: "v1.2.3" })
+      }),
+    ).effect("reads release version from dreamcode GitHub releases", () =>
+      Effect.gen(function* () {
+        const result = yield* Installation.use.latest("unknown")
+        expect(result).toBe("1.2.3")
+        expect(ghCalls[0]).toContain("weebcoder101/dreamcode")
+      }),
     )
 
     testEffect(testLayer(() => jsonResponse({ tag_name: "v4.0.0-beta.1" }))).effect(
@@ -86,7 +91,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("npm")
         expect(result).toBe("1.5.0")
-        expect(npmCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(npmCalls).toContain(`https://registry.npmjs.org/dreamcode/${InstallationChannel}`)
       }),
     )
 
@@ -100,7 +105,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("bun")
         expect(result).toBe("1.6.0")
-        expect(bunCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(bunCalls).toContain(`https://registry.npmjs.org/dreamcode/${InstallationChannel}`)
       }),
     )
 
@@ -114,7 +119,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("pnpm")
         expect(result).toBe("1.7.0")
-        expect(pnpmCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(pnpmCalls).toContain(`https://registry.npmjs.org/dreamcode/${InstallationChannel}`)
       }),
     )
 
@@ -139,8 +144,8 @@ describe("installation", () => {
         () => jsonResponse({ versions: { stable: "2.0.0" } }),
         (cmd, args) => {
           // getBrewFormula: return core formula (no tap)
-          if (cmd === "brew" && args.includes("--formula") && args.includes("anomalyco/tap/opencode")) return ""
-          if (cmd === "brew" && args.includes("--formula") && args.includes("opencode")) return "opencode"
+          if (cmd === "brew" && args.includes("--formula") && args.includes("weebcoder101/tap/dreamcode")) return ""
+          if (cmd === "brew" && args.includes("--formula") && args.includes("dreamcode")) return "dreamcode"
           return ""
         },
       ),
@@ -158,7 +163,7 @@ describe("installation", () => {
       testLayer(
         () => jsonResponse({}), // HTTP not used for tap formula
         (cmd, args) => {
-          if (cmd === "brew" && args.includes("anomalyco/tap/opencode") && args.includes("--formula")) return "opencode"
+          if (cmd === "brew" && args.includes("weebcoder101/tap/dreamcode") && args.includes("--formula")) return "dreamcode"
           if (cmd === "brew" && args.includes("--json=v2")) return brewInfoJson
           return ""
         },
@@ -191,9 +196,13 @@ describe("installation", () => {
       }),
     )
 
+    const curlUpgradeCalls: string[] = []
     testEffect(
       testLayer(
-        () => new Response("install script with token=secret", { status: 200 }),
+        (request) => {
+          curlUpgradeCalls.push(request.url)
+          return new Response("install script with token=secret", { status: 200 })
+        },
         (cmd, args) => {
           if (cmd === "bash" && args[0] === "--version") return "GNU bash"
           if (cmd === "bash" || cmd === "sh") return { code: 1, stderr: "script output with token=secret" }
@@ -208,6 +217,7 @@ describe("installation", () => {
         expect(error.message).toBe(error.stderr)
         expect(error.stderr).not.toContain("secret")
         expect(error.stderr).not.toContain("script output")
+        expect(curlUpgradeCalls[0]).toContain("dreamcode.ai/install")
       }),
     )
 
