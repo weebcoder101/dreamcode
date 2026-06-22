@@ -105,7 +105,8 @@ fi
 
 echo -e "${CYAN}Building...${NC}"
 cd packages/opencode
-if ! bun run build; then
+export OPENCODE_VERSION="1.2.9"
+if ! bun run build --single; then
   echo -e "${RED}Build failed. See errors above. Retry manually: cd packages/opencode && bun run build --single${NC}"
   exit 1
 fi
