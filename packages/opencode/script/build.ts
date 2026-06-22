@@ -297,9 +297,9 @@ for (const item of targets) {
   binaries[name] = Script.version
 }
 
-// Create dev symlink bin/opencode → native binary (single / win32 build)
+// Create dev entry point bin/dreamcode[.cmd] → native binary (single / win32 build)
 if ((singleFlag || win32Flag) && targets.length > 0) {
-  const linkTarget = targets[0]
+  const linkTarget = targets.find((t) => t.os === "win32" && t.arch === "x64" && !t.abi && t.avx2 !== false) ?? targets[0]
   const name = [
     pkg.name,
     linkTarget.os === "win32" ? "windows" : linkTarget.os,
@@ -309,18 +309,28 @@ if ((singleFlag || win32Flag) && targets.length > 0) {
   ]
     .filter(Boolean)
     .join("-")
-  const binSymlink = path.join(dir, "bin", "opencode")
+  const binDir = path.join(dir, "bin")
   const distBin = path.resolve(dir, `dist/${name}/bin/opencode`)
-  if (fs.existsSync(distBin)) {
-    try {
-      if (fs.existsSync(binSymlink)) {
-        fs.unlinkSync(binSymlink)
-      }
-    } catch {}
-    fs.mkdirSync(path.dirname(binSymlink), { recursive: true })
-    const rel = path.relative(path.dirname(binSymlink), distBin)
-    fs.symlinkSync(rel, binSymlink)
-    console.log(`Linked bin/opencode -> ${rel}`)
+  if (linkTarget.os === "win32") {
+    // Windows: create .cmd shim instead of symlink (symlinks require admin/Developer Mode)
+    const shimPath = path.join(binDir, `dreamcode.cmd`)
+    fs.mkdirSync(binDir, { recursive: true })
+    const relToDist = path.relative(binDir, path.resolve(dir, `dist/${name}/bin`)).replace(/\//g, "\\")
+    fs.writeFileSync(shimPath, `@"%~dp0${relToDist}\\opencode.exe" %*\r\n`)
+    console.log(`Created Windows shim bin/dreamcode.cmd -> ${relToDist}\\opencode.exe`)
+  } else {
+    const binSymlink = path.join(binDir, "dreamcode")
+    if (fs.existsSync(distBin)) {
+      try {
+        if (fs.existsSync(binSymlink)) {
+          fs.unlinkSync(binSymlink)
+        }
+      } catch {}
+      fs.mkdirSync(binDir, { recursive: true })
+      const rel = path.relative(binDir, distBin)
+      fs.symlinkSync(rel, binSymlink)
+      console.log(`Linked bin/dreamcode -> ${rel}`)
+    }
   }
 }
 
