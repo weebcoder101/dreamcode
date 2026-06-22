@@ -583,25 +583,70 @@ function runSensorGateEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
+      // Write prompt to temp file instead of piping via stdin.
+      // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
+      // and writer.close() doesn't send EOF through them, causing Python's
+      // sys.stdin.read() to block forever. Temp file avoids this entirely.
+      const tmpBase = process.env.XDG_RUNTIME_DIR
+        ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
+        : path.join(projectRoot, ".dreamcode", "tmp")
+      let tmpDir = ""
+      let tmpFile = ""
+      try {
+        fs.mkdirSync(tmpBase, { recursive: true })
+        tmpDir = fs.mkdtempSync(path.join(tmpBase, "sg-"))
+        fs.chmodSync(tmpDir, 0o700)
+        tmpFile = path.join(tmpDir, "prompt.txt")
+        fs.writeFileSync(tmpFile, clamped, "utf-8")
+      } catch (e) {
+        console.warn("[sensor-gate] failed to create tmp file, falling back to --prompt arg", { error: String(e) })
+        tmpFile = ""
+      }
+
+      const args = tmpFile
+        ? ["python3", sensorGate, "--prompt-file", tmpFile]
+        : ["python3", sensorGate, "--prompt", clamped]
+
+      let proc: ReturnType<typeof Bun.spawn> | undefined
       const output = yield* Effect.tryPromise({
         try: async () => {
-          const proc = Bun.spawn(["python3", sensorGate, "--stdin"], {
+          proc = Bun.spawn(args, {
             cwd: projectRoot,
-            stdin: "pipe",
             stdout: "pipe",
             stderr: "pipe",
           })
-          const writer = proc.stdin.getWriter()
-          await writer.write(new TextEncoder().encode(clamped))
-          await writer.close()
-          return await new Response(proc.stdout).text()
+          const text = await new Response(proc.stdout).text()
+          // Log stderr from Python subprocess (never empty on failure)
+          const stderrText = await new Response(proc.stderr).text().catch(() => "")
+          if (stderrText.trim()) {
+            console.warn("[sensor-gate] python subprocess stderr", { stderr: stderrText.slice(0, 2000) })
+          }
+          return text
         },
-        catch: () => "" as string,
+        catch: (e) => {
+          console.warn("[sensor-gate] Bun.spawn failed", { error: String(e) })
+          return "" as string
+        },
       }).pipe(
         Effect.timeout(Duration.millis(timeoutMs)),
-        Effect.catch(() => Effect.succeed("")),
+        Effect.catch((e) => {
+          console.warn("[sensor-gate] subprocess timeout or error", { error: String(e), timeoutMs })
+          return Effect.succeed("")
+        }),
       )
-      if (!output) return null
+      // Kill zombie process on timeout — prevent accumulation of hanging subprocesses
+      if (proc) {
+        try { proc.kill(9) } catch {}
+      }
+      // Clean up temp file
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile) } catch {}
+        try { fs.rmdirSync(tmpDir) } catch {}
+      }
+      if (!output) {
+        console.warn("[sensor-gate] empty output from subprocess — sensor gate returning default result")
+        return parseSensorGateOutput("")
+      }
       return parseSensorGateOutput(output)
     }).pipe(
       Effect.catch((e) => {
@@ -707,8 +752,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     return Service.of({
       classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
-        const ctx = yield* InstanceState.contextOrNull
-        if (!ctx?.directory) return null
+        const ctx = yield* InstanceState.context
         const directory = ctx.directory
         const result = yield* runSensorGateEffect(prompt, directory)
         if (!result) return null
