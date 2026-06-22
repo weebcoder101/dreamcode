@@ -18,6 +18,7 @@ import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
 
 const singleFlag = process.argv.includes("--single")
+const win32Flag = process.argv.includes("--win32")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
@@ -183,14 +184,16 @@ const allTargets: {
   { os: "win32", arch: "x64", avx2: false },
 ]
 
-const targets = singleFlag
-  ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) return false
-      if (item.avx2 === false) return baselineFlag
-      if (item.abi !== undefined) return false
-      return true
-    })
-  : allTargets
+const targets = win32Flag
+  ? allTargets.filter((item) => item.os === "win32")
+  : singleFlag
+    ? allTargets.filter((item) => {
+        if (item.os !== process.platform || item.arch !== process.arch) return false
+        if (item.avx2 === false) return baselineFlag
+        if (item.abi !== undefined) return false
+        return true
+      })
+    : allTargets
 
 await $`rm -rf dist`
 
@@ -321,15 +324,18 @@ if (singleFlag && targets.length > 0) {
   }
 }
 
-if (Script.release) {
+if (Script.release || win32Flag) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
     } else {
-      await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
+      // Use python3 zipfile (available on all platforms; avoids system `zip` dependency)
+      await $`python3 -c "import shutil; shutil.make_archive('../../${key}', 'zip', '.')"`.cwd(`dist/${key}/bin`)
     }
   }
-  await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
+  if (Script.release) {
+    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
+  }
 }
 
 export { binaries }

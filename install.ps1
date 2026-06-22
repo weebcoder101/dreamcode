@@ -19,11 +19,16 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Force TLS 1.2 (GitHub requires it; older Windows defaults to TLS 1.0)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $APP = "dreamcode"
 $OWNER = "weebcoder101"
 $REPO = "dreamcode"
 $INSTALL_DIR = if ($env:DREAMCODE_DIR) { $env:DREAMCODE_DIR } else { "$env:USERPROFILE\.dreamcode" }
 $BIN_DIR = "$env:LOCALAPPDATA\$APP\bin"
+$tempDir = "$env:TEMP\dreamcode-install"
 
 # ─── Colors (approximate) ─────────────────────────────────────────────
 $GREEN = "Green"
@@ -41,8 +46,7 @@ function Write-Color($text, $color, $bold = $false) {
 # ─── Helper: download with progress ───────────────────────────────────
 function Download-File($url, $dest) {
   Write-Color "Downloading $url ..." $CYAN
-  $wc = New-Object System.Net.WebClient
-  $wc.DownloadFile($url, $dest)
+  Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
 }
 
 # ─── Phase 1: Download pre-built binary (default) ─────────────────────
@@ -61,10 +65,9 @@ if (-not $BuildFromSource) {
     $tag = "v1.2.9"
   }
 
-  # Find the windows-x64 asset
-  $assetName = "opencode-windows-x64.tar.gz"
+  # Find the windows-x64 asset (build system produces .zip for Windows)
+  $assetName = "opencode-windows-x64.zip"
   $downloadUrl = "https://github.com/$OWNER/$REPO/releases/download/$tag/$assetName"
-  $tempDir = "$env:TEMP\dreamcode-install"
   $tempArchive = "$tempDir\$assetName"
   $extractDir = "$tempDir\extracted"
 
@@ -83,23 +86,25 @@ if (-not $BuildFromSource) {
 if (-not $BuildFromSource -and (Test-Path $tempArchive)) {
   Write-Color "Extracting..." $CYAN
 
-  # tar is available on Windows 10 1803+ and Windows 11
-  if (-not (Get-Command tar -ErrorAction SilentlyContinue)) {
-    Write-Color "WARN: tar not found — falling back to source build" $ORANGE
+  # Use native PowerShell Expand-Archive (works on all Windows versions)
+  try {
+    Expand-Archive -Path $tempArchive -DestinationPath $extractDir -Force
+  } catch {
+    Write-Color "WARN: Extraction failed — falling back to source build: $_" $ORANGE
     $BuildFromSource = $true
-  } else {
-    tar -xzf $tempArchive -C $extractDir 2>$null
   }
 
-  $binaryPath = Get-ChildItem -Recurse -Filter "opencode.exe" -Path $extractDir | Select-Object -First 1
-  if (-not $binaryPath) {
-    Write-Color "ERROR: Binary not found in extracted archive" $RED
-    $BuildFromSource = $true
-  } else {
-    # Install binary to bin dir
-    New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
-    Copy-Item $binaryPath.FullName "$BIN_DIR\$APP.exe" -Force
-    Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
+  if (-not $BuildFromSource) {
+    $binaryPath = Get-ChildItem -Recurse -Filter "opencode.exe" -Path $extractDir | Select-Object -First 1
+    if (-not $binaryPath) {
+      Write-Color "ERROR: Binary not found in extracted archive" $RED
+      $BuildFromSource = $true
+    } else {
+      # Install binary to bin dir
+      New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
+      Copy-Item $binaryPath.FullName "$BIN_DIR\$APP.exe" -Force
+      Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
+    }
   }
 }
 
@@ -107,10 +112,22 @@ if (-not $BuildFromSource -and (Test-Path $tempArchive)) {
 if ($BuildFromSource) {
   Write-Color "Building from source..." $CYAN
 
+  # Check for git before attempting source build
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Color "ERROR: git is required for source build but was not found." $RED
+    Write-Color "Install git from https://git-scm.com/download/win and re-run." $ORANGE
+    exit 1
+  }
+
   # Clone or update repo
   if (Test-Path "$INSTALL_DIR\.git") {
     Write-Color "Updating existing DreamCode install..." $CYAN
-    git -C $INSTALL_DIR pull
+    try {
+      git -C $INSTALL_DIR pull
+    } catch {
+      Write-Color "ERROR: git pull failed: $_" $RED
+      exit 1
+    }
   } else {
     if (Test-Path $INSTALL_DIR) {
       Write-Color "ERROR: $INSTALL_DIR exists but is not a git repo." $RED
@@ -118,15 +135,26 @@ if ($BuildFromSource) {
       exit 1
     }
     Write-Color "Cloning DreamCode..." $CYAN
-    git clone "https://github.com/$OWNER/$REPO.git" $INSTALL_DIR
+    try {
+      git clone "https://github.com/$OWNER/$REPO.git" $INSTALL_DIR
+    } catch {
+      Write-Color "ERROR: git clone failed: $_" $RED
+      exit 1
+    }
   }
 
   # Check for bun
   if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
     Write-Color "Installing bun..." $CYAN
-    # Use bun's official PowerShell installer
+    # Use bun's official PowerShell installer (scope ErrorActionPreference to avoid breaking it)
     $bunInstallScript = Invoke-RestMethod -Uri "https://bun.sh/install.ps1"
-    Invoke-Expression ($bunInstallScript)
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+      Invoke-Expression ($bunInstallScript)
+    } finally {
+      $ErrorActionPreference = $prevEAP
+    }
     $env:Path = "$env:USERPROFILE\.bun\bin;$env:Path"
   }
 
@@ -155,15 +183,25 @@ if ($BuildFromSource) {
   Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
 }
 
-# ─── Phase 2: Add to user PATH ────────────────────────────────────────
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$BIN_DIR*") {
-  [Environment]::SetEnvironmentVariable("Path", "$BIN_DIR;$userPath", "User")
-  # Also update current session
-  $env:Path = "$BIN_DIR;$env:Path"
-  Write-Color "Added $BIN_DIR to user PATH" $GREEN
+# ─── Phase 2: Add to user PATH (only if binary was installed) ──────────
+$installSucceeded = Test-Path "$BIN_DIR\$APP.exe"
+if ($installSucceeded) {
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if ($userPath -notlike "*$BIN_DIR*") {
+    [Environment]::SetEnvironmentVariable("Path", "$BIN_DIR;$userPath", "User")
+    # Also update current session
+    $env:Path = "$BIN_DIR;$env:Path"
+    Write-Color "Added $BIN_DIR to user PATH" $GREEN
+  } else {
+    Write-Color "$BIN_DIR already in PATH" $MUTED
+  }
 } else {
-  Write-Color "$BIN_DIR already in PATH" $MUTED
+  Write-Color "Installation did not complete — PATH not modified." $ORANGE
+}
+
+# ─── Cleanup: remove temp directory ──────────────────────────────────
+if (Test-Path $tempDir) {
+  Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
 }
 
 # ─── Phase 3: Verify ─────────────────────────────────────────────────
