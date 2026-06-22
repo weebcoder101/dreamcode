@@ -111,7 +111,7 @@ if ! bun run build --single; then
   exit 1
 fi
 
-# ─── Create binary symlink ──────────────────────────────────
+# ─── Create binary symlinks ─────────────────────────────────
 PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -120,17 +120,43 @@ case "$ARCH" in
 esac
 NATIVE_BIN="dist/opencode-${PLATFORM}-${ARCH}/bin/opencode"
 if [ -f "$NATIVE_BIN" ]; then
+  DIST_BIN="$(pwd)/${NATIVE_BIN}"
+
+  # Absolute symlink inside the repo so bun/npm global install resolves correctly
   mkdir -p "$(pwd)/bin"
-  ln -sf "../dist/opencode-${PLATFORM}-${ARCH}/bin/opencode" "$(pwd)/bin/opencode"
-  echo -e "${GREEN}Linked native binary: ${PLATFORM}-${ARCH}${NC}"
+  ln -sf "$DIST_BIN" "$(pwd)/bin/opencode"
+  echo -e "${GREEN}Linked repo bin/opencode → ${DIST_BIN}${NC}"
+
+  # Absolute symlink in ~/.local/bin so it's always on PATH
+  LOCAL_BIN="$HOME/.local/bin"
+  mkdir -p "$LOCAL_BIN"
+  ln -sf "$DIST_BIN" "$LOCAL_BIN/dreamcode"
+  echo -e "${GREEN}Linked ~/.local/bin/dreamcode → ${DIST_BIN}${NC}"
+
+  # Add ~/.local/bin to shell RC if not on PATH
+  if [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
+    export PATH="$LOCAL_BIN:$PATH"
+    SHELL_RC=""
+    case "$(basename "$SHELL")" in
+      zsh)  SHELL_RC="$HOME/.zshrc" ;;
+      bash) SHELL_RC="$HOME/.bashrc" ;;
+      fish) SHELL_RC="$HOME/.config/fish/config.fish" ;;
+    esac
+    if [[ -n "$SHELL_RC" ]] && [[ -f "$SHELL_RC" ]]; then
+      if ! grep -q "\.local/bin" "$SHELL_RC" 2>/dev/null; then
+        echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
+        echo -e "${GREEN}Added ~/.local/bin to $SHELL_RC${NC}"
+      fi
+    fi
+  fi
 fi
 
-# ─── Global binary ──────────────────────────────────────────
-echo -e "${CYAN}Installing dreamcode binary globally...${NC}"
+# ─── Global binary via bun/npm (secondary, for .bun/bin) ────
+echo -e "${CYAN}Installing dreamcode via package manager...${NC}"
 if command -v bun &> /dev/null && bun --version &> /dev/null; then
-  bun install -g . 2>/dev/null || echo -e "${ORANGE}WARN: bun install -g failed, you may need to run manually${NC}"
+  bun install -g . 2>/dev/null || true
 else
-  npm install -g . 2>/dev/null || echo -e "${ORANGE}WARN: npm install -g failed, you may need to run manually${NC}"
+  npm install -g . 2>/dev/null || true
 fi
 
 # ─── PATH ───────────────────────────────────────────────────
