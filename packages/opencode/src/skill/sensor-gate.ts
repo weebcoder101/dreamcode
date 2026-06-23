@@ -4,7 +4,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
-import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl } from "./python-resolver"
+import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl } from "./python-resolver"
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
@@ -573,31 +573,43 @@ function runSensorGateEffect(
         tmpFile = ""
       }
 
-      // Cross-platform Python resolution
-      const pythonCmd = resolvePythonCommand()
+      // Cross-platform Python resolution with fallback chain.
+      // Try each candidate Python command in sequence until one works.
+      const pythonCmds = resolvePythonCommands()
       const versionArgs = getPythonArgs()
-      const args = tmpFile
-        ? [pythonCmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
-        : [pythonCmd, ...versionArgs, sensorGate, "--prompt", clamped]
 
       let proc: ReturnType<typeof Bun.spawn> | undefined
       const output = yield* Effect.tryPromise({
         try: async () => {
-          proc = Bun.spawn(args, {
-            cwd: projectRoot,
-            stdout: "pipe",
-            stderr: "pipe",
-          })
-          const text = await new Response(proc.stdout).text()
-          // Log stderr from Python subprocess (never empty on failure)
-          const stderrText = await new Response(proc.stderr).text().catch(() => "")
-          if (stderrText.trim()) {
-            console.warn("[sensor-gate] python subprocess stderr", { stderr: stderrText.slice(0, 2000) })
+          let lastError: unknown
+          for (const cmd of pythonCmds) {
+            const args = tmpFile
+              ? [cmd, ...(cmd === "py" ? versionArgs : []), sensorGate, "--prompt-file", tmpFile]
+              : [cmd, ...(cmd === "py" ? versionArgs : []), sensorGate, "--prompt", clamped]
+            try {
+              proc = Bun.spawn(args, {
+                cwd: projectRoot,
+                stdout: "pipe",
+                stderr: "pipe",
+              })
+              const text = await new Response(proc.stdout).text()
+              // Log stderr from Python subprocess (never empty on failure)
+              const stderrText = await new Response(proc.stderr).text().catch(() => "")
+              if (stderrText.trim()) {
+                console.warn("[sensor-gate] python subprocess stderr", { stderr: stderrText.slice(0, 2000) })
+              }
+              // If we got output, this command worked
+              if (text) return text
+              // Empty output might mean the command isn't actually Python (e.g. Windows `py` with no args)
+              // Continue to next fallback
+              console.warn(`[sensor-gate] empty output from '${cmd}', trying next fallback`)
+            } catch (e) {
+              console.warn(`[sensor-gate] '${cmd}' failed, trying next fallback`, { error: String(e) })
+              lastError = e
+            }
           }
-          return text
-        },
-        catch: (e) => {
-          console.warn("[sensor-gate] Bun.spawn failed", { error: String(e) })
+          // All fallbacks exhausted
+          console.warn("[sensor-gate] all Python commands failed", { error: lastError ? String(lastError) : "unknown" })
           return "" as string
         },
       }).pipe(

@@ -259,6 +259,15 @@ for (const item of targets) {
     },
   })
 
+  // Bundle Python skill scripts alongside the binary
+  const skillsSrc = path.resolve(import.meta.dir, "../src/skill/dreamcode/skills")
+  const skillsDest = path.resolve(`dist/${name}/bin/skills`)
+  if (fs.existsSync(skillsSrc)) {
+    fs.cpSync(skillsSrc, skillsDest, { recursive: true, force: true })
+    const pyCount = fs.readdirSync(skillsDest, { recursive: true }).filter((f) => f.endsWith(".py")).length
+    console.log(`Bundled ${pyCount} Python skill scripts for ${name}`)
+  }
+
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/dreamcode`
     console.log(`Running smoke test: ${binaryPath} --version`)
@@ -347,15 +356,6 @@ if (singleFlag || win32Flag) {
 
 if (Script.release || win32Flag) {
   for (const key of Object.keys(binaries)) {
-    // Bundle Python skill scripts alongside the binary in the release archive
-    const skillsSrc = path.resolve(import.meta.dir, "../src/skill/dreamcode/skills")
-    const skillsDest = path.resolve(`dist/${key}/bin/skills`)
-    if (fs.existsSync(skillsSrc)) {
-      fs.cpSync(skillsSrc, skillsDest, { recursive: true, force: true })
-      const pyCount = fs.readdirSync(skillsDest, { recursive: true }).filter((f) => f.endsWith(".py")).length
-      console.log(`Bundled ${pyCount} Python skill scripts for ${key}`)
-    }
-
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
     } else {

@@ -28,13 +28,31 @@ export function resolvePythonCommand(): string {
   if (envPython) return envPython
 
   if (isWindows()) {
-    // Windows: try `py -3` (Python Launcher), then `python`, then `python3`
-    // We return just the base command; callers handle args
+    // Windows: `py` (Python Launcher) is the recommended command
+    // If `py` fails at runtime (e.g. WSL interop, no Python Launcher),
+    // callers should fall back via resolvePythonCommands()
     return "py"
   }
 
   // Unix: `python3` is standard, `python` as fallback
   return "python3"
+}
+
+/**
+ * Returns all candidate Python commands for the current platform in priority order.
+ * Callers can try each in sequence if the primary command fails.
+ */
+export function resolvePythonCommands(): string[] {
+  const envPython = process.env.PYTHON_PATH || process.env.DREAMCODE_PYTHON
+  if (envPython) return [envPython]
+
+  if (isWindows()) {
+    // Windows: py launcher first, then python/python3 variants
+    return ["py", "python", "python3"]
+  }
+
+  // Unix: python3 first, python as fallback
+  return ["python3", "python"]
 }
 
 /**
@@ -53,6 +71,16 @@ export function getPythonArgs(): string[] {
  * Checks multiple candidate locations in order.
  */
 export function resolveSkillsDir(): string {
+  // Environment variable override (highest priority)
+  const envSkillsDir = process.env.DREAMCODE_SKILLS_DIR
+  if (envSkillsDir) {
+    try {
+      if (existsSync(envSkillsDir) && statSync(envSkillsDir).isDirectory()) return envSkillsDir
+    } catch (e) {
+      console.warn(`[python-resolver] DREAMCODE_SKILLS_DIR=${envSkillsDir} not accessible:`, e)
+    }
+  }
+
   const candidates = [
     // Check if scripts are bundled alongside the binary itself (release artifact)
     ...(isWindows() ? [
