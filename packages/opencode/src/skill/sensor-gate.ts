@@ -4,7 +4,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
-import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl } from "./python-resolver"
+import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, HOME, isWindows, debugLog } from "./python-resolver"
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
@@ -543,7 +543,7 @@ function runSensorGateEffect(
 ): Effect.Effect<SensorGateResult | null> {
   const sensorGate = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
   if (!sensorGate) {
-    console.warn("[sensor-gate] sensor_gate.py not found in any skills directory")
+    debugLog("[sensor-gate] sensor_gate.py not found in any skills directory")
     return Effect.succeed(null)
   }
 
@@ -557,35 +557,42 @@ function runSensorGateEffect(
       // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
       // and writer.close() doesn't send EOF through them, causing Python's
       // sys.stdin.read() to block forever. Temp file avoids this entirely.
-      const tmpBase = process.env.XDG_RUNTIME_DIR
-        ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
-        : path.join(projectRoot, ".dreamcode", "tmp")
+      const tmpBase = isWindows()
+        ? path.join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
+        : process.env.XDG_RUNTIME_DIR
+          ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
+          : path.join(projectRoot, ".dreamcode", "tmp")
       let tmpDir = ""
       let tmpFile = ""
       try {
         fs.mkdirSync(tmpBase, { recursive: true })
         tmpDir = fs.mkdtempSync(path.join(tmpBase, "sg-"))
-        fs.chmodSync(tmpDir, 0o700)
+        // chmod is a no-op on Windows; skip it to avoid potential throw in edge cases
+        if (!isWindows()) fs.chmodSync(tmpDir, 0o700)
         tmpFile = path.join(tmpDir, "prompt.txt")
         fs.writeFileSync(tmpFile, clamped, "utf-8")
+        debugLog("[sensor-gate] temp file created:", tmpFile)
       } catch (e) {
-        console.warn("[sensor-gate] failed to create tmp file, falling back to --prompt arg", { error: String(e) })
+        debugLog("[sensor-gate] failed to create tmp file, falling back to --prompt arg:", e)
         tmpFile = ""
       }
 
       // Cross-platform Python resolution with fallback chain.
       // Try each candidate Python command in sequence until one works.
       const pythonCmds = resolvePythonCommands()
-      const versionArgs = getPythonArgs()
 
       let proc: ReturnType<typeof Bun.spawn> | undefined
       const output = yield* Effect.tryPromise({
         try: async () => {
           let lastError: unknown
+          debugLog("[sensor-gate] Python commands to try:", pythonCmds)
+          debugLog("[sensor-gate] sensor gate script:", sensorGate)
           for (const cmd of pythonCmds) {
+            const versionArgs = getPythonArgs(cmd)
             const args = tmpFile
-              ? [cmd, ...(cmd === "py" ? versionArgs : []), sensorGate, "--prompt-file", tmpFile]
-              : [cmd, ...(cmd === "py" ? versionArgs : []), sensorGate, "--prompt", clamped]
+              ? [cmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
+              : [cmd, ...versionArgs, sensorGate, "--prompt", clamped]
+            debugLog("[sensor-gate] trying:", cmd, "args:", args)
             try {
               proc = Bun.spawn(args, {
                 cwd: projectRoot,
@@ -593,29 +600,31 @@ function runSensorGateEffect(
                 stderr: "pipe",
               })
               const text = await new Response(proc.stdout).text()
-              // Log stderr from Python subprocess (never empty on failure)
+              // Wait for process to fully exit before checking output
+              // Without this, Windows may close pipes before the process flushes
+              await proc.exited
               const stderrText = await new Response(proc.stderr).text().catch(() => "")
               if (stderrText.trim()) {
-                console.warn("[sensor-gate] python subprocess stderr", { stderr: stderrText.slice(0, 2000) })
+                debugLog("[sensor-gate] python subprocess stderr:", stderrText.slice(0, 2000))
               }
-              // If we got output, this command worked
-              if (text) return text
-              // Empty output might mean the command isn't actually Python (e.g. Windows `py` with no args)
-              // Continue to next fallback
-              console.warn(`[sensor-gate] empty output from '${cmd}', trying next fallback`)
+              debugLog("[sensor-gate] stdout from", cmd, ":", text ? text.slice(0, 200) + "..." : "(empty)")
+              if (text) {
+                debugLog("[sensor-gate] SUCCESS with command:", cmd)
+                return text
+              }
+              debugLog(`[sensor-gate] empty output from '${cmd}', trying next fallback`)
             } catch (e) {
-              console.warn(`[sensor-gate] '${cmd}' failed, trying next fallback`, { error: String(e) })
+              debugLog(`[sensor-gate] '${cmd}' failed, trying next fallback:`, String(e))
               lastError = e
             }
           }
-          // All fallbacks exhausted
-          console.warn("[sensor-gate] all Python commands failed", { error: lastError ? String(lastError) : "unknown" })
+          debugLog("[sensor-gate] ALL Python commands failed:", lastError)
           return "" as string
         },
       }).pipe(
         Effect.timeout(Duration.millis(timeoutMs)),
         Effect.catch((e) => {
-          console.warn("[sensor-gate] subprocess timeout or error", { error: String(e), timeoutMs })
+          debugLog("[sensor-gate] subprocess timeout or error:", String(e), "timeoutMs:", timeoutMs)
           return Effect.succeed("")
         }),
       )
@@ -629,13 +638,13 @@ function runSensorGateEffect(
         try { fs.rmdirSync(tmpDir) } catch {}
       }
       if (!output) {
-        console.warn("[sensor-gate] empty output from subprocess — sensor gate returning default result")
+        debugLog("[sensor-gate] empty output from subprocess — returning default result")
         return parseSensorGateOutput("")
       }
       return parseSensorGateOutput(output)
     }).pipe(
       Effect.catch((e) => {
-        console.warn("[sensor-gate] runSensorGate subprocess failed", { error: String(e), timeoutMs })
+        debugLog("[sensor-gate] runSensorGate subprocess failed:", String(e), "timeoutMs:", timeoutMs)
         return Effect.succeed(null) as Effect.Effect<SensorGateResult | null>
       }),
     )
@@ -669,16 +678,18 @@ function runNeuroHarnessEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
-      const tmpBase = process.env.XDG_RUNTIME_DIR
-        ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
-        : path.join(projectRoot, ".dreamcode", "tmp")
+      const tmpBase = isWindows()
+        ? path.join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
+        : process.env.XDG_RUNTIME_DIR
+          ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
+          : path.join(projectRoot, ".dreamcode", "tmp")
       try { fs.mkdirSync(tmpBase, { recursive: true }) } catch (e) {
-        console.warn("[sensor-gate] failed to create tmp base dir", { error: String(e), tmpBase })
+        debugLog("[sensor-gate] failed to create tmp base dir:", String(e), "tmpBase:", tmpBase)
       }
       let tmpDir = ""
       try {
         tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
-        fs.chmodSync(tmpDir, 0o700)
+        if (!isWindows()) fs.chmodSync(tmpDir, 0o700)
       } catch {}
       const tmpFile = tmpDir ? path.join(tmpDir, "prompt.txt") : ""
       try {
@@ -715,7 +726,9 @@ function runNeuroHarnessEffect(
               cwd: projectRoot,
               stdio: ["pipe", "pipe", "pipe"],
             })
-            return await new Response(proc.stdout).text()
+            const text = await new Response(proc.stdout).text()
+            await proc.exited
+            return text
           },
           catch: () => "" as string,
         }).pipe(
@@ -724,7 +737,7 @@ function runNeuroHarnessEffect(
         )
         return output || null
       } catch (e) {
-        console.warn("[sensor-gate] runNeuroHarness subprocess failed", { error: String(e), timeoutMs })
+        debugLog("[sensor-gate] runNeuroHarness subprocess failed:", String(e), "timeoutMs:", timeoutMs)
         return null
       } finally {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
@@ -806,7 +819,7 @@ export const layer = Layer.effect(
           })
           if (neuroResult) {
             if (neuroResult.includes('"status": "skipped"') || neuroResult.includes('"status":"skipped"')) {
-              console.warn("[sensor-gate] NEURO analysis skipped — NEURO_API_KEY not set. Sign up at https://neurometric.ai to get your free API key.")
+              debugLog("[sensor-gate] NEURO analysis skipped — NEURO_API_KEY not set")
             } else {
               const validated = validateNeuroOutput(neuroResult)
               if (validated) result.neuro_result = validated

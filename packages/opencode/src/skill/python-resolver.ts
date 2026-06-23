@@ -7,14 +7,41 @@
  * This module also resolves the path to Python scripts that are installed
  * alongside the dreamcode binary.
  */
-import { existsSync, statSync } from "fs"
+import { existsSync, statSync, appendFileSync, mkdirSync } from "fs"
 import { join, dirname } from "path"
 import { homedir } from "os"
 
-/** Single source of truth for user home directory across the skill subsystem. */
-export const HOME = process.env.HOME || process.env.USERPROFILE || homedir() || "/tmp"
+/**
+ * Normalize a home directory path on Windows.
+ * Git for Windows sets HOME to POSIX-style paths like /c/Users/username,
+ * which break existsSync() checks in the rest of the resolver.
+ */
+function normalizeHome(raw: string): string {
+  if (process.platform === "win32" && raw.startsWith("/")) {
+    const match = raw.match(/^\/([a-zA-Z])(\/.*)$/)
+    if (match) return `${match[1]}:${match[2]}`
+  }
+  return raw
+}
 
-function isWindows(): boolean {
+/** Single source of truth for user home directory across the skill subsystem. */
+export const HOME = normalizeHome(process.env.HOME || process.env.USERPROFILE || homedir() || "/tmp")
+
+/** File-based debug logger. Activated by DREAMCODE_DEBUG=1 env var. */
+export function debugLog(...args: unknown[]): void {
+  if (process.env.DREAMCODE_DEBUG !== "1") return
+  const line = `[${new Date().toISOString()}] ${args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ")}`
+  // Write to stderr so it's visible in terminal for --print-logs / --log-level DEBUG
+  console.error(line)
+  // Also write to a file for post-mortem analysis
+  try {
+    const logPath = join(HOME, ".dreamcode", "logs", "python-resolver.log")
+    mkdirSync(dirname(logPath), { recursive: true })
+    appendFileSync(logPath, line + "\n")
+  } catch {}
+}
+
+export function isWindows(): boolean {
   return process.platform === "win32"
 }
 
@@ -58,9 +85,13 @@ export function resolvePythonCommands(): string[] {
 /**
  * Get the arguments to pass for Python version specification on Windows.
  * For `py`, we need `-3` flag. For `python`/`python3`, no extra args needed.
+ *
+ * @param cmd - The actual Python command being used (from fallback loop).
+ *              Falls back to resolvePythonCommand() if omitted.
  */
-export function getPythonArgs(): string[] {
-  if (isWindows() && resolvePythonCommand() === "py") {
+export function getPythonArgs(cmd?: string): string[] {
+  const effectiveCmd = cmd || resolvePythonCommand()
+  if (isWindows() && effectiveCmd === "py") {
     return ["-3"]
   }
   return []
@@ -77,7 +108,7 @@ export function resolveSkillsDir(): string {
     try {
       if (existsSync(envSkillsDir) && statSync(envSkillsDir).isDirectory()) return envSkillsDir
     } catch (e) {
-      console.warn(`[python-resolver] DREAMCODE_SKILLS_DIR=${envSkillsDir} not accessible:`, e)
+      debugLog(`[python-resolver] DREAMCODE_SKILLS_DIR=${envSkillsDir} not accessible:`, e)
     }
   }
 
@@ -100,14 +131,16 @@ export function resolveSkillsDir(): string {
   ]
   for (const dir of candidates) {
     try {
-      if (existsSync(dir) && statSync(dir).isDirectory()) return dir
+      if (existsSync(dir) && statSync(dir).isDirectory()) {
+        debugLog("[python-resolver] found skills dir:", dir)
+        return dir
+      }
+      debugLog("[python-resolver] skills dir not found:", dir)
     } catch (e) {
-      console.warn(`[python-resolver] error checking skills dir ${dir}:`, e)
+      debugLog("[python-resolver] error checking skills dir:", dir, e)
     }
   }
-  console.warn(
-    "[python-resolver] no skills directory found among candidates; chain executor and sensor gate scripts will be unavailable",
-  )
+  debugLog("[python-resolver] NO skills directory found among candidates")
   return ""
 }
 
@@ -124,11 +157,16 @@ export function resolveScript(relativePath: string): string | undefined {
   ]
   for (const p of candidates) {
     try {
-      if (existsSync(p)) return p
+      if (existsSync(p)) {
+        debugLog("[python-resolver] found script:", p)
+        return p
+      }
+      debugLog("[python-resolver] script not found:", p)
     } catch (e) {
-      console.warn(`[python-resolver] error checking script path ${p}:`, e)
+      debugLog("[python-resolver] error checking script path:", p, e)
     }
   }
+  debugLog("[python-resolver] script NOT FOUND:", relativePath)
   return undefined
 }
 
