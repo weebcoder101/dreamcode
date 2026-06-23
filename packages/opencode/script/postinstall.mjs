@@ -138,9 +138,25 @@ function installPackage(name) {
     if (result.status !== 0) return
     const packageDir = path.join(temp, "node_modules", name)
     copyBinary(path.join(packageDir, "bin", sourceBinary), targetBinary)
+    copySkills(path.join(packageDir, "bin", "skills"))
     return true
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })
+  }
+}
+
+function copySkills(sourceDir) {
+  if (!sourceDir || !fs.existsSync(sourceDir)) return
+  const targetDir = path.join(os.homedir(), ".dreamcode", "skills")
+  // Skip if target already exists and has content (don't overwrite customizations)
+  try {
+    if (fs.existsSync(targetDir) && fs.readdirSync(targetDir).length > 0) return
+  } catch { /* fall through to copy */ }
+  try {
+    fs.mkdirSync(targetDir, { recursive: true })
+    fs.cpSync(sourceDir, targetDir, { recursive: true, force: true })
+  } catch (e) {
+    console.warn(`[postinstall] failed to copy skills: ${e.message ?? e}`)
   }
 }
 
@@ -168,7 +184,9 @@ function verifyBinary() {
 function main() {
   for (const name of packageNames()) {
     try {
-      copyBinary(resolveBinary(name), targetBinary)
+      const binaryPath = resolveBinary(name)
+      copyBinary(binaryPath, targetBinary)
+      copySkills(path.join(path.dirname(binaryPath), "skills"))
       if (verifyBinary()) return
     } catch {
       if (installPackage(name) && verifyBinary()) return

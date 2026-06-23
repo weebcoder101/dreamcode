@@ -12,12 +12,7 @@ import * as Tool from "./tool"
 import * as path from "path"
 import * as fs from "fs"
 import DESCRIPTION from "./skill.txt"
-import { resolvePythonCommand, getPythonArgs, resolveSkillsDir as resolveSkillsDirImpl } from "@/skill/python-resolver"
-
-const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
-
-// Re-export resolveSkillsDir from python-resolver
-const resolveSkillsDir = resolveSkillsDirImpl
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME } from "@/skill/python-resolver"
 
 const SKILLS_DIR = resolveSkillsDir()
 const CHAIN_LOG = path.join(HOME, ".dreamcode", "chain_log.jsonl")
@@ -135,7 +130,6 @@ function sanitizeSensorGateOutput(raw: string): string {
 // Unix socket EOF issue in compiled binaries.
 const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (prompt: string) {
   if (!SENSOR_GATE || !fs.existsSync(SENSOR_GATE)) return ""
-  const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
   const tmpBase = process.env.XDG_RUNTIME_DIR
     ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
     : path.join(HOME, ".dreamcode", "tmp")
@@ -189,7 +183,6 @@ const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (promp
 // Prompt is written to a temp file instead of stdin pipe to avoid Bun.spawn
 // Unix socket EOF issue in compiled binaries.
 const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (script: string, prompt: string) {
-  const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
   const tmpBase = process.env.XDG_RUNTIME_DIR
     ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
     : path.join(HOME, ".dreamcode", "tmp")

@@ -524,8 +524,6 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
 // Re-export resolveSkillsDir and resolveScript from python-resolver for backward compatibility
 export { resolveSkillsDir, resolveScript } from "./python-resolver"
 
-const VALID_SCAN_TYPES = new Set(["security", "full_audit", "bug_hunt", "test_gap"])
-
 const INITIAL_TIMEOUT_MS = 150_000
 const RETRY_TIMEOUT_MS = 300_000
 
@@ -544,7 +542,10 @@ function runSensorGateEffect(
   projectRoot: string,
 ): Effect.Effect<SensorGateResult | null> {
   const sensorGate = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
-  if (!sensorGate) return Effect.succeed(null)
+  if (!sensorGate) {
+    console.warn("[sensor-gate] sensor_gate.py not found in any skills directory")
+    return Effect.succeed(null)
+  }
 
   const clamped = prompt.length > SAFE_PROMPT_MAX
     ? prompt.slice(0, SAFE_PROMPT_MAX) + "\n\n[Prompt truncated at 100K characters]"

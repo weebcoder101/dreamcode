@@ -7,11 +7,15 @@
  * This module also resolves the path to Python scripts that are installed
  * alongside the dreamcode binary.
  */
-import * as fs from "fs"
-import * as path from "path"
+import { existsSync, statSync } from "fs"
+import { join, dirname } from "path"
 
-const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
-const IS_WINDOWS = process.platform === "win32"
+/** Single source of truth for user home directory across the skill subsystem. */
+export const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
+
+function isWindows(): boolean {
+  return process.platform === "win32"
+}
 
 /**
  * Resolve the Python command for the current platform.
@@ -22,7 +26,7 @@ export function resolvePythonCommand(): string {
   const envPython = process.env.PYTHON_PATH || process.env.DREAMCODE_PYTHON
   if (envPython) return envPython
 
-  if (IS_WINDOWS) {
+  if (isWindows()) {
     // Windows: try `py -3` (Python Launcher), then `python`, then `python3`
     // We return just the base command; callers handle args
     return "py"
@@ -37,20 +41,10 @@ export function resolvePythonCommand(): string {
  * For `py`, we need `-3` flag. For `python`/`python3`, no extra args needed.
  */
 export function getPythonArgs(): string[] {
-  if (IS_WINDOWS && resolvePythonCommand() === "py") {
+  if (isWindows() && resolvePythonCommand() === "py") {
     return ["-3"]
   }
   return []
-}
-
-/**
- * Build the full command array for Bun.spawn to execute a Python script.
- * Handles platform-specific Python resolution.
- */
-export function buildPythonArgs(scriptPath: string, scriptArgs: string[]): string[] {
-  const pythonCmd = resolvePythonCommand()
-  const versionArgs = getPythonArgs()
-  return [pythonCmd, ...versionArgs, scriptPath, ...scriptArgs]
 }
 
 /**
@@ -60,29 +54,32 @@ export function buildPythonArgs(scriptPath: string, scriptArgs: string[]): strin
 export function resolveSkillsDir(): string {
   const candidates = [
     // Check if scripts are bundled alongside the binary itself (release artifact)
-    ...(process.platform === "win32" ? [
-      path.join(path.dirname(process.execPath), "skills"),
-      path.join(HOME, "AppData", "Roaming", "dreamcode", "skills"),
+    ...(isWindows() ? [
+      join(dirname(process.execPath), "skills"),
+      join(HOME, "AppData", "Roaming", "dreamcode", "skills"),
     ] : [
-      path.join(path.dirname(process.execPath), "skills"),
+      join(dirname(process.execPath), "skills"),
     ]),
     // Standard XDG/Unix paths
-    path.join(HOME, ".config", "dreamcode", "skills"),
-    path.join(HOME, ".dreamcode", "skills"),
-    path.join(HOME, ".config", "opencode", "skills"),
-    path.join(HOME, ".opencode", "skills"),
+    join(HOME, ".config", "dreamcode", "skills"),
+    join(HOME, ".dreamcode", "skills"),
+    join(HOME, ".config", "opencode", "skills"),
+    join(HOME, ".opencode", "skills"),
     // Project-local paths
-    path.join(process.cwd(), ".dreamcode", "skills"),
-    path.join(process.cwd(), ".opencode", "skills"),
+    join(process.cwd(), ".dreamcode", "skills"),
+    join(process.cwd(), ".opencode", "skills"),
   ]
   for (const dir of candidates) {
     try {
-      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir
+      if (existsSync(dir) && statSync(dir).isDirectory()) return dir
     } catch (e) {
       console.warn(`[python-resolver] error checking skills dir ${dir}:`, e)
     }
   }
-  return candidates[0]
+  console.warn(
+    "[python-resolver] no skills directory found among candidates; chain executor and sensor gate scripts will be unavailable",
+  )
+  return ""
 }
 
 /**
@@ -92,13 +89,13 @@ export function resolveSkillsDir(): string {
 export function resolveScript(relativePath: string): string | undefined {
   const skillsDir = resolveSkillsDir()
   const candidates = [
-    path.join(skillsDir, relativePath),
-    path.join(process.cwd(), ".dreamcode", "skills", relativePath),
-    path.join(process.cwd(), ".opencode", "skills", relativePath),
+    ...(skillsDir ? [join(skillsDir, relativePath)] : []),
+    join(process.cwd(), ".dreamcode", "skills", relativePath),
+    join(process.cwd(), ".opencode", "skills", relativePath),
   ]
   for (const p of candidates) {
     try {
-      if (fs.existsSync(p)) return p
+      if (existsSync(p)) return p
     } catch (e) {
       console.warn(`[python-resolver] error checking script path ${p}:`, e)
     }
@@ -106,19 +103,4 @@ export function resolveScript(relativePath: string): string | undefined {
   return undefined
 }
 
-/**
- * Check if Python is available on the system.
- * Returns true if a Python command can be found.
- */
-export function isPythonAvailable(): boolean {
-  try {
-    const { execFileSync } = require("child_process")
-    execFileSync(resolvePythonCommand(), [...getPythonArgs(), "--version"], {
-      stdio: "pipe",
-      timeout: 5000,
-    })
-    return true
-  } catch {
-    return false
-  }
-}
+

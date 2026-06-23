@@ -4,14 +4,30 @@ import { InstanceState } from "@/effect/instance-state"
 import { Skill } from "@/skill"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
-import { resolvePythonCommand, getPythonArgs } from "./python-resolver"
+import fs from "fs"
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME } from "./python-resolver"
 
-const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
-
-function validateScriptPath(resolved: string, cwd?: string): boolean {
-  const allowedGlobal = path.resolve(HOME, ".config", "dreamcode", "skills")
+export function validateScriptPath(resolved: string, cwd?: string): boolean {
+  if (!resolved || !path.isAbsolute(resolved)) return false
+  // Resolve symlinks before checking to prevent sandbox escape
+  let realpath: string
+  try {
+    realpath = fs.realpathSync(resolved)
+  } catch {
+    // realpathSync throws when the file doesn't exist or permission denied.
+    // path.resolve does NOT resolve `..` segments — reject traversal patterns.
+    realpath = path.resolve(resolved)
+    if (realpath.includes("..")) return false
+  }
+  const skillsDir = resolveSkillsDir()
+  const allowedGlobal = skillsDir ? path.resolve(skillsDir) : null
+  const allowedHome = path.resolve(HOME, ".dreamcode", "skills")
   const allowedProject = path.resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
-  return resolved.startsWith(allowedGlobal) || resolved.startsWith(allowedProject)
+  return (
+    (allowedGlobal !== null && realpath.startsWith(allowedGlobal)) ||
+    realpath.startsWith(allowedHome) ||
+    realpath.startsWith(allowedProject)
+  )
 }
 
 export interface ChainResult {
@@ -73,7 +89,10 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
     catch: (err) => new Error(String(err)),
   }).pipe(
     Effect.timeout(Duration.seconds(150)),
-    Effect.catch(() => Effect.succeed("")),
+    Effect.catch(() => {
+      console.warn("[chain-executor] python script timed out", { script })
+      return Effect.succeed("")
+    }),
   )
 })
 
@@ -103,7 +122,10 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
     catch: (err) => new Error(String(err)),
   }).pipe(
     Effect.timeout(Duration.seconds(300)),
-    Effect.catch(() => Effect.succeed("")),
+    Effect.catch(() => {
+      console.warn("[chain-executor] advanced python script timed out", { script })
+      return Effect.succeed("")
+    }),
   )
 })
 
@@ -161,7 +183,11 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
 ) {
   const ctx = yield* InstanceState.contextOrNull
   const cwd = ctx?.directory ?? process.cwd()
-  const skillsDir = path.join(HOME, ".config", "dreamcode", "skills")
+  const skillsDir = resolveSkillsDir()
+  if (!skillsDir) {
+    console.warn("[chain-executor] skills directory not found, skipping pipeline")
+    return []
+  }
   const executorScript = path.join(skillsDir, "chain-orchestrator", "scripts", "orchestrator.py")
 
   // Run the full pipeline — caller already handles normal chain execution via execute()
@@ -180,7 +206,10 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
         ["--mode", chain.length > 3 ? "DREAM_INNOVATION" : "STANDARD", "--prompt", userPrompt],
         cwd,
       ).pipe(
-        Effect.catch(() => Effect.succeed("")),
+        Effect.catch(() => {
+          console.warn("[chain-executor] pipeline script timed out or failed", { path: executorScript })
+          return Effect.succeed("")
+        }),
       )
       if (pipelineResult) {
         results.push({
@@ -190,8 +219,8 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
         })
       }
     }
-  } catch {
-    // Pipeline script not available — skip
+  } catch (e) {
+    console.warn("[chain-executor] pipeline script not available", { path: executorScript, error: String(e) })
   }
 
   return results
@@ -200,7 +229,11 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
 export const verify = Effect.fn("ChainExecutor.verify")(function* (results: ChainResult[]) {
   const ctx = yield* InstanceState.contextOrNull
   const cwd = ctx?.directory ?? process.cwd()
-  const skillsDir = path.join(HOME, ".config", "dreamcode", "skills")
+  const skillsDir = resolveSkillsDir()
+  if (!skillsDir) {
+    console.warn("[chain-executor] skills directory not found, skipping verify")
+    return ""
+  }
   const enforcerScript = path.join(skillsDir, "chain-orchestrator", "scripts", "enforcer.py")
 
   try {
@@ -208,7 +241,10 @@ export const verify = Effect.fn("ChainExecutor.verify")(function* (results: Chai
       try: () => Bun.file(enforcerScript).exists(),
       catch: () => false,
     })
-    if (!exists) return ""
+    if (!exists) {
+      console.warn("[chain-executor] enforcer script not found, skipping verify", { path: enforcerScript })
+      return ""
+    }
 
     const summary = results
       .map((r) => `${r.name}: ${r.status}`)
@@ -219,11 +255,15 @@ export const verify = Effect.fn("ChainExecutor.verify")(function* (results: Chai
       ["--results", summary],
       cwd,
     ).pipe(
-      Effect.catch(() => Effect.succeed("")),
+      Effect.catch(() => {
+        console.warn("[chain-executor] verifier script timed out or failed", { path: enforcerScript })
+        return Effect.succeed("")
+      }),
     )
 
     return verifierResult || ""
-  } catch {
+  } catch (e) {
+    console.warn("[chain-executor] verify failed", { error: String(e) })
     return ""
   }
 })
@@ -245,4 +285,4 @@ export const defaultLayer = layer
 
 export const node = LayerNode.make(layer, [])
 
-export const ChainExecutor = { Service, layer, defaultLayer, node }
+export const ChainExecutor = { Service, layer, defaultLayer, node, validateScriptPath }

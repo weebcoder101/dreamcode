@@ -293,8 +293,9 @@ export const layer = Layer.effect(
           await cp(src, dst, { recursive: true }).catch(() => {})
         }
       },
-      catch: (e) => Effect.logError("failed to sync skills to global config", { error: String(e) }),
-    }).pipe(Effect.catch(() => Effect.void))
+    }).pipe(
+      Effect.catch((e) => Effect.logWarning("skill sync to global config failed (non-fatal)", { error: String(e) })),
+    )
 
     const discovered = yield* InstanceState.make(
       Effect.fn("Skill.discovery")(function* (ctx) {

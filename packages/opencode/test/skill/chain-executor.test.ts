@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { testEffect } from "../lib/effect"
 import { ChainExecutor } from "@/skill/chain-executor"
@@ -97,4 +97,30 @@ describe("ChainExecutor", () => {
       expect(first.status).toBe("not_found")
     }),
   )
+})
+
+describe("validateScriptPath", () => {
+  const cwd = "/tmp/test-project"
+
+  test("rejects empty string", () => {
+    expect(ChainExecutor.validateScriptPath("", cwd)).toBe(false)
+  })
+
+  test("rejects path traversal escape", () => {
+    const malicious = "/tmp/test-project/.dreamcode/skills/../../etc/passwd"
+    expect(ChainExecutor.validateScriptPath(malicious, cwd)).toBe(false)
+  })
+
+  test("rejects path pointing outside allowed dirs", () => {
+    expect(ChainExecutor.validateScriptPath("/bin/sh", cwd)).toBe(false)
+  })
+
+  test("rejects absolute path outside project", () => {
+    expect(ChainExecutor.validateScriptPath("/usr/local/bin/malware", cwd)).toBe(false)
+  })
+
+  test("rejects relative path that escapes cwd", () => {
+    const resolved = "/tmp/test-project/../../../etc/passwd"
+    expect(ChainExecutor.validateScriptPath(resolved, cwd)).toBe(false)
+  })
 })
