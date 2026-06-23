@@ -140,8 +140,11 @@ export function resolveSkillsDir(): string {
       debugLog("[python-resolver] error checking skills dir:", dir, e)
     }
   }
-  debugLog("[python-resolver] NO skills directory found among candidates")
-  return ""
+  debugLog("[python-resolver] NO skills directory found among candidates — falling back to first candidate")
+  // v1.2.9 behavior: always return first candidate even if nonexistent.
+  // This ensures resolveScript always has at least one candidate path to check,
+  // preventing silent failures when the skills dir exists but other checks fail.
+  return candidates[0] ?? ""
 }
 
 /**

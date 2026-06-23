@@ -34,7 +34,7 @@ import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
-import { SensorGate, evaluateSpawnNecessity, type Persona } from "@/skill/sensor-gate"
+import { SensorGate, evaluateSpawnNecessity, type Persona, type SensorGateResult } from "@/skill/sensor-gate"
 import { ChainExecutor } from "@/skill/chain-executor"
 import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
@@ -1633,7 +1633,7 @@ Before every response, verify your reasoning:
                   // ─── Persona System Injection ─────────────────────────
                   // Also enter when user explicitly requests N agents, even without
                   // sensor gate personas — explicit "spawn N agents" must not be lost.
-                  if (explicitSpawnCount > 0 || gateResult.personas.length > 0) {
+                  if (explicitSpawnCount > 0 || gateResult.personas.length > 0 || spawnEval.shouldSpawn) {
                     // ─── Spawn Necessity Check (reuses early-computed spawnEval) ─
                     if (!spawnEval.shouldSpawn) {
                       // Agent handles directly — inject sensor gate info but skip persona spawning
@@ -1651,8 +1651,13 @@ Before every response, verify your reasoning:
 
                     // Rate limit: truncate persona count to remaining budget
                     const rateCheck = checkRateLimit(sessionID)
-                    const personaTeam = explicitSpawnCount > 0 && gateResult.personas.length === 0
-                      ? Array.from({ length: Math.min(explicitSpawnCount, rateCheck.remaining) }, (_, i): Persona => ({
+                    const hasEmptyPersonas = gateResult.personas.length === 0
+                    const needSynthetic = hasEmptyPersonas && (explicitSpawnCount > 0 || spawnEval.shouldSpawn)
+                    const syntheticCount = needSynthetic
+                      ? (explicitSpawnCount > 0 ? explicitSpawnCount : spawnEval.suggestedCount)
+                      : 0
+                    const personaTeam = needSynthetic
+                      ? Array.from({ length: Math.min(syntheticCount, rateCheck.remaining) }, (_, i): Persona => ({
                           name: `Specialist ${i + 1}`,
                           role: "Agent",
                           focus: "Analyzing the user's request",
@@ -1949,7 +1954,7 @@ Before every response, verify your reasoning:
 
                 } else if (explicitSpawnCount > 0) {
                   // Sensor gate was null (crashed or unavailable) but user explicitly
-                  // requested spawn — inject guidance so the model spawns subagents.
+                  // requested spawn — create synthetic personas and spawn them directly.
                   sensorGateFired = true
                   sensorGateFiredMap.set(sessionID, true)
                   const currentRound = personaRoundMap.get(sessionID) ?? 0
@@ -1959,14 +1964,200 @@ Before every response, verify your reasoning:
                   if (rateCheck.allowed) {
                     const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
                     recordSpawn(sessionID, spawnCount)
-                    system.push([
+
+                    // Create synthetic personas for the explicit spawn request
+                    const syntheticPersonas: Persona[] = Array.from({ length: spawnCount }, (_, i): Persona => ({
+                      name: `Specialist ${i + 1}`,
+                      role: "Analysis Specialist",
+                      focus: "Analyzing the user's request from a specialist perspective",
+                      skills: [],
+                      task: `Analyze the user's request from your specialist perspective: ${userText.slice(0, 200)}`,
+                      goals: [
+                        "Identify issues and opportunities in the codebase",
+                        "Provide specific, actionable findings with file references",
+                        "Flag any blocking issues or high-priority concerns",
+                      ],
+                      synthesisGuide: `Include Specialist ${i + 1}'s findings in the synthesis.`,
+                    }))
+
+                    const personaTeam = syntheticPersonas.slice(0, spawnCount)
+
+                    const personaLines = [
+                      "<persona-system>",
+                      `You are the ARCHITECT. You have spawned ${personaTeam.length} specialist agent${personaTeam.length > 1 ? "s" : ""}:`,
                       "",
-                      "<explicit-spawn>",
-                      `The user requested ${spawnCount} specialist subagent${spawnCount > 1 ? "s" : ""} for analysis.`,
-                      `Spawn them via the task tool with "general" subagent_type.`,
-                      `This is ROUND ${currentRound + 1} of specialist analysis.`,
-                      "</explicit-spawn>",
-                    ].join("\n"))
+                    ]
+                    personaTeam.forEach((p, i) => {
+                      personaLines.push(`${i + 1}. "${p.name}" (${p.role})`)
+                      const taskDisplay = p.task.length > 120 ? p.task.slice(0, 117) + "..." : p.task
+                      personaLines.push(`   Task: ${taskDisplay}`)
+                      personaLines.push("")
+                    })
+                    personaLines.push(`This is ROUND ${currentRound + 1} of specialist analysis.`)
+                    personaLines.push("Each specialist provides findings asynchronously.")
+                    personaLines.push("Their results will arrive as user messages. Wait for them before acting.")
+                    personaLines.push("</persona-system>")
+                    const rateNow = checkRateLimit(sessionID)
+                    personaLines.push(`<rate-budget>${rateNow.remaining} of ${RATE_MAX_SPAWNS} specialist spawns remaining in this 5-minute window.</rate-budget>`)
+                    system.push(personaLines.join("\n"))
+
+                    // ─── ENFORCEMENT: Spawn persona subagents ────────────
+                    const { task: taskTool } = yield* registry.named()
+                    const subtaskOps = yield* ops({ disableTaskTool: true })
+                    const generalAgent = yield* agents.get("general")
+                    if (generalAgent) {
+                      const tracker = PersonaTracker.create(sessionID, personaTeam.length)
+
+                      const personaAssistantMsg: SessionV1.Assistant = yield* sessions.updateMessage({
+                        id: MessageID.ascending(),
+                        role: "assistant",
+                        parentID: lastUser.id,
+                        sessionID,
+                        mode: "general",
+                        agent: "general",
+                        variant: lastUser.model.variant,
+                        path: { cwd: ctx.directory, root: ctx.worktree },
+                        cost: 0,
+                        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                        providerID: model.providerID,
+                        modelID: model.id,
+                        time: { created: Date.now() },
+                      })
+
+                      const personaParts: SessionV1.ToolPart[] = yield* Effect.all(
+                        personaTeam.map((persona) =>
+                          sessions.updatePart({
+                            id: PartID.ascending(),
+                            messageID: personaAssistantMsg.id,
+                            sessionID,
+                            type: "tool",
+                            callID: ulid(),
+                            tool: TaskTool.id,
+                            state: {
+                              status: "running",
+                              input: {
+                                prompt: persona.focus,
+                                description: `persona:${persona.name}`,
+                                subagent_type: "general",
+                              },
+                              time: { start: Date.now() },
+                            },
+                          } as SessionV1.ToolPart),
+                        ),
+                      )
+
+                      const subagentCtx = extractSubagentContext(msgs)
+                      const contextBlock = buildSubagentContextPrompt(subagentCtx)
+
+                      yield* Effect.forEach(
+                        personaTeam,
+                        Effect.fnUntraced(function* (persona, i) {
+                          const part = personaParts[i]
+                          const otherContext = personaTeam.length > 1
+                            ? "\nOther specialist agents are analyzing related aspects of this task from their own focus areas.\nDo NOT duplicate work. Cover ONLY your assigned focus area.\n"
+                            : ""
+
+                          const personaPrompt = [
+                            "## Output Requirements",
+                            "Provide your findings as a STRUCTURED ANALYSIS with:",
+                            "1. **Summary**: One paragraph overview of your findings",
+                            "2. **Key Issues**: Bullet list of specific problems found (with file:line references)",
+                            "3. **Recommendations**: Actionable fixes with code snippets where possible",
+                            "4. **Confidence**: Rate your confidence (High/Medium/Low) for each finding",
+                            "",
+                            "Be CONCISE. Focus on ACTIONABLE items only.",
+                            otherContext,
+                            "",
+                            `## Synthesis Guide`,
+                            persona.synthesisGuide,
+                            "",
+                            contextBlock,
+                            "",
+                            "## User Prompt",
+                            sanitizeForSystemPrompt(userText.trim()),
+                            "",
+                            `## Your Identity`,
+                            `You are "${persona.name}" — ${persona.role}.`,
+                            `Your focus area: ${persona.focus}.`,
+                            ...(personaTeam.length > 1
+                              ? [
+                                  "",
+                                  "## Other Specialists",
+                                  ...personaTeam
+                                    .filter((_, j) => j !== i)
+                                    .map((o) => `- "${o.name}" (${o.role}) — focuses on ${o.focus}`),
+                                  "",
+                                ]
+                              : []),
+                            `## Task`,
+                            persona.task,
+                          ].join("\n")
+
+                          const markComplete = (status: "completed" | "error", output: string) =>
+                            Effect.gen(function* () {
+                              yield* tracker.complete(persona.name, persona.role, output, status, {
+                                task: persona.task,
+                                goals: persona.goals,
+                                synthesisGuide: persona.synthesisGuide,
+                              })
+                              const st = part.state as { status: string; time?: { start: number }; input: Record<string, any>; metadata?: Record<string, any> }
+                              yield* sessions.updatePart({
+                                ...part,
+                                type: "tool",
+                                state: status === "completed"
+                                  ? { ...st, status: "completed" as const, output, title: persona.name, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                  : { ...st, status: "error" as const, error: output, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                              } as SessionV1.ToolPart)
+                            }).pipe(Effect.catchCause((cause) => Effect.logWarning("markComplete failed", { cause })))
+
+                          yield* Effect.all([
+                            taskTool
+                              .execute(
+                                {
+                                  prompt: personaPrompt,
+                                  description: `persona:${persona.name}`,
+                                  subagent_type: "general",
+                                },
+                                {
+                                  agent: "general",
+                                  sessionID,
+                                  messageID: personaAssistantMsg.id,
+                                  messages: subagentCtx.recentMessages,
+                                  abort: new AbortController().signal,
+                                  callID: (part as SessionV1.ToolPart).callID,
+                                  extra: { bypassAgentCheck: true, promptOps: subtaskOps },
+                                  metadata: (meta) => Effect.gen(function* () {
+                                    yield* sessions.updatePart({
+                                      ...part,
+                                      type: "tool",
+                                      state: {
+                                        ...part.state,
+                                        title: meta.title ?? (part.state as any).title,
+                                        metadata: { ...(part.state as any).metadata, ...meta.metadata },
+                                      },
+                                    } as SessionV1.ToolPart)
+                                  }).pipe(Effect.catchCause((cause) => Effect.void)),
+                                  ask: () => Effect.succeed({ status: "allow" as const }),
+                                },
+                              )
+                              .pipe(
+                                Effect.tap((result) => markComplete("completed", result.output)),
+                                Effect.catchCause((cause) =>
+                                  markComplete("error", `persona died: ${Cause.pretty(cause)}`),
+                                ),
+                              ),
+                          ])
+                        }),
+                        { concurrency: 5 },
+                      )
+
+                      const personaResults = yield* tracker.getAll()
+                      synthesisText = PersonaTracker.buildSynthesisPrompt(personaResults)
+                      yield* Effect.promise(() =>
+                        PersonaTracker.injectSynthesis(sessionID, personaResults, sessions, model.providerID, model.id)
+                      ).pipe(Effect.catchCause((cause) => Effect.void))
+                    }
+                    // ─── End Enforcement ─────────────────────────────────
                   }
                 }
               }

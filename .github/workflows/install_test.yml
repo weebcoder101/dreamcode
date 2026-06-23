@@ -84,7 +84,7 @@ jobs:
           }
           # If git exists on runner but download failed, source build would run;
           # verify the binary wasn't built from dist (source build produces it there)
-          $distBinary = "dist\opencode-windows-x64\bin\opencode.exe"
+          $distBinary = "dist\dreamcode-windows-x64\bin\dreamcode.exe"
           $installedBinary = "$env:LOCALAPPDATA\dreamcode\bin\dreamcode.exe"
           if (Test-Path $distBinary) {
             $distHash = (Get-FileHash $distBinary -Algorithm SHA256).Hash

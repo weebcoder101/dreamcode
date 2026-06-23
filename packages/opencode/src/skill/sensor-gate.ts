@@ -8,6 +8,28 @@ import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkil
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
+
+/** Resolve a writable temp directory, trying project-local first then fallbacks. */
+function resolveTmpBase(projectRoot: string): string {
+  if (isWindows()) {
+    return path.join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
+  }
+  const candidates = [
+    path.join(projectRoot, ".dreamcode", "tmp"),
+    ...(process.env.XDG_RUNTIME_DIR ? [path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")] : []),
+    path.join(HOME, ".dreamcode", "tmp"),
+  ]
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      const testFile = path.join(dir, ".write-test")
+      fs.writeFileSync(testFile, "")
+      fs.unlinkSync(testFile)
+      return dir
+    } catch {}
+  }
+  return candidates[0]
+}
 const RATE_MAX_SPAWNS = 5
 
 export interface Persona {
@@ -557,11 +579,7 @@ function runSensorGateEffect(
       // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
       // and writer.close() doesn't send EOF through them, causing Python's
       // sys.stdin.read() to block forever. Temp file avoids this entirely.
-      const tmpBase = isWindows()
-        ? path.join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
-        : process.env.XDG_RUNTIME_DIR
-          ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
-          : path.join(projectRoot, ".dreamcode", "tmp")
+      const tmpBase = resolveTmpBase(projectRoot)
       let tmpDir = ""
       let tmpFile = ""
       try {
@@ -678,11 +696,7 @@ function runNeuroHarnessEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
-      const tmpBase = isWindows()
-        ? path.join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
-        : process.env.XDG_RUNTIME_DIR
-          ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
-          : path.join(projectRoot, ".dreamcode", "tmp")
+      const tmpBase = resolveTmpBase(projectRoot)
       try { fs.mkdirSync(tmpBase, { recursive: true }) } catch (e) {
         debugLog("[sensor-gate] failed to create tmp base dir:", String(e), "tmpBase:", tmpBase)
       }
@@ -768,6 +782,21 @@ export const layer = Layer.effect(
         // Generate personas from TypeScript when Python script doesn't output them
         if (result.personas.length === 0) {
           result.personas = selectPersonas(result)
+          // Fallback: when Python script fails (empty domain_tags = default result),
+          // selectPersonas() returns [] because there are no tags to match.
+          // Generate fallback personas so natural prompts can still trigger spawning.
+          if (result.personas.length === 0 && result.domain_tags.length === 0 && !result.is_social_greeting) {
+            const fallbackCount = Math.min(3, PERSONA_PROFILES.length)
+            result.personas = PERSONA_PROFILES.slice(0, fallbackCount).map((p) => ({
+              name: p.name,
+              role: p.role,
+              focus: p.focus,
+              skills: p.skills,
+              task: dynamicTaskFor(p, result.intent || prompt.slice(0, 200)),
+              goals: dynamicGoalsFor(p, result.intent || prompt.slice(0, 200)),
+              synthesisGuide: dynamicSynthesisFor(p),
+            }))
+          }
         } else {
           // Fill in dynamic task/goals/synthesisGuide for Python-provided personas
           result.personas = result.personas.map((p) => {
