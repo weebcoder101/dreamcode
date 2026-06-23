@@ -69,6 +69,8 @@ function sanitizeMessage(raw: string): string {
     .replace(/(ghp_|gho_|github_pat_)[a-zA-Z0-9_]{36,}/g, "[REDACTED TOKEN]")
     .replace(/(Authorization:\s*Bearer\s+)[a-zA-Z0-9_\-\.]+/gi, "$1[REDACTED]")
     .replace(/(api[-_]?key[-_]?["']?:\s*["']?)[a-zA-Z0-9_\-\.]{16,}/gi, "$1[REDACTED]")
+    .replace(/(AKIA[0-9A-Z]{16})/g, "[REDACTED AWS KEY]")
+    .replace(/("private_key"\s*:\s*")[^"]+/g, '$1[REDACTED GCP KEY]')
 }
 
 function logError(source: string, error: unknown) {

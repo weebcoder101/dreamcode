@@ -663,9 +663,12 @@ function runNeuroHarnessEffect(
       try { fs.mkdirSync(tmpBase, { recursive: true }) } catch (e) {
         console.warn("[sensor-gate] failed to create tmp base dir", { error: String(e), tmpBase })
       }
-      const tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
-      fs.chmodSync(tmpDir, 0o700)
-      const tmpFile = path.join(tmpDir, "prompt.txt")
+      let tmpDir = ""
+      try {
+        tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
+        fs.chmodSync(tmpDir, 0o700)
+      } catch {}
+      const tmpFile = tmpDir ? path.join(tmpDir, "prompt.txt") : ""
       try {
         const promptResult = buildPrompt({
           scanType,
@@ -673,7 +676,9 @@ function runNeuroHarnessEffect(
           context: clamped.slice(0, 8000),
         })
 
-        fs.writeFileSync(tmpFile, promptResult.userPrompt, { mode: 0o600 })
+        if (tmpFile) {
+          fs.writeFileSync(tmpFile, promptResult.userPrompt, { mode: 0o600 })
+        }
 
         const automationContext = JSON.stringify({
           task: clamped,
@@ -691,7 +696,7 @@ function runNeuroHarnessEffect(
               ...versionArgs,
               neuroHarness,
               "--scan-type", scanType,
-              "--file", tmpFile,
+              ...(tmpFile ? ["--file", tmpFile] : ["--prompt", clamped.slice(0, 8000)]),
               "--task", clamped.slice(0, 8000),
               "--automation-context", automationContext,
             ], {

@@ -9,9 +9,10 @@
  */
 import { existsSync, statSync } from "fs"
 import { join, dirname } from "path"
+import { homedir } from "os"
 
 /** Single source of truth for user home directory across the skill subsystem. */
-export const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp"
+export const HOME = process.env.HOME || process.env.USERPROFILE || homedir() || "/tmp"
 
 function isWindows(): boolean {
   return process.platform === "win32"

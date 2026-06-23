@@ -7,6 +7,13 @@ import path from "path"
 import fs from "fs"
 import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME } from "./python-resolver"
 
+function isUnderPrefix(realpath: string, allowedPrefix: string): boolean {
+  // Normalize: ensure prefix ends with separator to prevent sibling-directory escape
+  // e.g. prefix "/home/user/.dreamcode/skills" should NOT match "/home/user/.dreamcode/skills-evil"
+  const normalized = allowedPrefix.endsWith(path.sep) ? allowedPrefix : allowedPrefix + path.sep
+  return realpath === allowedPrefix || realpath.startsWith(normalized)
+}
+
 export function validateScriptPath(resolved: string, cwd?: string): boolean {
   if (!resolved || !path.isAbsolute(resolved)) return false
   // Resolve symlinks before checking to prevent sandbox escape
@@ -24,9 +31,9 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
   const allowedHome = path.resolve(HOME, ".dreamcode", "skills")
   const allowedProject = path.resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
   return (
-    (allowedGlobal !== null && realpath.startsWith(allowedGlobal)) ||
-    realpath.startsWith(allowedHome) ||
-    realpath.startsWith(allowedProject)
+    (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
+    isUnderPrefix(realpath, allowedHome) ||
+    isUnderPrefix(realpath, allowedProject)
   )
 }
 
