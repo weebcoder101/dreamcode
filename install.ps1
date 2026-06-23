@@ -61,7 +61,7 @@ if (-not $BuildFromSource) {
     $tag = $release.tag_name
     Write-Color "Latest release: $tag" $MUTED
   } catch {
-    Write-Color "WARN: Could not fetch latest release. Using v1.3.0." $ORANGE
+    Write-Color "WARN: Could not fetch latest release. Using v1.3.1." $ORANGE
     $tag = "v1.3.1"
   }
 

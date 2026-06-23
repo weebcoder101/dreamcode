@@ -1631,8 +1631,9 @@ Before every response, verify your reasoning:
                   }
 
                   // ─── Persona System Injection ─────────────────────────
-                  // Also enter when user explicitly requests N agents, even without
-                  // sensor gate personas — explicit "spawn N agents" must not be lost.
+                  // Also enter when user explicitly requests N agents, or when spawn
+                  // necessity evaluation determines specialists are needed, even
+                  // without sensor gate personas.
                   if (explicitSpawnCount > 0 || gateResult.personas.length > 0 || spawnEval.shouldSpawn) {
                     // ─── Spawn Necessity Check (reuses early-computed spawnEval) ─
                     if (!spawnEval.shouldSpawn) {

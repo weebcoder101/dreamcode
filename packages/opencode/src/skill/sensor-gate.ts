@@ -30,6 +30,7 @@ function resolveTmpBase(projectRoot: string): string {
   }
   return candidates[0]
 }
+
 const RATE_MAX_SPAWNS = 5
 
 export interface Persona {
