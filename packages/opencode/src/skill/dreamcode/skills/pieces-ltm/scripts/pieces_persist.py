@@ -6,10 +6,12 @@ Auto-persists skill chain results to Pieces LTM via MCP.
 Provides structured memory creation with metadata.
 """
 
+from __future__ import annotations
 import json
 import os
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
 
 # ---------------------------------------------------------------------------

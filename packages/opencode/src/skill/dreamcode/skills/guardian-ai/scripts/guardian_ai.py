@@ -17,13 +17,15 @@ Usage:
     python guardian_ai.py --prompt "user prompt here" --json
 """
 
+from __future__ import annotations
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
 
 # ---------------------------------------------------------------------------

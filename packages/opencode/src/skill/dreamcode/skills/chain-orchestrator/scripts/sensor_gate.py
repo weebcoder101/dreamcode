@@ -18,11 +18,13 @@ Usage:
     python sensor_gate.py --prompt "user prompt here" --json
 """
 
+from __future__ import annotations
 import json
 import re
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
 
 def _find_project_root() -> Path:

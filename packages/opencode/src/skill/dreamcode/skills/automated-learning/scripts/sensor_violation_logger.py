@@ -7,7 +7,8 @@ Used by the agent to self-track compliance.
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
 
 VIOLATIONS_FILE = Path(__file__).parent.parent / "evolution" / "automation_violations.jsonl"
