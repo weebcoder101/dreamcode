@@ -331,11 +331,7 @@ if ((singleFlag || win32Flag) && targets.length > 0) {
   } else {
     const binSymlink = path.join(binDir, "dreamcode")
     if (fs.existsSync(distBin)) {
-      try {
-        if (fs.existsSync(binSymlink)) {
-          fs.unlinkSync(binSymlink)
-        }
-      } catch {}
+      fs.rmSync(binSymlink, { force: true })
       fs.mkdirSync(binDir, { recursive: true })
       const rel = path.relative(binDir, distBin)
       fs.symlinkSync(rel, binSymlink)

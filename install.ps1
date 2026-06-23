@@ -299,6 +299,10 @@ if ($installSucceeded) {
     # Also update current session
     $env:Path = "$BIN_DIR;$env:Path"
     Write-Color "Added $BIN_DIR to user PATH" $GREEN
+    # Support CI (GitHub Actions): propagate PATH to subsequent steps
+    if ($env:GITHUB_PATH) {
+      Add-Content -Path $env:GITHUB_PATH -Value $BIN_DIR
+    }
   } else {
     Write-Color "$BIN_DIR already in PATH" $MUTED
   }
