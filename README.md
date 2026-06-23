@@ -45,14 +45,41 @@ git clone https://github.com/weebcoder101/dreamcode; cd dreamcode; .\install.ps1
 git clone https://github.com/weebcoder101/dreamcode
 cd dreamcode
 bun install
-cd packages/opencode && OPENCODE_VERSION=1.2.9 bun run build --single
-# The binary is at dist/opencode-<platform>-<arch>/bin/opencode
+cd packages/opencode && OPENCODE_VERSION=1.3.0 bun run build --single
+
+# The binary is at dist/dreamcode-<platform>-<arch>/bin/dreamcode
+# Create a symlink so `dreamcode` is available globally:
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/dist/dreamcode-linux-x64/bin/dreamcode" ~/.local/bin/dreamcode
+# (adjust "linux-x64" to your arch: darwin-x64, darwin-arm64, linux-arm64)
+export PATH="$HOME/.local/bin:$PATH"
+# Add the export line above to your ~/.bashrc or ~/.zshrc to make it permanent
+
+# Verify
+dreamcode --version
 ```
 
 **Windows (PowerShell):**
 ```powershell
-.\install.ps1 -BuildFromSource
+git clone https://github.com/weebcoder101/dreamcode
+cd dreamcode
+bun install
+cd packages\opencode; $env:OPENCODE_VERSION="1.3.0"; bun run build --single --skip-embed-web-ui
+
+# The binary is at .\dist\dreamcode-windows-x64\bin\dreamcode.exe
+# Copy it to a standard location and add to PATH:
+$dst = "$env:LOCALAPPDATA\dreamcode\bin"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Copy-Item "$pwd\dist\dreamcode-windows-x64\bin\dreamcode.exe" "$dst\dreamcode.exe" -Force
+$env:Path = "$dst;$env:Path"
+# Add the path to your PowerShell profile for future sessions:
+[Environment]::SetEnvironmentVariable("Path", "$dst;$env:Path", "User")
+
+# Verify
+dreamcode --version
 ```
+
+**Troubleshooting:** If `dreamcode: command not found`, ensure the symlink target path or `$dst` directory is on your `PATH`. On Linux/macOS run `echo $PATH` to check; on Windows open a new PowerShell terminal.
 
 ### Requirements
 
@@ -67,12 +94,12 @@ cd packages/opencode && OPENCODE_VERSION=1.2.9 bun run build --single
 
 | Platform | Binary | Installer | Status |
 |----------|--------|-----------|--------|
-| Linux x64 | `opencode-linux-x64` | `install.sh` | ✅ Primary |
-| Linux arm64 | `opencode-linux-arm64` | `install.sh` | ✅ |
-| macOS x64 (Intel) | `opencode-darwin-x64` | `install.sh` | ✅ |
-| macOS arm64 (Apple Silicon) | `opencode-darwin-arm64` | `install.sh` | ✅ |
-| Windows x64 | `opencode-windows-x64` | `install.ps1` | ✅ |
-| Windows arm64 | `opencode-windows-arm64` | `install.ps1` | ⚠️ Requires `-BuildFromSource` |
+| Linux x64 | `dreamcode-linux-x64` | `install.sh` | ✅ Primary |
+| Linux arm64 | `dreamcode-linux-arm64` | `install.sh` | ✅ |
+| macOS x64 (Intel) | `dreamcode-darwin-x64` | `install.sh` | ✅ |
+| macOS arm64 (Apple Silicon) | `dreamcode-darwin-arm64` | `install.sh` | ✅ |
+| Windows x64 | `dreamcode-windows-x64` | `install.ps1` | ✅ |
+| Windows arm64 | `dreamcode-windows-arm64` | `install.ps1` | ⚠️ Requires `-BuildFromSource` |
 
 ### Post-install
 
