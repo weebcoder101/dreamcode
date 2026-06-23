@@ -1476,6 +1476,17 @@ Before every response, verify your reasoning:
                     ? { shouldSpawn: true, reason: `User explicitly requested ${explicitSpawnCount} specialist agents`, suggestedCount: explicitSpawnCount }
                     : evaluateSpawnNecessity(gateResult, userText)
 
+                  // When the sensor gate's Python script failed (empty domain_tags, empty chain)
+                  // but the TypeScript fallback generated personas, override the necessity veto.
+                  // Without this, evaluateSpawnNecessity scores 0 and persona spawning is skipped,
+                  // causing the LLM to spawn generic subagents instead of named personas (Windows).
+                  const isFallbackPersonas = gateResult.domain_tags.length === 0 && gateResult.personas.length > 0
+                  if (isFallbackPersonas && !spawnEval.shouldSpawn) {
+                    spawnEval.shouldSpawn = true
+                    spawnEval.suggestedCount = Math.max(spawnEval.suggestedCount, gateResult.personas.length)
+                    spawnEval.reason = "Fallback personas generated after sensor gate failure"
+                  }
+
                   const sensorBlock = [
                     "<sensor-gate>",
                     `Intent: ${sanitizeForSystemPrompt(gateResult.intent)}`,
