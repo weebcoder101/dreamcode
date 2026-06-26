@@ -15,9 +15,10 @@
  */
 
 import type { Hooks, PluginInput, Plugin as PluginInstance } from "@opencode-ai/plugin"
-import { shouldRunPeriodicCheck, resetPeriodicTimer, categorizeQuestion } from "./token-predictor.js"
+import { resetPeriodicTimer, categorizeQuestion } from "./token-predictor.js"
 import { resolvePythonCommand, resolveSkillsDir, getPythonArgs } from "./python-resolver.js"
 import { createCircuitBreaker } from "./circuit-breaker.js"
+import { validateScriptPath } from "./chain-executor.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +36,7 @@ interface SessionState {
   lastPrompt: string
   lastQuestions: string[]
   lastRunTimestamp: number
+  lastCheckTime: number
   pendingPromise: Promise<PredictorResult | null> | null
 }
 
@@ -43,6 +45,7 @@ interface SessionState {
 // ---------------------------------------------------------------------------
 
 const SCRIPT_TIMEOUT_MS = 10_000 // 10 seconds
+const CHECK_INTERVAL_MS = 45_000 // 45 seconds between periodic checks
 const MAX_QUESTIONS = 5
 const QUESTIONS_TTL_MS = 60_000 // 60 seconds before questions expire
 
@@ -72,6 +75,12 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
   const scriptPath = `${skillsDir}/token-predictor/scripts/predict.py`
   const pythonCmd = resolvePythonCommand()
   const pythonArgs = getPythonArgs()
+
+  // Validate script path before execution
+  if (!validateScriptPath(scriptPath)) {
+    console.warn("[sensor-gate-enforcer] Script path validation failed:", scriptPath)
+    return null
+  }
 
   const args = [
     ...pythonArgs,
@@ -149,14 +158,16 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
         const prompt = textParts.join(" ")
         if (!prompt.trim()) return
 
-        // Check if 45s have elapsed
-        if (!shouldRunPeriodicCheck()) return
-
-        // Get or create session state
-        const sessionKey = input.client?.directory ?? "__default__"
+        // Check if 45s have elapsed (per-session)
+        const sessionKey = `${input.client?.directory ?? "__default__"}:${input.sessionID ?? "global"}`
         let state = sessionStates.get(sessionKey)
-        if (!state) {
-          state = { lastPrompt: "", lastQuestions: [], lastRunTimestamp: 0, pendingPromise: null }
+        if (state) {
+          const now = Date.now()
+          if (now - state.lastCheckTime < CHECK_INTERVAL_MS) return
+          state.lastCheckTime = now
+        } else {
+          // First call — create state and allow check
+          state = { lastPrompt: "", lastQuestions: [], lastRunTimestamp: 0, lastCheckTime: Date.now(), pendingPromise: null }
           sessionStates.set(sessionKey, state)
         }
 
@@ -187,15 +198,15 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
 
       // --- experimental.chat.system.transform: inject questions ---
       "experimental.chat.system.transform": async (_input, output) => {
-        const sessionKey = _input.client?.directory ?? "__default__"
+        const sessionKey = `${_input.client?.directory ?? "__default__"}:${_input.sessionID ?? "global"}`
         const state = sessionStates.get(sessionKey)
         if (!state) return
 
-        // If a predictor run is in-flight, wait briefly for it (max 2s)
+        // If a predictor run is in-flight, wait briefly for it (max 8s)
         if (state.pendingPromise) {
           await Promise.race([
             state.pendingPromise,
-            new Promise((resolve) => setTimeout(resolve, 2_000)),
+            new Promise((resolve) => setTimeout(resolve, 8_000)),
           ])
         }
 
@@ -205,7 +216,7 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
           "",
           "<shipping-checklist>",
           "Before proceeding, consider these shipping readiness questions:",
-          ...state.lastQuestions.map((q, i) => `  ${i + 1}. ${q}`),
+          ...state.lastQuestions.map((q, i) => `  ${i + 1}. ${q.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}`),
           "Answer each question before proceeding with the task.",
           "</shipping-checklist>",
           "",
@@ -213,8 +224,7 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
 
         output.system.push(questionBlock)
 
-        // Clear after injection to avoid re-injection
-        // Questions will be regenerated on next 45s cycle if needed
+        // Check TTL BEFORE clearing to avoid injecting stale questions
         if (Date.now() - state.lastRunTimestamp > QUESTIONS_TTL_MS) {
           state.lastQuestions = []
         }

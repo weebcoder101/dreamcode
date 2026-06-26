@@ -88,6 +88,13 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PYTHONPATH: process.env.PYTHONPATH ?? "",
+          NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
+          PROJECT_ROOT: cwd,
+        },
       })
       const text = await proc.stdout.text()
       await proc.exited
@@ -121,6 +128,13 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          PYTHONPATH: process.env.PYTHONPATH ?? "",
+          NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
+          PROJECT_ROOT: cwd,
+        },
       })
       const text = await proc.stdout.text()
       await proc.exited

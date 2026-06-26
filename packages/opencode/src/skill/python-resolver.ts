@@ -128,6 +128,8 @@ export function resolveSkillsDir(): string {
     // Project-local paths
     join(process.cwd(), ".dreamcode", "skills"),
     join(process.cwd(), ".opencode", "skills"),
+    // Source tree path (for development / unbundled installs)
+    join(process.cwd(), "packages", "opencode", "src", "skill", "dreamcode", "skills"),
   ]
   for (const dir of candidates) {
     try {

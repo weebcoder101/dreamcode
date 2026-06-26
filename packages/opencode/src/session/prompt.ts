@@ -1539,8 +1539,8 @@ Before every response, verify your reasoning:
                   // ─── ChainExecutor: Execute skills programmatically ──
                   // After loading skill content, run the chain executor
                   // to produce execution results for each skill.
-                  // Only runs when spawn is actually needed — saves ~7 Python spawns per trivial task.
-                  if (spawnEval.shouldSpawn && gateResult.chain.length > 0) {
+                  // Runs whenever a chain is selected — even simple tasks benefit from skill scripts.
+                  if (gateResult.chain.length > 0) {
                     const chainResults = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
                       Effect.catch((e) => {
                         console.warn("[chain-executor] execute() failed:", e)
@@ -1557,8 +1557,8 @@ Before every response, verify your reasoning:
                       }
                     }
 
-                    // Phase 5: Wire orphaned Python scripts — only for truly complex tasks
-                    if (gateResult.complexity === "high" || gateResult.chain.length > 3) {
+                    // Phase 5: Wire orphaned Python scripts — run for any task with 2+ skills
+                    if (gateResult.complexity === "high" || gateResult.chain.length > 1) {
                       const pipelineResults = yield* chainExecutor.runFullPipeline(gateResult.chain, userText).pipe(
                         Effect.catch((e) => {
                           console.warn("[chain-executor] runFullPipeline() failed:", e)

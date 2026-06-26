@@ -12,9 +12,11 @@
  * - 45s periodic timer via per-turn timestamp check
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { resolvePythonCommand, resolveSkillsDir, getPythonArgs } from "./python-resolver.js"
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker.js"
+import { createHash } from "crypto"
+import { validateScriptPath } from "./chain-executor.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,22 +61,6 @@ export function shouldRunPeriodicCheck(): boolean {
 export function resetPeriodicTimer(): void {
   lastCheckTime = 0
 }
-
-// ---------------------------------------------------------------------------
-// Service
-// ---------------------------------------------------------------------------
-
-export interface TokenPredictorInterface {
-  readonly generate: (params: {
-    prompt: string
-    projectRoot?: string
-    sessionContext?: string
-    neuroResult?: string
-    count?: number
-  }) => Effect.Effect<PredictorResult, string>
-}
-
-export class TokenPredictor extends Context.Service<TokenPredictor, TokenPredictorInterface>()("@dreamcode/TokenPredictor") {}
 
 // ---------------------------------------------------------------------------
 // Question Categorization (exported for shared use)
@@ -122,6 +108,11 @@ const generateImpl = (params: {
     const scriptPath = resolvePredictorScript()
     const pythonCmd = resolvePythonCommand()
     const pythonArgs = getPythonArgs()
+
+    // Validate script path before execution
+    if (!validateScriptPath(scriptPath)) {
+      return yield* Effect.fail(`Script path validation failed: ${scriptPath}`)
+    }
 
     // Build args
     const args: string[] = [
@@ -201,10 +192,10 @@ const generateImpl = (params: {
 
     predictorBreaker.recordSuccess()
 
-    // Map to typed result
-    const questions: ShippingQuestion[] = parsed.questions.map((q, i) => ({
+    // Map to typed result — use real SHA-256 hashes for dedup
+    const questions: ShippingQuestion[] = parsed.questions.map((q) => ({
       question: q,
-      questionHash: `q${i}`,
+      questionHash: createHash("sha256").update(q.toLowerCase().trim()).digest("hex"),
       category: categorizeQuestion(q),
     }))
 
@@ -218,9 +209,7 @@ const generateImpl = (params: {
   })
 
 // ---------------------------------------------------------------------------
-// Layer
+// Export generate function directly (no dead service layer)
 // ---------------------------------------------------------------------------
 
-export const TokenPredictorLive = Layer.succeed(TokenPredictor, {
-  generate: generateImpl,
-})
+export const generate = generateImpl

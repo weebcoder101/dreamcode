@@ -626,6 +626,12 @@ function runSensorGateEffect(
                 cwd: projectRoot,
                 stdout: "pipe",
                 stderr: "pipe",
+                env: {
+                  PATH: process.env.PATH,
+                  HOME: process.env.HOME,
+                  PYTHONPATH: process.env.PYTHONPATH ?? "",
+                  PROJECT_ROOT: projectRoot,
+                },
               })
               const text = await new Response(proc.stdout).text()
               // Wait for process to fully exit before checking output
@@ -758,6 +764,13 @@ function runNeuroHarnessEffect(
             ], {
               cwd: projectRoot,
               stdio: ["pipe", "pipe", "pipe"],
+              env: {
+                PATH: process.env.PATH,
+                HOME: process.env.HOME,
+                PYTHONPATH: process.env.PYTHONPATH ?? "",
+                NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
+                PROJECT_ROOT: projectRoot,
+              },
             })
             const text = await new Response(proc.stdout).text()
             await proc.exited
