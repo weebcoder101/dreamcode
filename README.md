@@ -6,6 +6,33 @@
 
 An open-source AI coding agent with native dream thinking, 37-skill dynamic graph, memory consolidation, and scoring enforcement.
 
+---
+
+> **🔴 WARNING — Parallel Subagents & Cost**
+>
+> DreamCode spawns **parallel subagent workers** to analyze your code from multiple perspectives
+> simultaneously. Each subagent runs its own LLM inference on a **separate model instance** and
+> consumes API tokens independently.
+>
+> **Without configuration, subagents use the SAME model as the parent — multiplying your costs.**
+> A typical task spawns 3-5 subagents. At Claude Opus pricing (~$15/1M input tokens), that's
+> $0.75 per task. With a cheaper model like `gpt-4o-mini` (~$0.15/1M), the same task costs
+> $0.0075 — **100x cheaper**.
+>
+> **How to configure:**
+> - **Parent model** — The main agent that orchestrates and synthesizes. Selected via `/models`
+>   in the TUI (or the model dialog in the footer).
+> - **Subagent model** — The parallel workers that do analysis. Selected via the **subagent model
+>   indicator** in the TUI footer. Click it to open the model selector and pick a cheaper model
+>   (e.g., `gpt-4o-mini`, `claude-3-haiku`, `deepseek-chat`).
+> - **Clear subagent override** — Use the "Clear" option in the subagent model dialog to reset
+>   back to the parent model.
+>
+> The parent agent orchestrates. Subagents execute analysis in parallel. **Don't pay premium
+> prices for parallel workers.**
+
+---
+
 ## Quick Install
 
 ### One-line install (recommended)
@@ -45,7 +72,7 @@ git clone https://github.com/weebcoder101/dreamcode; cd dreamcode; .\install.ps1
 git clone https://github.com/weebcoder101/dreamcode
 cd dreamcode
 bun install
-cd packages/opencode && OPENCODE_VERSION=1.3.0 bun run build --single
+cd packages/opencode && OPENCODE_VERSION=1.3.4 bun run build --single
 
 # The binary is at dist/dreamcode-<platform>-<arch>/bin/dreamcode
 # Create a symlink so `dreamcode` is available globally:
@@ -64,7 +91,7 @@ dreamcode --version
 git clone https://github.com/weebcoder101/dreamcode
 cd dreamcode
 bun install
-cd packages\opencode; $env:OPENCODE_VERSION="1.3.0"; bun run build --single --skip-embed-web-ui
+cd packages\opencode; $env:OPENCODE_VERSION="1.3.4"; bun run build --single --skip-embed-web-ui
 
 # The binary is at .\dist\dreamcode-windows-x64\bin\dreamcode.exe
 # Copy it to a standard location and add to PATH:
@@ -257,7 +284,7 @@ DreamCode is designed for Antigravity IDE. Open your project in Antigravity and 
 | **[GUIDE.md](GUIDE.md)** | Complete walkthrough — architecture, 37 skills, NEURO, Pieces LTM, advanced patterns |
 | **[SECURITY.md](SECURITY.md)** | Security policy, sandbox model, credential storage, vulnerability reporting |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | Development setup, PR guidelines, coding conventions |
-| **[AGENTS.md](AGENTS.md)** | Build system, architecture, code patterns (internal developers) |
+| **[AGENTS.md](AGENTS.md)** | Build system, architecture, code patterns (internal developers — gitignored) |
 | **[docs/](docs/)** | Detailed guides for specific features |
 
 ### Key Topics

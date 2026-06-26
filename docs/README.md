@@ -28,5 +28,5 @@ This directory contains detailed documentation for specific DreamCode features.
 
 ## For Developers
 
-- **[AGENTS.md](../AGENTS.md)** — Architecture decisions, code patterns, build system
+- **[AGENTS.md](../packages/opencode/AGENTS.md)** — Architecture decisions, code patterns, build system (internal developers)
 - **[docs/developers/](developers/)** — Plugin system, custom tools, skill authoring
