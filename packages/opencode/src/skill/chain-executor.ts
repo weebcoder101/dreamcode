@@ -204,8 +204,8 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
       continue
     }
 
-    // Execute the first discovered script
-    const script = scripts[0]
+    // Execute the first discovered script — prefer run.py as entry point
+    const script = scripts.find((s) => path.basename(s) === "run.py") ?? scripts[0]
     const scriptResult = yield* runPythonScript(script, userPrompt, cwd)
 
     if (scriptResult.exitCode !== 0) {

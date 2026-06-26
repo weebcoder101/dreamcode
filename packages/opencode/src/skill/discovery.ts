@@ -34,7 +34,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | Htt
     const cache = path.join(Global.Path.cache, "skills")
 
     const download = Effect.fn("Discovery.download")(function* (url: string, dest: string) {
-      if (yield* fs.exists(dest).pipe(Effect.orDie)) return true
+      if (yield* fs.exists(dest).pipe(Effect.catch(() => Effect.succeed(false)))) return true
 
       return yield* HttpClientRequest.get(url).pipe(
         http.execute,
@@ -86,7 +86,8 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Path.Path | Htt
             )
 
             const md = path.join(root, "SKILL.md")
-            return (yield* fs.exists(md).pipe(Effect.orDie)) ? root : null
+            const exists = yield* fs.exists(md).pipe(Effect.catch(() => Effect.succeed(false)))
+            return exists ? root : null
           }),
         { concurrency: skillConcurrency },
       )
