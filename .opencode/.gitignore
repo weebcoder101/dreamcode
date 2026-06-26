@@ -5,3 +5,8 @@ bun.lock
 .gitignore
 package-lock.json
 references/
+
+# 🔴 PRIVATE - Sumati persona data, NEVER upload
+AGENTS.md
+*sumati*
+*persona*

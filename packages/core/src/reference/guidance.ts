@@ -39,7 +39,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       load: Effect.fn("ReferenceGuidance.load")(function* () {
-        yield* boot.wait()
+        yield* boot.wait().pipe(Effect.orDie)
         const available = (yield* references.list())
           .filter((reference) => reference.description !== undefined)
           .map((reference) => ({

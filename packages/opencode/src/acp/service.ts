@@ -643,16 +643,16 @@ function makeUsageService(sdk: OpencodeClient) {
 
     yield* Effect.promise(() =>
       params.connection
-        .sessionUpdate({
-          sessionId: params.sessionID,
-          update: {
-            sessionUpdate: "usage_update",
-            used: message.tokens.input + message.tokens.cache.read,
-            size,
-            cost: { amount: UsageService.totalSessionCost(messages), currency: "USD" },
-          },
-        })
-        .catch(() => {}),
+          .sessionUpdate({
+            sessionId: params.sessionID,
+            update: {
+              sessionUpdate: "usage_update",
+              used: message.tokens.input + message.tokens.cache.read,
+              size,
+              cost: { amount: UsageService.totalSessionCost(messages), currency: "USD" },
+            },
+          })
+          .catch((e) => console.warn("acp: session update failed", e)),
     )
   })
 
@@ -669,7 +669,7 @@ function replayMessages(subscription: ACPEvent.Subscription | undefined, message
   if (!subscription) return Effect.void
   return Effect.promise(async () => {
     for (const message of messages) {
-      await subscription.replayMessage(message).catch(() => {})
+      await subscription.replayMessage(message).catch((e) => console.warn("acp: replay message failed", e))
     }
   })
 }

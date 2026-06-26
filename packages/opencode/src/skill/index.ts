@@ -290,7 +290,7 @@ export const layer = Layer.effect(
         for (const entry of entries) {
           const src = path.join(source, entry)
           const dst = path.join(globalSkillsDir, entry)
-          await cp(src, dst, { recursive: true }).catch(() => {})
+          await cp(src, dst, { recursive: true }).catch((e) => console.warn("skill: copy to global config failed", e))
         }
       },
     }).pipe(

@@ -2,11 +2,11 @@ import { Effect } from "effect"
 import { PluginV2 } from "../../plugin"
 import { ProviderV2 } from "../../provider"
 
-function resolveProject(options: Record<string, unknown>) {
+function resolveProject(options: Record<string, unknown>): string | undefined {
   // models.dev advertises GOOGLE_VERTEX_PROJECT for Vertex, while Google SDKs
   // and ADC examples commonly use the broader Google Cloud project aliases.
   return (
-    options.project ??
+    (options.project as string | undefined) ??
     process.env.GOOGLE_VERTEX_PROJECT ??
     process.env.GOOGLE_CLOUD_PROJECT ??
     process.env.GCP_PROJECT ??
@@ -14,9 +14,9 @@ function resolveProject(options: Record<string, unknown>) {
   )
 }
 
-function resolveLocation(options: Record<string, unknown>) {
+function resolveLocation(options: Record<string, unknown>): string {
   return (
-    options.location ??
+    (options.location as string | undefined) ??
     process.env.GOOGLE_VERTEX_LOCATION ??
     process.env.GOOGLE_CLOUD_LOCATION ??
     process.env.VERTEX_LOCATION ??

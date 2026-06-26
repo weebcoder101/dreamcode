@@ -310,8 +310,8 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
 const writeConfig = (directory: string, scenario: RecordedScenario, model: ModelsDev.Provider["models"][string]) =>
   Effect.promise(() =>
     Bun.write(
-      path.join(directory, "opencode.json"),
-      JSON.stringify({ $schema: "https://opencode.ai/config.json", ...scenario.config(model) }),
+      path.join(directory, "dreamcode.json"),
+      JSON.stringify({ $schema: "https://dreamcode.ai/config.json", ...scenario.config(model) }),
     ),
   )
 

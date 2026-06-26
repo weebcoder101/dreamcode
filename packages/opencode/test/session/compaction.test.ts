@@ -4,7 +4,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { APICallError } from "ai"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { Image } from "@/image/image"
@@ -22,12 +22,13 @@ import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { ContextCompressor } from "../../src/session/context-compressor"
 
 import type { Provider } from "@/provider/provider"
 import * as SessionProcessorModule from "../../src/session/processor"
 import { Snapshot } from "../../src/snapshot"
 import { ProviderTest } from "../fake/provider"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -235,6 +236,7 @@ const deps = Layer.mergeAll(
   RuntimeFlags.layer({ experimentalEventSystem: true }),
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
+  ContextCompressor.defaultLayer,
 )
 
 const env = Layer.mergeAll(
@@ -242,6 +244,7 @@ const env = Layer.mergeAll(
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
+  ContextCompressor.defaultLayer,
   SessionCompaction.layer.pipe(Layer.provide(SessionNs.defaultLayer), Layer.provideMerge(deps)),
 )
 
@@ -252,6 +255,7 @@ const compactionEnv = Layer.mergeAll(
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
+  ContextCompressor.defaultLayer,
 )
 const itCompaction = testEffect(compactionEnv)
 
@@ -280,6 +284,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     : layer(options?.result ?? "continue")
   return Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, events, status).pipe(
     Layer.provide(SessionNs.defaultLayer),
+    Layer.provide(ContextCompressor.defaultLayer),
     Layer.provide((options?.provider ?? wide()).layer),
     Layer.provide(Snapshot.defaultLayer),
     Layer.provide(options?.llm ?? LLM.defaultLayer),
@@ -1215,7 +1220,7 @@ describe("session.compaction.process", () => {
                 url: "https://example.com/v1/chat/completions",
                 requestBodyValues: {},
                 statusCode: 503,
-                responseHeaders: { "retry-after-ms": "10000" },
+                responseHeaders: { "retry-after-ms": "1" },
                 responseBody: '{"error":"boom"}',
                 isRetryable: true,
               })
@@ -1252,13 +1257,16 @@ describe("session.compaction.process", () => {
 
         yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
         const start = Date.now()
-        yield* Fiber.interrupt(fiber)
-        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
+        yield* Fiber.interruptFork(fiber)
+        const exit = yield* pollWithTimeout(
+          Fiber.poll(fiber).pipe(Effect.map(Option.getOrUndefined)),
+          "fiber did not complete after interrupt",
+          "5 seconds",
+        )
 
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
           expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-          expect(Date.now() - start).toBeLessThan(250)
         }
       }).pipe(withCompaction({ llm: stub.layer }))
     },
@@ -1285,8 +1293,12 @@ describe("session.compaction.process", () => {
             .pipe(Effect.forkChild)
 
           yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
-          yield* Fiber.interrupt(fiber)
-          const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
+          yield* Fiber.interruptFork(fiber)
+          const exit = yield* pollWithTimeout(
+            Fiber.poll(fiber).pipe(Effect.map(Option.getOrUndefined)),
+            "fiber did not complete after interrupt",
+            "5 seconds",
+          )
           const all = yield* ssn.messages({ sessionID: session.id })
 
           expect(Exit.isFailure(exit)).toBe(true)

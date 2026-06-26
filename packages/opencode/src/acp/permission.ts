@@ -32,7 +32,7 @@ export class Handler {
     const previous = this.queues.get(permission.sessionID) ?? Promise.resolve()
     const next = previous
       .then(() => this.process(event))
-      .catch(() => {})
+      .catch((e) => console.error("acp: permission process failed", e))
       .finally(() => {
         if (this.queues.get(permission.sessionID) === next) {
           this.queues.delete(permission.sessionID)
@@ -78,7 +78,7 @@ export class Handler {
     }
 
     if (permission.permission === "edit") {
-      await this.writeProposedEdit(session.id, permission.metadata).catch(() => {})
+      await this.writeProposedEdit(session.id, permission.metadata).catch((e) => console.warn("acp: proposed edit write failed", e))
     }
 
     await this.reply(permission.id, reply, session.cwd)

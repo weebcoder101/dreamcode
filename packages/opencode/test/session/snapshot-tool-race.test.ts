@@ -29,6 +29,7 @@ import { TestLLMServer } from "../lib/llm-server"
 
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
+import { Skill } from "../../src/skill"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -80,6 +81,7 @@ const root = LayerNode.group([
   Session.node,
   SessionProjector.node,
   SessionSummary.node,
+  Skill.node,
   Database.node,
   CrossSpawnSpawner.node,
   LayerNode.make(TestLLMServer.layer, []),
@@ -91,7 +93,7 @@ const it = testEffect(
       LayerNode.replace(LSP.node, lsp),
       LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })),
     ],
-  }),
+  }).pipe(Layer.provide(Skill.defaultLayer)),
 )
 
 const providerCfg = (url: string) => ({

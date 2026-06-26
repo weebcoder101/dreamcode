@@ -271,7 +271,7 @@ export const layer = Layer.effect(
               await fsNode.writeFile(path.join(Global.Path.config, "config.json"), JSON.stringify(result, null, 2))
               await fsNode.unlink(legacy)
             })
-            .catch(() => {}),
+            .catch(() => console.warn("failed to migrate legacy config")),
         )
       }
 
@@ -421,7 +421,7 @@ export const layer = Layer.effect(
         const deps: Fiber.Fiber<void>[] = []
 
         for (const dir of directories) {
-          if (dir.endsWith(".dreamcode") || dir === Flag.OPENCODE_CONFIG_DIR) {
+          if (dir.endsWith(".dreamcode") || dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
             for (const file of ["dreamcode.json", "dreamcode.jsonc"]) {
               const source = path.join(dir, file)
               yield* Effect.logDebug(`loading config from ${source}`)

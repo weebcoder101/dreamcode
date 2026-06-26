@@ -21,7 +21,7 @@ export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outpu
   const base = input.model.limit.input
     ? Math.max(0, input.model.limit.input - reserved)
     : Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
-  return Math.min(base, MAX_COMPACTION_THRESHOLD)
+  return input.model.limit.input ? base : Math.min(base, MAX_COMPACTION_THRESHOLD)
 }
 
 export function isOverflow(input: {

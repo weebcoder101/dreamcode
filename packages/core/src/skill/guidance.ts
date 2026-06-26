@@ -45,7 +45,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       load: Effect.fn("SkillGuidance.load")(function* (selection) {
-        yield* boot.wait()
+        yield* boot.wait().pipe(Effect.orDie)
         const agent = selection.info
         if (!agent) return SystemContext.empty
         const permitted = SkillV2.available(yield* skills.list(), agent)

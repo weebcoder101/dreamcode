@@ -8,6 +8,8 @@ import { Auth, type AnyRoute } from "@opencode-ai/llm/route"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { produce } from "immer"
 import { Catalog } from "../../catalog"
+import { Credential } from "../../credential"
+import { EventV2 } from "../../event"
 import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
 import { PluginBoot } from "../../plugin/boot"
@@ -35,6 +37,8 @@ export type Error =
   | Catalog.ModelNotFoundError
   | ModelNotSelectedError
   | UnsupportedApiError
+  | EventV2.InvalidSyncEventError
+  | Credential.CredentialDecodeError
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>

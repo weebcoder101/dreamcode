@@ -5,6 +5,7 @@ import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { SessionV2 } from "../session"
 import { MessageDecodeError } from "../session/error"
+import { OperationUnavailableError } from "../session"
 import { SessionEvent } from "../session/event"
 import { SessionInput } from "../session/input"
 import { SessionMessage } from "../session/message"
@@ -102,16 +103,18 @@ export interface EventsInput {
   readonly after?: EventCursor
 }
 
+type PublicSessionError = NotFoundError | EventV2.InvalidSyncEventError
+
 export interface Interface {
-  readonly create: (input: CreateInput) => Effect.Effect<Info>
+  readonly create: (input: CreateInput) => Effect.Effect<Info, NotFoundError | EventV2.InvalidSyncEventError | MessageDecodeError | OperationUnavailableError | PromptConflictError>
   readonly get: (sessionID: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
-  readonly prompt: (input: PromptInput) => Effect.Effect<Admission, NotFoundError | PromptConflictError>
+  readonly prompt: (input: PromptInput) => Effect.Effect<Admission, NotFoundError | PromptConflictError | EventV2.InvalidSyncEventError>
   readonly switchModel: (
     input: SwitchModelInput,
-  ) => Effect.Effect<void, NotFoundError | ModelUnavailableError | VariantUnavailableError>
+  ) => Effect.Effect<void, NotFoundError | ModelUnavailableError | VariantUnavailableError | EventV2.InvalidSyncEventError>
   /** Interrupt the active V2 execution chain for one Session on this process. Interrupting an idle or missing Session is a no-op. */
-  readonly interrupt: (sessionID: ID) => Effect.Effect<void>
+  readonly interrupt: (sessionID: ID) => Effect.Effect<void, EventV2.InvalidSyncEventError>
   readonly messages: (input: MessagesInput) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>
   readonly message: (input: MessageInput) => Effect.Effect<Message | undefined>
   readonly context: (sessionID: ID) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>

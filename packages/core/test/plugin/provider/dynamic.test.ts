@@ -1,50 +1,79 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test"
-import { Effect, ConfigProvider, Layer } from "effect"
-import { DynamicProviderPlugin } from "../../../src/plugin/provider/dynamic"
-import { Npm } from "../../../src/npm"
+import { describe, expect, it as bunIt } from "bun:test"
+import { Effect, Layer, Option } from "effect"
+import { EventV2 } from "@opencode-ai/core/event"
+import { PluginV2 } from "@opencode-ai/core/plugin"
+import { DynamicProviderPlugin } from "@opencode-ai/core/plugin/provider/dynamic"
+import { Npm } from "@opencode-ai/core/npm"
+import { testEffect } from "../../lib/effect"
+import { model, npmLayer } from "../../plugin/provider-helper"
 
-const mockNpm = Layer.succeed(Npm.Service, {
-  add: () => Effect.succeed({ entrypoint: Option.some("/mock/path.js") }),
-  remove: () => Effect.void,
-  list: () => Effect.succeed([]),
-} as Npm.Service)
+const pluginLayer = PluginV2.locationLayer.pipe(
+  Layer.provideMerge(Layer.succeed(
+    Npm.Service,
+    Npm.Service.of({
+      add: () => Effect.succeed({ directory: "", entrypoint: Option.some("/mock/path.js") }),
+      install: () => Effect.void,
+      which: () => Effect.succeed(Option.none<string>()),
+    }),
+  )),
+  Layer.provideMerge(EventV2.defaultLayer),
+)
+
+function dynamicPlugin(layer = npmLayer) {
+  return { id: DynamicProviderPlugin.id, effect: DynamicProviderPlugin.effect.pipe(Effect.provide(layer)) }
+}
+
+const it = testEffect(pluginLayer)
 
 describe("DynamicProviderPlugin allowlist", () => {
-  const originalEnv = process.env.AI_SDK_ALLOWED_PACKAGES
-
-  afterEach(() => {
-    if (originalEnv === undefined) {
-      delete process.env.AI_SDK_ALLOWED_PACKAGES
-    } else {
-      process.env.AI_SDK_ALLOWED_PACKAGES = originalEnv
-    }
-  })
-
-  it("allows packages in default allowlist", () =>
+  it.effect("allows packages in default allowlist", () =>
     Effect.gen(function* () {
-      const plugin = yield* DynamicProviderPlugin
-      expect(plugin).toBeDefined()
-    }).pipe(Effect.provide(mockNpm), Effect.runPromise))
+      const plugin = yield* PluginV2.Service
+      yield* plugin.add(dynamicPlugin())
+      const result = yield* plugin.trigger(
+        "aisdk.sdk",
+        {
+          model: model("test", "test-model"),
+          package: "@ai-sdk/openai",
+          options: {},
+        },
+        {},
+      )
+      expect(result.sdk).toBeDefined()
+    }),
+  )
 
-  it("rejects packages not in allowlist", () =>
+  it.effect("rejects packages not in allowlist", () =>
     Effect.gen(function* () {
-      process.env.AI_SDK_ALLOWED_PACKAGES = "@ai-sdk/openai"
-      const plugin = yield* DynamicProviderPlugin
-      expect(plugin).toBeDefined()
-    }).pipe(
-      Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
-      Effect.provide(mockNpm),
-      Effect.runPromise,
-    ))
+      const plugin = yield* PluginV2.Service
+      yield* plugin.add(dynamicPlugin())
+      const result = yield* plugin.trigger(
+        "aisdk.sdk",
+        {
+          model: model("test", "test-model"),
+          package: "unknown-package",
+          options: {},
+        },
+        {},
+      )
+      expect(result.sdk).toBeUndefined()
+    }),
+  )
 
-  it("respects custom allowlist from env var", () =>
+  it.effect("respects custom allowlist from env var", () =>
     Effect.gen(function* () {
-      process.env.AI_SDK_ALLOWED_PACKAGES = "custom-package,another-package"
-      const plugin = yield* DynamicProviderPlugin
-      expect(plugin).toBeDefined()
-    }).pipe(
-      Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
-      Effect.provide(mockNpm),
-      Effect.runPromise,
-    ))
+      const plugin = yield* PluginV2.Service
+      yield* plugin.add(dynamicPlugin())
+      const result = yield* plugin.trigger(
+        "aisdk.sdk",
+        {
+          model: model("test", "test-model"),
+          package: "custom-package",
+          options: {},
+        },
+        {},
+      )
+      expect(result.sdk).toBeUndefined()
+    }),
+  )
 })

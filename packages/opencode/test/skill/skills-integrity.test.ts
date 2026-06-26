@@ -5,9 +5,9 @@ import path from "path"
 const skillsDir = path.resolve(import.meta.dir, "../../src/skill/dreamcode/skills")
 
 describe("embedded skills integrity", () => {
-  it("contains all 38 expected skill directories", () => {
+  it("contains all 39 expected skill directories", () => {
     const dirs = fs.readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory())
-    expect(dirs.length).toBe(38)
+    expect(dirs.length).toBe(39)
   })
 
   it("includes chain-orchestrator, effect, research, security, neuro", () => {

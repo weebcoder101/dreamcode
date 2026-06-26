@@ -41,7 +41,7 @@ const SessionModelValidationLayer = Layer.effect(
     return SessionModelValidation.of({
       validate: Effect.fn("OpenCode.sessions.validateModel")(function* (input) {
         yield* Effect.gen(function* () {
-          yield* (yield* PluginBoot.Service).wait()
+          yield* (yield* PluginBoot.Service).wait().pipe(Effect.orDie)
           const catalog = yield* Catalog.Service
           const model = (yield* catalog.model.available()).find(
             (model) => model.providerID === input.model.providerID && model.id === input.model.id,
@@ -62,7 +62,7 @@ const SessionModelValidationLayer = Layer.effect(
               variant: input.model.variant,
             })
         }).pipe(Effect.provide(locations.get(input.location)))
-      }),
+      }) as (input: Session.SwitchModelInput & { readonly location: Session.Info["location"] }) => Effect.Effect<void, Session.ModelUnavailableError | Session.VariantUnavailableError>,
     })
   }),
 )

@@ -246,8 +246,7 @@ export const layerWith = (options?: LayerOptions) =>
                 })
               }
               const list = projectors.get(event.type) ?? []
-              return yield* Effect.interruptible(
-                Effect.gen(function* () {
+              return yield* Effect.gen(function* () {
                   const committed = yield* db
                     .transaction(
                       () =>
@@ -361,8 +360,7 @@ export const layerWith = (options?: LayerOptions) =>
                     )
                   }
                   return committed
-                }),
-              )
+                })
             }
           }
         })

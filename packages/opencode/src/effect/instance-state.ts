@@ -55,7 +55,10 @@ export const make = <A, E = never, R = never>(
       lookup: () =>
         Effect.gen(function* () {
           const ctx = yield* InstanceRef
-          if (!ctx) return yield* init(FallbackContext)
+          if (!ctx) {
+            yield* Effect.logWarning("InstanceState.make using FallbackContext — InstanceRef is undefined")
+            return yield* init(FallbackContext)
+          }
           return yield* init(ctx)
         }),
       timeToLive: (exit) => {

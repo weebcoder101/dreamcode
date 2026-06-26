@@ -114,12 +114,12 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
   return Effect.gen(function* () {
     const decodeRow = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type })
-    const updateMessage = (message: SessionMessage.Message) => {
+      const updateMessage = (message: SessionMessage.Message) => {
       if (event.seq === undefined) return Effect.die(new Error("Synchronized Session event is missing aggregate sequence"))
       return Effect.gen(function* () {
-        const encoded = yield* encodeMessage(message)
+        const encoded = yield* encodeMessage(message).pipe(Effect.orDie)
         const { id, type, ...data } = encoded
-        return yield* db
+        yield* db
           .update(SessionMessageTable)
           .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
           .where(
@@ -129,7 +129,7 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
             ),
           )
           .run()
-          .pipe(Effect.orDie)
+          .pipe(Effect.orDie, Effect.asVoid)
       })
     }
     const appendMessage = (message: SessionMessage.Message) => insertMessage(db, event, message)
@@ -195,21 +195,22 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
 
 function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: SessionMessage.Message) {
   if (event.seq === undefined) return Effect.die(new Error("Synchronized Session event is missing aggregate sequence"))
+  const seq = event.seq
   return Effect.gen(function* () {
-    const encoded = yield* encodeMessage(message)
+    const encoded = yield* encodeMessage(message).pipe(Effect.orDie)
     const { id, type, ...data } = encoded
-    return yield* db
+    yield* db
       .insert(SessionMessageTable)
       .values({
         id: SessionMessage.ID.make(id),
         session_id: event.data.sessionID,
         type,
-        seq: event.seq,
+        seq,
         time_created: DateTime.toEpochMillis(message.time.created),
         data,
       })
       .run()
-      .pipe(Effect.orDie)
+      .pipe(Effect.orDie, Effect.asVoid)
   })
 }
 
@@ -381,7 +382,7 @@ export const layer = Layer.effectDiscard(
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
           promotedSeq: event.seq,
-        })
+        }).pipe(Effect.orDie)
       }),
     )
     yield* events.project(SessionEvent.PromptLifecycle.Admitted, (event) =>
@@ -395,7 +396,7 @@ export const layer = Layer.effectDiscard(
           prompt: event.data.prompt,
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
-        })
+        }).pipe(Effect.orDie)
       }),
     )
     yield* events.project(SessionEvent.PromptLifecycle.Promoted, (event) =>
@@ -411,7 +412,7 @@ export const layer = Layer.effectDiscard(
             prompt: event.data.prompt,
             timeCreated: event.data.timeCreated,
             promotedSeq: event.seq,
-          }),
+          }).pipe(Effect.orDie),
         )
       }),
     )

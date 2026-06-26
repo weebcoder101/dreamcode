@@ -166,7 +166,8 @@ export const layer = Layer.effect(
     // when the retryAgentMismatch pattern is refactored to use Effect.catchTag instead of Effect.catchDefect.
     const retryAgentMismatch = (promotion: SessionInput.Delivery | undefined) =>
       Effect.catchDefect((defect) =>
-        defect instanceof SessionContextEpoch.AgentReplacementBlocked
+        defect instanceof SessionContextEpoch.AgentReplacementBlocked ||
+        defect instanceof SessionContextEpoch.AgentMismatch
           ? Effect.die(rebuildPreparedTurn(promotion))
           : Effect.die(defect),
       )
@@ -281,11 +282,12 @@ export const layer = Layer.effect(
                     settlement.outputPaths ?? [],
                   ),
                 ),
+                Effect.orDie,
               ),
             ).pipe(FiberSet.run(toolFibers))
           }),
         ),
-        Effect.ensuring(withPublication(publisher.flush())),
+        Effect.ensuring(withPublication(publisher.flush()).pipe(Effect.orDie)),
       )
 
       return yield* Effect.uninterruptibleMask((restore) =>
@@ -347,8 +349,8 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
     ) => Effect.Effect<boolean, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion) {
-      return yield* runTurnAttempt(sessionID, promotion).pipe(
+    const runAfterOverflowCompaction: RunTurn = (sessionID, promotion) =>
+      (runTurnAttempt(sessionID, promotion) as Effect.Effect<boolean, RunError, never>).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
@@ -359,10 +361,9 @@ export const layer = Layer.effect(
           }),
         ),
       )
-    })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion) {
-      return yield* runTurnAttempt(sessionID, promotion, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = (sessionID, promotion) =>
+      (runTurnAttempt(sessionID, promotion, compaction.compactAfterOverflow) as Effect.Effect<boolean, RunError, never>).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
@@ -373,7 +374,6 @@ export const layer = Layer.effect(
           }),
         ),
       )
-    })
 
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID

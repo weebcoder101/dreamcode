@@ -38,7 +38,7 @@ export const { use: usePromptStash, provider: PromptStashProvider } = createSimp
       const lines = parsePromptStash(await readText(stashPath).catch(() => ""))
       setStore("entries", lines)
       if (lines.length > 0)
-        writeText(stashPath, lines.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
+        writeText(stashPath, lines.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => console.warn("failed to write stash on init"))
     })
 
     const [store, setStore] = createStore({ entries: [] as StashEntry[] })
@@ -61,10 +61,10 @@ export const { use: usePromptStash, provider: PromptStashProvider } = createSimp
         )
 
         if (trimmed) {
-          writeText(stashPath, store.entries.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
+          writeText(stashPath, store.entries.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => console.warn("failed to rewrite stash on push"))
           return
         }
-        appendText(stashPath, JSON.stringify(stash) + "\n").catch(() => {})
+        appendText(stashPath, JSON.stringify(stash) + "\n").catch(() => console.warn("failed to append stash entry"))
       },
       pop() {
         if (store.entries.length === 0) return undefined
@@ -73,7 +73,7 @@ export const { use: usePromptStash, provider: PromptStashProvider } = createSimp
         writeText(
           stashPath,
           store.entries.length > 0 ? store.entries.map((line) => JSON.stringify(line)).join("\n") + "\n" : "",
-        ).catch(() => {})
+        ).catch(() => console.warn("failed to persist stash entry"))
         return entry
       },
       remove(index: number) {
@@ -82,7 +82,7 @@ export const { use: usePromptStash, provider: PromptStashProvider } = createSimp
         writeText(
           stashPath,
           store.entries.length > 0 ? store.entries.map((line) => JSON.stringify(line)).join("\n") + "\n" : "",
-        ).catch(() => {})
+        ).catch(() => console.warn("failed to persist stash entry on remove"))
       },
     }
   },

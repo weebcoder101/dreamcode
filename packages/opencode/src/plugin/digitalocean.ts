@@ -311,7 +311,7 @@ export async function DigitalOceanAuthPlugin(input: PluginInput): Promise<Hooks>
                 path: { id: "digitalocean" },
                 body: { type: "api", key: ctx.auth.key, metadata: updated },
               })
-              .catch(() => {})
+              .catch((e) => console.warn("digitalocean: router metadata persist failed", e))
           } else if (result.status === 401 || result.status === 403) {
           } else if (result.status !== 0) {
           }

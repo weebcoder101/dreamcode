@@ -100,11 +100,11 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   messageID: SessionMessage.ID,
 }) {}
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError | EventV2.InvalidSyncEventError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, Error>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -133,14 +133,14 @@ export interface Interface {
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<void, NotFoundError | EventV2.InvalidSyncEventError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     prompt: Prompt
     delivery?: SessionInput.Delivery
     resume?: boolean
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | EventV2.InvalidSyncEventError>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -156,7 +156,7 @@ export interface Interface {
   readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
-  readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void, EventV2.InvalidSyncEventError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Session") {}
@@ -361,7 +361,7 @@ export const layer = Layer.effect(
               sessionID: input.sessionID,
               prompt: input.prompt,
               delivery,
-            }).pipe(
+            }).pipe(Effect.orDie).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
                   ? new PromptConflictError({ sessionID: input.sessionID, messageID })

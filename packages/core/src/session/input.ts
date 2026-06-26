@@ -34,8 +34,11 @@ export class InputDecodeError extends Schema.TaggedErrorClass<InputDecodeError>(
 ) {}
 
 const decodePrompt = Schema.decodeUnknownEffect(Prompt)
-const encodePromptSync = Schema.encodeSync(Prompt)
-const encodePrompt = Schema.encode(Prompt)
+// Manual encode to avoid bun 1.3.x Schema AST crash on optional Array fields.
+// Schema.encode(Prompt) calls SchemaAST.flip() which crashes with
+// "undefined is not an object (evaluating 'ast.encoding')" at SchemaAST.js:2618.
+const encodePromptSync = (input: Prompt) => Prompt.toEncoded(input)
+const encodePrompt = (input: Prompt) => Effect.sync(() => Prompt.toEncoded(input))
 
 const buildFromRow = (row: typeof SessionInputTable.$inferSelect, prompt: Prompt): Admitted =>
   new Admitted({
@@ -48,7 +51,7 @@ const buildFromRow = (row: typeof SessionInputTable.$inferSelect, prompt: Prompt
     ...(row.promoted_seq === null ? {} : { promotedSeq: row.promoted_seq }),
   })
 
-const fromRow = (row: typeof SessionInputTable.$inferSelect): Effect.Effect<Admitted> =>
+const fromRow = (row: typeof SessionInputTable.$inferSelect) =>
   decodePrompt(row.prompt).pipe(
     Effect.map((prompt: Prompt) => buildFromRow(row, prompt)),
     Effect.mapError((e) => new InputDecodeError({ message: `Failed to decode session input prompt: ${e}` })),
@@ -139,13 +142,14 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
   const stored = yield* db
     .insert(SessionInputTable)
     .values({
-      id: input.id,
+      id: input.id as string,
       session_id: input.sessionID,
       admitted_seq: input.admittedSeq,
       prompt: yield* encodePrompt(input.prompt),
       delivery: input.delivery,
       time_created: DateTime.toEpochMillis(input.timeCreated),
-    })
+      promoted_seq: null as unknown as undefined,
+    } as typeof SessionInputTable.$inferInsert)
     .onConflictDoNothing()
     .returning({ id: SessionInputTable.id })
     .get()
@@ -265,14 +269,14 @@ export const projectLegacyPrompted = Effect.fn("SessionInput.projectLegacyPrompt
   const inserted = yield* db
     .insert(SessionInputTable)
     .values({
-      id: input.id,
+      id: input.id as string,
       session_id: input.sessionID,
       admitted_seq: input.promotedSeq,
       prompt: yield* encodePrompt(input.prompt),
       delivery: input.delivery,
       promoted_seq: input.promotedSeq,
       time_created: DateTime.toEpochMillis(input.timeCreated),
-    })
+    } as typeof SessionInputTable.$inferInsert)
     .onConflictDoNothing()
     .returning()
     .get()

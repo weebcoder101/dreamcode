@@ -178,13 +178,26 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               variant: modelStore.variant,
             }),
           )
-          .catch(() =>
-            writeJsonAtomic(filePath, {
-              recent: modelStore.recent,
-              favorite: modelStore.favorite,
-              variant: modelStore.variant,
-            }),
-          )
+          .catch(() => {
+            // Read again to get subagentModel field (written by syncModelJson / variant.shared.ts)
+            const subagentPath = path.join(paths.state, "subagent.json")
+            return readJson<{ model?: string }>(subagentPath)
+              .then((sub) =>
+                writeJsonAtomic(filePath, {
+                  recent: modelStore.recent,
+                  favorite: modelStore.favorite,
+                  variant: modelStore.variant,
+                  subagentModel: sub?.model ?? undefined,
+                }),
+              )
+              .catch(() =>
+                writeJsonAtomic(filePath, {
+                  recent: modelStore.recent,
+                  favorite: modelStore.favorite,
+                  variant: modelStore.variant,
+                }),
+              )
+          })
       }
 
       readJson<unknown>(filePath)
@@ -196,7 +209,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (typeof value.variant === "object" && value.variant !== null)
             setModelStore("variant", value.variant as Record<string, string | undefined>)
         })
-        .catch(() => {})
+        .catch(() => console.warn("failed to read model.json on init"))
         .finally(() => {
           setModelStore("ready", true)
           if (state.pending) save()

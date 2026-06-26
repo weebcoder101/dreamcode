@@ -2,6 +2,7 @@ export * as SessionRunner from "./index"
 
 import type { LLMError } from "@opencode-ai/llm"
 import { Context, Effect, Schema } from "effect"
+import { InvalidSyncEventError } from "../../event"
 import { SessionSchema } from "../schema"
 import { SessionNotFoundError, type ContextSnapshotDecodeError, type MessageDecodeError } from "../error"
 import { SessionRunnerModel } from "./model"
@@ -27,6 +28,7 @@ export type RunError =
   | SessionContextEpoch.AgentReplacementBlocked
   | ToolOutputStore.Error
   | SessionNotFoundError
+  | InvalidSyncEventError
 
 /** Runs one local continuation from already-recorded Session history. */
 export interface Interface {

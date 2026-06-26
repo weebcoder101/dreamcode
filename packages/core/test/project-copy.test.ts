@@ -227,7 +227,7 @@ describe("ProjectCopy", () => {
         .pipe(Effect.flip)
 
       expect(error).toBeInstanceOf(ProjectCopy.DestinationExistsError)
-      expect(error.directory).toBe(abs(path.join(parent, "copy-10")))
+      expect((error as ProjectCopy.DestinationExistsError).directory).toBe(abs(path.join(parent, "copy-10")))
     }),
   )
 

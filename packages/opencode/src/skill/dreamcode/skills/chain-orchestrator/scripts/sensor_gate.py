@@ -639,15 +639,22 @@ def run_enforcement_checks(config: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def emit_plan(chain_result: dict) -> str:
-    primary = "breakthrough-overdrive-innovation"
+    mode = chain_result.get("mode", "DREAM_INNOVATION")
+    primary_task = chain_result.get("primary_task", "general")
     chain = chain_result["chain"]
+
+    if mode == "DREAM_INNOVATION":
+        primary = "breakthrough-overdrive-innovation"
+    else:
+        primary = primary_task if primary_task else chain[0] if chain else "general"
+
     supports = [s for s in chain if s != primary][:2]
     lines = [
         "Skill Plan:",
         f"- primary: {primary}",
         f"- supports: {', '.join(supports)}",
-        "- automation: none",
-        "- mode: DREAM_INNOVATION",
+        f"- automation: {chain_result.get('automation', 'none')}",
+        f"- mode: {mode}",
         f"- chain: {' → '.join(chain)}",
     ]
     return "\n".join(lines)

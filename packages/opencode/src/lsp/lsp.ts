@@ -359,7 +359,7 @@ export const layer = Layer.effect(
               after,
             })
           }),
-        ).catch(() => {}),
+        ).catch((e) => console.warn("failed to wait for diagnostics", e)),
       )
     })
 

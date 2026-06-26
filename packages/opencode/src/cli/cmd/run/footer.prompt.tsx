@@ -402,9 +402,8 @@ export function createPromptState(input: PromptInput): PromptState {
     { initialValue: [] as Auto[] },
   )
   const mentionOptions = createMemo(() => [...agents(), ...files(), ...resources()])
-  const skillCommands = createMemo(() => (input.commands() ?? []).filter((item) => item.source === "skill"))
   const hasSkillsCommand = createMemo(() =>
-    (input.commands() ?? []).some((item) => item.source !== "skill" && item.name === "skills"),
+    (input.commands() ?? []).some((item) => item.name === "skills"),
   )
   const slashOptions = createMemo<SlashOption[]>(() => {
     const builtins = [
@@ -419,7 +418,7 @@ export function createPromptState(input: PromptInput): PromptState {
       { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
-    const showSkillMenu = !shell() && skillCommands().length > 0 && !hasSkillsCommand()
+    const showSkillMenu = !shell() && (input.commands() ?? []).some((item) => item.source === "skill") && !hasSkillsCommand()
     if (showSkillMenu) {
       hidden.add("skills")
     }
@@ -437,7 +436,7 @@ export function createPromptState(input: PromptInput): PromptState {
           ]
         : []),
       ...(input.commands() ?? [])
-        .filter((item) => item.source !== "skill" && !hidden.has(item.name))
+        .filter((item) => !hidden.has(item.name))
         .map(
           (item) =>
             ({

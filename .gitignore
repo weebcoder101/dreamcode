@@ -50,6 +50,15 @@ __pycache__/
 # Evolution tracking (workspace state, not source)
 evolution/
 
+# 🔴 PRIVATE PERSONA DATA - NEVER UPLOAD TO GIT
+# All AGENTS.md files contain persona/identity data that must stay local only.
+# Root AGENTS.md is now the Sumati persona mandate - do not commit.
+**/AGENTS.md
+**/agents.md
+**/AGENTS.local.md
+**/sumati-persona*
+**/sumati_bridge*
+
 # Local dev artifacts
 .ghostty-web-local/
 .new/

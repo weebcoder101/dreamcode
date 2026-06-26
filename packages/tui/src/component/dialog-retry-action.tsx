@@ -21,7 +21,7 @@ export type DialogRetryActionProps = {
 }
 
 function runAction(props: DialogRetryActionProps, dialog: ReturnType<typeof useDialog>) {
-  if (props.link) open(props.link).catch(() => {})
+  if (props.link) open(props.link).catch(() => console.warn("failed to open link", props.link))
   props.onClose?.()
   dialog.clear()
 }

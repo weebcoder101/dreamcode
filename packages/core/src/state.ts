@@ -60,7 +60,7 @@ export function create<State extends Objectish, Editor>(options: Options<State, 
 
   const commit = Effect.fn("State.commit")(function* (next: State, reason?: string) {
     const api = options.editor(next as Draft<State>)
-    if (options.finalize) yield* options.finalize(api, reason)
+    if (options.finalize) yield* options.finalize(api, reason).pipe(Effect.orDie)
     state = next
   })
 
@@ -106,7 +106,7 @@ export function create<State extends Objectish, Editor>(options: Options<State, 
     mutate: Effect.fn("State.mutate")(function* (update, reason) {
       const api = options.editor(state as Draft<State>)
       yield* update(api)
-      if (options.finalize) yield* options.finalize(api, reason)
+      if (options.finalize) yield* options.finalize(api, reason).pipe(Effect.orDie)
     }, semaphore.withPermit),
   }
   return result

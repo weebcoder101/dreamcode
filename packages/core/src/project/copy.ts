@@ -77,6 +77,7 @@ export type Error =
   | DirectoryUnavailableError
   | StrategyNotFoundError
   | Git.WorktreeError
+  | EventV2.InvalidSyncEventError
 
 export interface Strategy {
   readonly id: StrategyID

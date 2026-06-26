@@ -5,13 +5,24 @@ import type {
 } from "../openai-responses-api-types"
 import { z } from "zod/v4"
 
-const comparisonFilterSchema = z.object({
+type ComparisonFilter = {
+  key: string
+  type: "eq" | "ne" | "gt" | "gte" | "lt" | "lte"
+  value: string | number | boolean
+}
+
+const comparisonFilterSchema: z.ZodType<ComparisonFilter> = z.object({
   key: z.string(),
   type: z.enum(["eq", "ne", "gt", "gte", "lt", "lte"]),
   value: z.union([z.string(), z.number(), z.boolean()]),
 })
 
-const compoundFilterSchema: z.ZodType<unknown> = z.object({
+type CompoundFilter = {
+  type: "and" | "or"
+  filters: Array<ComparisonFilter | CompoundFilter>
+}
+
+const compoundFilterSchema: z.ZodType<CompoundFilter> = z.object({
   type: z.enum(["and", "or"]),
   filters: z.array(z.union([comparisonFilterSchema, z.lazy(() => compoundFilterSchema)])),
 })

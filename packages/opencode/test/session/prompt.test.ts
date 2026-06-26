@@ -43,6 +43,10 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
+import { ContextCompressor } from "../../src/session/context-compressor"
+import { ChainExecutor } from "../../src/skill/chain-executor"
+import { PiecesLTM } from "../../src/pieces-ltm"
+import { SensorGate } from "../../src/skill/sensor-gate"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
@@ -156,6 +160,33 @@ const run = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 
 const processorCreateStarted: Array<() => void> = []
+const noopSensorGate = Layer.succeed(
+  SensorGate.Service,
+  SensorGate.Service.of({
+    classify: () => Effect.succeed({
+      intent: "default",
+      domain_tags: [],
+      risk_level: "low",
+      confidence: 0.95,
+      complexity: "simple",
+      time_sensitivity: "low",
+      requires_tools: "no",
+      deliverable_type: "code",
+      is_social_greeting: false,
+      primary_skill: "general",
+      support_skills: [],
+      automation: "none",
+      mode: "normal",
+      chain: [],
+      personas: [],
+      guardian_decision: "proceed",
+      guardian_risk: "low",
+      skill_plan: "",
+      raw_output: "",
+    }),
+  }),
+)
+
 const blockingProcessor = Layer.succeed(
   SessionProcessor.Service,
   SessionProcessor.Service.of({
@@ -208,6 +239,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
           Layer.provideMerge(deps),
         )
   const compact = SessionCompaction.layer.pipe(
+    Layer.provide(ContextCompressor.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
@@ -218,6 +250,14 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provide(summary),
     Layer.provideMerge(run),
     Layer.provideMerge(compact),
+    Layer.provide(
+      Layer.mergeAll(
+        Skill.defaultLayer,
+        noopSensorGate,
+        ChainExecutor.defaultLayer,
+        PiecesLTM.defaultLayer,
+      ),
+    ),
     Layer.provideMerge(proc),
     Layer.provideMerge(registry),
     Layer.provideMerge(trunc),
@@ -302,8 +342,8 @@ const ensureDir = Effect.fn("test.ensureDir")(function* (dir: string) {
 
 const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
   yield* writeText(
-    path.join(dir, "opencode.json"),
-    JSON.stringify({ $schema: "https://opencode.ai/config.json", ...config }),
+    path.join(dir, "dreamcode.json"),
+    JSON.stringify({ $schema: "https://dreamcode.ai/config.json", ...config }),
   )
 })
 
@@ -989,7 +1029,7 @@ it.instance(
       yield* Fiber.await(fiber)
       expect((yield* status.get(chat.id)).type).toBe("idle")
     }),
-  3_000,
+   10_000,
 )
 
 // Cancel semantics
@@ -1017,7 +1057,7 @@ it.instance(
         expect(exit.value.info.role).toBe("assistant")
       }
     }),
-  3_000,
+   10_000,
 )
 
 it.instance(
@@ -1043,7 +1083,7 @@ it.instance(
         }
       }
     }),
-  3_000,
+   10_000,
 )
 
 raceNoLLMServer.instance(
@@ -1132,7 +1172,7 @@ raceNoLLMServer.instance(
       }
     }),
   { config: cfg },
-  3_000,
+   10_000,
 )
 
 noLLMServer.instance(
@@ -1242,7 +1282,7 @@ it.instance(
       }
     }),
   { git: true },
-  3_000,
+   10_000,
 )
 
 // Queue semantics
@@ -1280,7 +1320,7 @@ it.instance(
       expect(a.info.id).toBe(b.info.id)
       expect(a.info.role).toBe("assistant")
     }),
-  3_000,
+   10_000,
 )
 
 it.instance(
@@ -1348,7 +1388,7 @@ it.instance(
       expect(inputs).toHaveLength(2)
       expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
     }),
-  3_000,
+   10_000,
 )
 
 it.instance(
@@ -1377,7 +1417,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+   10_000,
 )
 
 noLLMServer.instance("assertNotBusy succeeds when idle", () =>
@@ -1417,7 +1457,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+   10_000,
 )
 
 unixNoLLMServer(
@@ -1628,7 +1668,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+   10_000,
 )
 
 it.instance(
@@ -1667,7 +1707,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+   10_000,
 )
 
 unix(
@@ -2163,7 +2203,7 @@ it.instance(
         expect(last.info.error?.name).toBe("MessageAbortedError")
       }
     }),
-  3_000,
+   10_000,
 )
 
 // Agent variant

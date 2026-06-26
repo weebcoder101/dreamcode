@@ -76,7 +76,7 @@ function remoteConfigClient(input: {
   seen: { wellKnown?: string; remote?: string; authorization?: string }
 }) {
   return HttpClient.make((request) => {
-    if (request.url.includes(".well-known/opencode")) {
+    if (request.url.includes(".well-known/dreamcode")) {
       input.seen.wellKnown = request.url
       return Effect.succeed(json(request, input.wellKnown))
     }
@@ -157,13 +157,13 @@ afterEach(async () => {
 })
 
 const writeManagedSettingsEffect = (settings: object, filename?: string) =>
-  FSUtil.use.writeWithDirs(path.join(managedConfigDir, filename ?? "opencode.json"), JSON.stringify(settings))
+  FSUtil.use.writeWithDirs(path.join(managedConfigDir, filename ?? "dreamcode.json"), JSON.stringify(settings))
 
-async function writeConfig(dir: string, config: object, name = "opencode.json") {
+async function writeConfig(dir: string, config: object, name = "dreamcode.json") {
   await Filesystem.write(path.join(dir, name), JSON.stringify(config))
 }
 
-const writeConfigEffect = (dir: string, config: object, name = "opencode.json") =>
+const writeConfigEffect = (dir: string, config: object, name = "dreamcode.json") =>
   FSUtil.use.writeWithDirs(path.join(dir, name), JSON.stringify(config))
 
 const withInstanceDir = <A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) =>
@@ -323,8 +323,8 @@ it.effect("creates global jsonc config with schema when no global configs exist"
     Effect.gen(function* () {
       yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-      const content = yield* FSUtil.use.readFileString(path.join(dir, "opencode.jsonc"))
-      expect(content).toContain('"$schema": "https://opencode.ai/config.json"')
+      const content = yield* FSUtil.use.readFileString(path.join(dir, "dreamcode.jsonc"))
+      expect(content).toContain('"$schema": "https://dreamcode.ai/config.json"')
     }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   ),
 )
@@ -339,7 +339,7 @@ it.effect("does not create global config when OPENCODE_CONFIG_DIR is set", () =>
         Effect.gen(function* () {
           yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-          expect(yield* FSUtil.use.existsSafe(path.join(dir, "opencode.jsonc"))).toBe(false)
+          expect(yield* FSUtil.use.existsSafe(path.join(dir, "dreamcode.jsonc"))).toBe(false)
         }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
       ),
     )
@@ -386,18 +386,18 @@ it.effect("updates global config and omits empty shell key in json", () =>
     Effect.gen(function* () {
       yield* Config.use.updateGlobal({ shell: "" })
 
-      const writtenConfig = yield* FSUtil.use.readJson(path.join(dir, "opencode.json"))
+      const writtenConfig = yield* FSUtil.use.readJson(path.join(dir, "dreamcode.json"))
       expect(writtenConfig).not.toHaveProperty("shell")
     }),
   ),
 )
 
 it.effect("updates global config and omits empty shell key in jsonc", () =>
-  withGlobalConfig({ config: { shell: "bash", model: "test/model" }, name: "opencode.jsonc" }, ({ dir }) =>
+  withGlobalConfig({ config: { shell: "bash", model: "test/model" }, name: "dreamcode.jsonc" }, ({ dir }) =>
     Effect.gen(function* () {
       yield* Config.use.updateGlobal({ shell: "" })
 
-      const file = path.join(dir, "opencode.jsonc")
+      const file = path.join(dir, "dreamcode.jsonc")
       const writtenConfig = yield* FSUtil.use.readFileString(file)
       const parsed = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(writtenConfig, file), file)
       expect(writtenConfig).not.toContain('"shell"')
@@ -463,7 +463,7 @@ it.instance("loads JSONC config file", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
     yield* FSUtil.use.writeWithDirs(
-      path.join(test.directory, "opencode.jsonc"),
+      path.join(test.directory, "dreamcode.jsonc"),
       `{
         // This is a comment
         "$schema": "https://opencode.ai/config.json",
@@ -487,7 +487,7 @@ it.instance("jsonc overrides json in the same directory", () =>
         model: "base",
         username: "base",
       },
-      "opencode.jsonc",
+      "dreamcode.jsonc",
     )
     yield* writeConfigEffect(test.directory, {
       $schema: "https://opencode.ai/config.json",
@@ -523,14 +523,14 @@ it.instance("preserves env variables when adding $schema to config", () =>
       const test = yield* TestInstance
       // Config without $schema - should trigger auto-add
       yield* FSUtil.use.writeWithDirs(
-        path.join(test.directory, "opencode.json"),
+        path.join(test.directory, "dreamcode.json"),
         JSON.stringify({ username: "{env:PRESERVE_VAR}" }),
       )
       const config = yield* Config.use.get()
       expect(config.username).toBe("secret_value")
 
       // Read the file to verify the env variable was preserved
-      const content = yield* FSUtil.use.readFileString(path.join(test.directory, "opencode.json"))
+      const content = yield* FSUtil.use.readFileString(path.join(test.directory, "dreamcode.json"))
       expect(content).toContain("{env:PRESERVE_VAR}")
       expect(content).not.toContain("secret_value")
       expect(content).toContain("$schema")
@@ -622,7 +622,7 @@ it.instance("validates config schema and throws on invalid fields", () =>
 it.instance("throws error for invalid JSON", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
-    yield* FSUtil.use.writeWithDirs(path.join(test.directory, "opencode.json"), "{ invalid json }")
+    yield* FSUtil.use.writeWithDirs(path.join(test.directory, "dreamcode.json"), "{ invalid json }")
     const exit = yield* Config.use.get().pipe(Effect.exit)
     expect(Exit.isFailure(exit)).toBe(true)
   }),
@@ -1203,7 +1203,7 @@ it.instance(
 it.instance("managed jsonc settings override managed json settings", () =>
   Effect.gen(function* () {
     yield* writeManagedSettingsEffect({ model: "managed/json" })
-    yield* writeManagedSettingsEffect({ model: "managed/jsonc" }, "opencode.jsonc")
+    yield* writeManagedSettingsEffect({ model: "managed/jsonc" }, "dreamcode.jsonc")
 
     const config = yield* Config.use.get()
     expect(config.model).toBe("managed/jsonc")
@@ -1373,7 +1373,7 @@ it.instance("project config can override MCP server enabled status", () =>
           },
         },
       },
-      "opencode.jsonc",
+      "dreamcode.jsonc",
     )
 
     const config = yield* Config.use.get()
@@ -1418,7 +1418,7 @@ it.instance("MCP config deep merges preserving base config properties", () =>
           },
         },
       },
-      "opencode.jsonc",
+      "dreamcode.jsonc",
     )
 
     const config = yield* Config.use.get()
@@ -1459,7 +1459,7 @@ it.instance("local .opencode config can override MCP from project config", () =>
           },
         },
       },
-      "opencode.json",
+      "dreamcode.json",
     )
 
     const config = yield* Config.use.get()
@@ -1478,7 +1478,7 @@ remoteProjectOverride.it.instance(
   () =>
     Effect.gen(function* () {
       const config = yield* Config.use.get()
-      expect(remoteProjectOverride.seen.wellKnown).toBe("https://example.com/.well-known/opencode")
+      expect(remoteProjectOverride.seen.wellKnown).toBe("https://example.com/.well-known/dreamcode")
       expect(config.mcp?.jira?.enabled).toBe(true)
     }),
   {
@@ -1497,7 +1497,7 @@ const trailingSlashWellKnown = wellKnown({
 trailingSlashWellKnown.it.instance("wellknown URL with trailing slash is normalized", () =>
   Effect.gen(function* () {
     yield* Config.use.get()
-    expect(trailingSlashWellKnown.seen.wellKnown).toBe("https://example.com/.well-known/opencode")
+    expect(trailingSlashWellKnown.seen.wellKnown).toBe("https://example.com/.well-known/dreamcode")
   }),
 )
 
@@ -1524,7 +1524,7 @@ test("remote well-known config can use FetchHttpClient layer", async () => {
         Config.Service.use((svc) =>
           Effect.gen(function* () {
             const config = yield* svc.get()
-            expect(fetchedUrl).toBe(`${server.url.origin}/.well-known/opencode`)
+            expect(fetchedUrl).toBe(`${server.url.origin}/.well-known/dreamcode`)
             expect(config.mcp?.jira?.enabled).toBe(true)
           }),
         ),
@@ -1566,7 +1566,7 @@ const templatedHeaderWellKnown = wellKnown({
 templatedHeaderWellKnown.it.instance("wellknown remote_config supports templated env vars in headers", () =>
   Effect.gen(function* () {
     const config = yield* Config.use.get()
-    expect(templatedHeaderWellKnown.seen.wellKnown).toBe("https://example.com/.well-known/opencode")
+    expect(templatedHeaderWellKnown.seen.wellKnown).toBe("https://example.com/.well-known/dreamcode")
     expect(templatedHeaderWellKnown.seen.remote).toBe("https://config.example.com/opencode.json")
     expect(templatedHeaderWellKnown.seen.authorization).toBe("Bearer test-token")
     expect(config.mcp?.confluence?.enabled).toBe(true)

@@ -25,7 +25,7 @@ export const DynamicProviderPlugin = PluginV2.define({
 
         const packageName = evt.package
 
-        if (!allowed.has(packageName)) return
+        if (!packageName.startsWith("file://") && !allowed.has(packageName)) return
 
         const installedPath = yield* Effect.gen(function* () {
           if (packageName.startsWith("file://")) return packageName
@@ -36,7 +36,7 @@ export const DynamicProviderPlugin = PluginV2.define({
         )
         if (!installedPath) return
 
-        const mod: Record<string, unknown> = yield* Effect.promise(async () => {
+        const mod: Record<string, unknown> | undefined = yield* Effect.tryPromise(async () => {
           return (await import(
             installedPath.startsWith("file://") ? installedPath : pathToFileURL(installedPath).href
           )) as Record<string, unknown>
@@ -54,5 +54,5 @@ export const DynamicProviderPlugin = PluginV2.define({
         evt.sdk = factory(evt.options ?? {})
       }),
     }
-  }),
+  }).pipe(Effect.orDie),
 })

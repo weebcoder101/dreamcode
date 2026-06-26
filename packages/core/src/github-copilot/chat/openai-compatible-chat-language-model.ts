@@ -26,7 +26,7 @@ import { convertToOpenAICompatibleChatMessages } from "./convert-to-openai-compa
 import { getResponseMetadata } from "./get-response-metadata"
 import { mapOpenAICompatibleFinishReason } from "./map-openai-compatible-finish-reason"
 import { type OpenAICompatibleChatModelId, openaiCompatibleProviderOptions } from "./openai-compatible-chat-options"
-import { defaultOpenAICompatibleErrorStructure, type ProviderErrorStructure } from "../openai-compatible-error"
+import { defaultOpenAICompatibleErrorStructure, openaiCompatibleErrorDataSchema, type ProviderErrorStructure } from "../openai-compatible-error"
 import type { MetadataExtractor } from "./openai-compatible-metadata-extractor"
 import { prepareTools } from "./openai-compatible-prepare-tools"
 
@@ -66,7 +66,9 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
 
     // initialize error handling:
     const errorStructure = config.errorStructure ?? defaultOpenAICompatibleErrorStructure
-    this.chunkSchema = createOpenAICompatibleChatChunkSchema(errorStructure.errorSchema)
+    this.chunkSchema = createOpenAICompatibleChatChunkSchema(
+      errorStructure.errorSchema as typeof openaiCompatibleErrorDataSchema,
+    )
     this.failedResponseHandler = createJsonErrorResponseHandler(errorStructure)
 
     this.supportsStructuredOutputs = config.supportsStructuredOutputs ?? false

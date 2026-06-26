@@ -36,6 +36,7 @@ import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import { SensorGate, evaluateSpawnNecessity, type Persona, type SensorGateResult } from "@/skill/sensor-gate"
 import { ChainExecutor } from "@/skill/chain-executor"
+import { debugLog } from "@/skill/python-resolver"
 import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
 import { PiecesLTM } from "@/pieces-ltm"
@@ -1586,7 +1587,29 @@ Before every response, verify your reasoning:
                     const missingSkills = gateResult.chain.filter(
                       (name) => !chainResults.some((r) => r.name === name && r.status === "ok"),
                     )
-                    if (missingSkills.length > 0) {
+                    // Mandated skills that MUST execute when in DREAM_INNOVATION mode
+                    const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
+                    const missingMandated = missingSkills.filter((s) => MANDATED_SKILLS.has(s))
+
+                    if (missingMandated.length > 0) {
+                      // Force re-execute mandated skills that were skipped
+                      debugLog("[prompt] Re-executing mandated skills:", missingMandated)
+                      const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
+                        Effect.catch(() => Effect.succeed([] as Array<{ name: string; status: string }>)),
+                      )
+                      chainResults.push(...reExecuteResult)
+                      // Update missing list after re-execution
+                      const stillMissing = gateResult.chain.filter(
+                        (name) => !chainResults.some((r) => r.name === name && r.status === "ok"),
+                      )
+                      if (stillMissing.length > 0) {
+                        system.push(
+                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${stillMissing.join(", ")}. ` +
+                          `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
+                          `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+                        )
+                      }
+                    } else if (missingSkills.length > 0) {
                       system.push(
                         `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${missingSkills.join(", ")}. ` +
                         `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +

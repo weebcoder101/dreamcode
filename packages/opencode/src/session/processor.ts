@@ -2,7 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -24,6 +24,8 @@ import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
+import { eq } from "drizzle-orm"
+import { MessageTable } from "@opencode-ai/core/session/sql"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -966,68 +968,109 @@ export const layer = Layer.effect(
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
-            ctx.currentText = undefined
-            ctx.currentTextID = undefined
-            ctx.reasoningMap = {}
-            yield* status.set(ctx.sessionID, { type: "busy" })
-            const stream = llm.stream(streamInput)
-
-            // NEVER cut the stream mid-response — let the response complete
-            // naturally. Compaction is checked AFTER the stream drains so the
-            // model finishes its thought before any context reduction happens.
-            yield* stream.pipe(
-              Stream.tap((event) => handleEvent(event)),
-              Stream.runDrain,
+          // Build the retry policy's set callback once outside the retry loop.
+          const retrySet = (info: {
+            attempt: number
+            message: string
+            action?: { reason: string; provider: string; title: string; message: string; label: string; link?: string }
+            next: number
+          }) => {
+            const event = mirrorAssistant
+              ? events.publish(SessionEvent.Retried, {
+                  sessionID: ctx.sessionID,
+                  attempt: info.attempt,
+                  error: {
+                    message: info.message,
+                    isRetryable: true,
+                  },
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+              : Effect.void
+            return flushV2Fragments().pipe(
+              Effect.andThen(event),
+              Effect.andThen(
+                status.set(ctx.sessionID, {
+                  type: "retry",
+                  attempt: info.attempt,
+                  message: info.message,
+                  action: info.action,
+                  next: info.next,
+                }),
+              ),
             )
-          }).pipe(
-            Effect.onInterrupt(() =>
-              Effect.gen(function* () {
-                aborted = true
-                if (!ctx.assistantMessage.error) {
-                  yield* halt(new DOMException("Aborted", "AbortError"))
-                }
-              }),
-            ),
-            Effect.catchCauseIf(
-              (cause) => !Cause.hasInterruptsOnly(cause),
-              (cause) => Effect.fail(Cause.squash(cause)),
-            ),
-            Effect.retry(
-              SessionRetry.policy({
-                provider: input.model.providerID,
-                parse,
-                set: (info) => {
-                  // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-                  const event = mirrorAssistant
-                    ? events.publish(SessionEvent.Retried, {
-                        sessionID: ctx.sessionID,
-                        attempt: info.attempt,
-                        error: {
-                          message: info.message,
-                          isRetryable: true,
-                        },
-                        timestamp: DateTime.makeUnsafe(Date.now()),
-                      })
-                    : Effect.void
-                  return flushV2Fragments().pipe(
-                    Effect.andThen(event),
-                    Effect.andThen(
-                      status.set(ctx.sessionID, {
-                        type: "retry",
-                        attempt: info.attempt,
-                        message: info.message,
-                        action: info.action,
-                        next: info.next,
-                      }),
-                    ),
-                  )
-                },
-              }),
-            ),
-            Effect.catch(halt),
-            Effect.ensuring(cleanup()),
+          }
+
+          // Lazy effect — each evaluation creates a fresh LLM stream.
+          // Avoids Effect.retry which has uninterruptible sleep in Effect v4 beta.74.
+          const attempt = Effect.suspend((): Effect.Effect<void, never, any> =>
+            Effect.gen(function* () {
+              ctx.currentText = undefined
+              ctx.currentTextID = undefined
+              ctx.reasoningMap = {}
+              yield* status.set(ctx.sessionID, { type: "busy" })
+              const stream = llm.stream(streamInput)
+              return yield* stream.pipe(
+                Stream.tap((event) => handleEvent(event)),
+                Stream.runDrain,
+              )
+            }),
           )
+
+          const MAX_RETRIES = 5
+          const attemptWithRetry = (attemptNum: number): Effect.Effect<void, never, any> =>
+            attempt.pipe(
+              Effect.onInterrupt(() =>
+                Effect.gen(function* () {
+                  aborted = true
+                  if (!ctx.assistantMessage.error) {
+                    const error = parse(new DOMException("Aborted", "AbortError"))
+                    ctx.assistantMessage.error = error
+                    ctx.assistantMessage.finish = "error"
+                    ctx.assistantMessage.time.completed = Date.now()
+                    yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })
+                    yield* status.set(ctx.sessionID, { type: "idle" })
+                    const { id, sessionID: _, ...rest } = ctx.assistantMessage
+                    const data = JSON.parse(JSON.stringify(rest))
+                    yield* database.db
+                      .insert(MessageTable)
+                      .values({ id, session_id: ctx.sessionID, data })
+                      .onConflictDoUpdate({ target: MessageTable.id, set: { data } })
+                      .run()
+                      .pipe(
+                        Effect.catch((dbErr) =>
+                          Effect.logError("Failed to persist interrupted message", dbErr),
+                        ),
+                      )
+                  }
+                }),
+              ),
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                (cause) => Effect.fail(Cause.squash(cause)),
+              ),
+              Effect.catch((error: unknown) => {
+                const parsed = parse(error)
+                const retryableInfo = SessionRetry.retryable(parsed, input.model.providerID)
+                if (!retryableInfo || attemptNum >= MAX_RETRIES) {
+                  return halt(error).pipe(Effect.andThen(Effect.fail("halted")))
+                }
+                const err = SessionV1.APIError.isInstance(parsed) ? parsed : undefined
+                const waitMs = SessionRetry.delay(attemptNum + 1, err)
+                const now = Date.now()
+                return retrySet({
+                  attempt: attemptNum + 1,
+                  message: retryableInfo.message,
+                  action: retryableInfo.action,
+                  next: now + waitMs,
+                }).pipe(
+                  Effect.andThen(Effect.sleep(Duration.millis(waitMs)).pipe(Effect.interruptible)),
+                  Effect.andThen(attemptWithRetry(attemptNum + 1).pipe(Effect.interruptible)),
+                )
+              }),
+              Effect.catch(() => Effect.void),
+            )
+
+          yield* attemptWithRetry(0).pipe(Effect.ensuring(cleanup()))
 
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"

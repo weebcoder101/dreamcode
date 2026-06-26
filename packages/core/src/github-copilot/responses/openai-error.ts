@@ -1,5 +1,5 @@
 import { z } from "zod/v4"
-import { createJsonErrorResponseHandler, type ResponseHandler } from "@ai-sdk/provider-utils"
+import { createJsonErrorResponseHandler } from "@ai-sdk/provider-utils"
 
 export const openaiErrorDataSchema = z.object({
   error: z.object({
@@ -16,7 +16,10 @@ export const openaiErrorDataSchema = z.object({
 
 export type OpenAIErrorData = z.infer<typeof openaiErrorDataSchema>
 
-export const openaiFailedResponseHandler: ResponseHandler<OpenAIErrorData> = createJsonErrorResponseHandler({
+export const openaiFailedResponseHandler = createJsonErrorResponseHandler({
   errorSchema: openaiErrorDataSchema,
-  errorToMessage: (data) => data.error.message,
+  errorToMessage: (data: unknown) => {
+    const parsed = openaiErrorDataSchema.safeParse(data)
+    return parsed.success ? parsed.data.error.message : String(data)
+  },
 })

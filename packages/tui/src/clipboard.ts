@@ -46,7 +46,7 @@ export async function read() {
     } catch {
       // Fall through to text clipboard.
     } finally {
-      await rm(file, { force: true }).catch(() => {})
+      await rm(file, { force: true }).catch(() => console.warn("failed to rm clipboard temp file", file))
     }
   }
 

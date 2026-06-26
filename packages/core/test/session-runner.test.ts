@@ -169,7 +169,7 @@ const systemContextKey = SystemContext.Key.make("test/context")
 let systemBaseline = "Initial context"
 let systemRemoved = false
 let systemUnavailable = false
-let systemLoadHook = Effect.void
+let systemLoadHook: Effect.Effect<void, unknown, never> = Effect.void
 const skillBaselines = new Map<AgentV2.ID, string>()
 const systemContext = Layer.effectDiscard(
   SystemContextRegistry.Service.pipe(
@@ -185,6 +185,7 @@ const systemContext = Layer.effectDiscard(
                     key: systemContextKey,
                     codec: Schema.toCodecJson(Schema.String),
                     load: systemLoadHook.pipe(
+                      Effect.orDie,
                       Effect.andThen(
                         Effect.sync(() => (systemUnavailable ? SystemContext.unavailable : systemBaseline)),
                       ),
@@ -704,7 +705,7 @@ describe("SessionRunnerLLM", () => {
       yield* events.publish(SessionEvent.Moved, {
         sessionID,
         timestamp: DateTime.makeUnsafe(1),
-        location: { directory: AbsolutePath.make("/moved") },
+        location: Location.Ref.make({ directory: AbsolutePath.make("/moved") }),
       })
       expect(
         yield* db
@@ -762,7 +763,7 @@ describe("SessionRunnerLLM", () => {
           .publish(SessionEvent.Moved, {
             sessionID,
             timestamp: DateTime.makeUnsafe(1),
-            location: { directory: AbsolutePath.make("/moved") },
+            location: Location.Ref.make({ directory: AbsolutePath.make("/moved") }),
           })
           .pipe(Effect.asVoid)
       })
@@ -1007,7 +1008,7 @@ describe("SessionRunnerLLM", () => {
             timestamp: DateTime.makeUnsafe(1),
             agent: "reviewer",
           })
-          .pipe(Effect.asVoid)
+          .pipe(Effect.asVoid, Effect.orDie)
       })
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
@@ -1044,7 +1045,7 @@ describe("SessionRunnerLLM", () => {
             timestamp: DateTime.makeUnsafe(1),
             model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
           })
-          .pipe(Effect.asVoid)
+          .pipe(Effect.asVoid, Effect.orDie)
       })
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
@@ -3522,7 +3523,7 @@ describe("SessionRunnerLLM", () => {
       streamStarted = undefined
       response = [LLMEvent.textStart({ id: "text-1" }), LLMEvent.textStart({ id: "text-1" })]
 
-      expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toBe(
+      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
         "Duplicate text start: text-1",
       )
     }),
@@ -3566,7 +3567,7 @@ describe("SessionRunnerLLM", () => {
       streamStarted = undefined
       response = [LLMEvent.toolInputDelta({ id: "call-1", name: "read", text: "{}" })]
 
-      expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toBe(
+      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
         "Tool input delta before start: call-1",
       )
     }),

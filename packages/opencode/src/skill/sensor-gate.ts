@@ -276,6 +276,15 @@ export function evaluateSpawnNecessity(
   const uniqueDomains = new Set(result.domain_tags.filter(Boolean)).size
   const hasCodeBlocks = prompt.includes("```") || prompt.includes("src/") || prompt.includes("import ")
 
+  // HARD RULE: DREAM_INNOVATION always spawns — creative tasks need multiple perspectives
+  if (result.mode === "DREAM_INNOVATION") {
+    return {
+      shouldSpawn: true,
+      reason: "DREAM_INNOVATION mode — mandatory multi-perspective analysis",
+      suggestedCount: Math.max(3, Math.min(5, Math.ceil(depthScore(result) * 1.5))),
+    }
+  }
+
   // Simplicity threshold: high confidence + low risk + single domain + simple phrasing
   const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade)\s/i
   const isSimpleTask = result.confidence >= 0.8
@@ -342,7 +351,7 @@ function depthScore(result: SensorGateResult): number {
   return Math.max(0, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
 }
 
-function selectPersonas(result: SensorGateResult): Persona[] {
+export function selectPersonas(result: SensorGateResult): Persona[] {
   const tags = new Set(result.domain_tags.map((t) => t.trim().toLowerCase()))
   const chain = new Set(result.chain.map((s) => s.trim().toLowerCase()))
   const allTags = new Set([...tags, ...chain])
@@ -671,15 +680,24 @@ function runSensorGateEffect(
   return retryWithTimeout(runWithTimeout)
 }
 
-function validateNeuroOutput(output: string): string | null {
-  try {
-    const parsed = JSON.parse(output)
-    if (typeof parsed !== "object" || parsed === null) return null
-    const safe = JSON.stringify(parsed).slice(0, 50_000)
-    return safe
-  } catch {
-    return output.slice(0, 10_000)
+export function validateNeuroOutput(output: string): string | null {
+  // neuro_harness.py prints status lines (NEURO: ...) + JSON to stdout mixed together.
+  // Parse the LAST complete JSON object from the output to handle this.
+  const lines = output.trim().split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (!line.startsWith("{")) continue
+    try {
+      const parsed = JSON.parse(line)
+      if (typeof parsed !== "object" || parsed === null) continue
+      const safe = JSON.stringify(parsed).slice(0, 50_000)
+      return safe
+    } catch {
+      // Continue searching earlier lines
+    }
   }
+  debugLog("[sensor-gate] NEURO output contains no valid JSON object — rejecting")
+  return null
 }
 
 function runNeuroHarnessEffect(

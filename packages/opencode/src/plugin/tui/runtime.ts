@@ -270,7 +270,7 @@ function createThemeInstaller(
     await Flock.withLock(`tui-theme:${dest}`, async () => {
       const save = async () => {
         plugin.themes[name] = info
-        await PluginMeta.setTheme(plugin.id, name, info).catch(() => {})
+        await PluginMeta.setTheme(plugin.id, name, info).catch((e) => console.warn("tui: theme metadata persist failed", e))
       }
 
       const exists = hasTheme(name)
@@ -299,12 +299,12 @@ function createThemeInstaller(
       }
 
       if (exists || !(await Filesystem.exists(dest))) {
-        await Filesystem.write(dest, text).catch(() => {})
+        await Filesystem.write(dest, text).catch((e) => console.warn("tui: theme file write failed", e))
       }
 
       upsertTheme(name, data)
       await save()
-    }).catch(() => {})
+    }).catch((e) => console.warn("tui: theme flock lock failed", e))
   }
 }
 
@@ -677,7 +677,7 @@ async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => P
     items: list,
     kind: "tui",
     wait: async () => {
-      await wait().catch(() => {})
+      await wait().catch((e) => console.warn("tui: external plugin wait failed", e))
     },
     finish: async (loaded, origin, retry) => {
       const mod = await Promise.resolve()

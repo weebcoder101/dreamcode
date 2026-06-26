@@ -449,35 +449,38 @@ describe("tool.task", () => {
     },
   )
 
-  it.instance("rejects background execution when the experiment is disabled", () =>
-    Effect.gen(function* () {
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
+  it.instance(
+    "accepts background execution by default (dreamcode mode)",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
 
-      const exit = yield* def
-        .execute(
-          {
-            description: "inspect bug",
-            prompt: "look into the cache key path",
-            subagent_type: "general",
-            background: true,
-          },
-          {
-            sessionID: chat.id,
-            messageID: assistant.id,
-            agent: "build",
-            abort: new AbortController().signal,
-            extra: { promptOps: stubOps() },
-            messages: [],
-            metadata: () => Effect.void,
-            ask: () => Effect.void,
-          },
-        )
-        .pipe(Effect.exit)
+        const exit = yield* def
+          .execute(
+            {
+              description: "inspect bug",
+              prompt: "look into the cache key path",
+              subagent_type: "general",
+              background: true,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps() },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
 
-      expect(Exit.isFailure(exit)).toBe(true)
-    }),
+        // In dreamcode mode, background subagents are enabled by default
+        expect(Exit.isSuccess(exit)).toBe(true)
+      }),
   )
 
   it.instance("promotes a running foreground task without restarting it", () =>

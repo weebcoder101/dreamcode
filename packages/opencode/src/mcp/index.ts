@@ -300,11 +300,22 @@ export const layer = Layer.effect(
       }
     })
 
+    const allowedMcpCommands = (process.env.ALLOWED_MCP_COMMANDS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+
     const connectLocal = Effect.fn("MCP.connectLocal")(function* (
       key: string,
       mcp: ConfigMCPV1.Info & { type: "local" },
     ) {
       const [cmd, ...args] = mcp.command
+      if (allowedMcpCommands.length > 0 && !allowedMcpCommands.includes(cmd)) {
+        return {
+          client: undefined as MCPClient | undefined,
+          status: { status: "failed" as const, error: `MCP command "${cmd}" is not in ALLOWED_MCP_COMMANDS` },
+        }
+      }
       const baseDir = yield* InstanceState.directory
       const cwd = mcp.cwd ? path.resolve(baseDir, mcp.cwd) : baseDir
       const transport = new StdioClientTransport({
@@ -314,7 +325,7 @@ export const layer = Layer.effect(
         cwd,
         env: {
           ...process.env,
-          ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
+          ...(cmd === "opencode" && process.env.OPENCODE_MCP_INJECT_BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}),
           ...mcp.environment,
         },
       })

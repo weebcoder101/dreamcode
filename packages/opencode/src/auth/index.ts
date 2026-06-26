@@ -57,9 +57,14 @@ export const layer = Layer.effect(
 
     const all = Effect.fn("Auth.all")(function* () {
       if (process.env.OPENCODE_AUTH_CONTENT) {
+        let parsed: unknown
         try {
-          return JSON.parse(process.env.OPENCODE_AUTH_CONTENT)
-        } catch (err) {}
+          parsed = JSON.parse(process.env.OPENCODE_AUTH_CONTENT)
+        } catch (err) {
+          yield* Effect.logWarning("OPENCODE_AUTH_CONTENT is not valid JSON, treating as empty", err)
+          return {}
+        }
+        return Record.filterMap(parsed as Record<string, unknown>, (value) => Result.fromOption(decode(value), () => undefined))
       }
 
       const data = (yield* fsys.readJson(file).pipe(Effect.orElseSucceed(() => ({})))) as Record<string, unknown>

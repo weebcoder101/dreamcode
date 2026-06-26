@@ -46,7 +46,7 @@ export async function openEditor(input: { value: string; renderer: CliRenderer; 
     })
     return (await readFile(file, "utf8")) || undefined
   } finally {
-    await rm(file, { force: true }).catch(() => {})
+    await rm(file, { force: true }).catch(() => console.warn("failed to rm temp file", file))
     input.renderer.currentRenderBuffer.clear()
     input.renderer.resume()
     input.renderer.requestRender()

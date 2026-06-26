@@ -359,14 +359,18 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         .abort({
           sessionID: state.sessionID,
         })
-        .catch(() => {})
+        .catch((err) => {
+          console.warn("session abort failed", err)
+        })
         .finally(() => {
           state.aborting = false
         })
     },
     onBackground: () => {
       if (!hasSession(input, state)) return
-      void ctx.sdk.experimental.session.background({ sessionID: state.sessionID }).catch(() => {})
+      void ctx.sdk.experimental.session.background({ sessionID: state.sessionID }).catch((err) => {
+        console.warn("session background failed", err)
+      })
     },
     onSubagentSelect: (sessionID) => {
       state.selectSubagent?.(sessionID)
@@ -385,6 +389,29 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       return
     }
 
+    // Retry command list fetch on failure (cold-start race with InstanceState cache)
+    const fetchCommands = async (retries = 2): Promise<RunCommand[]> => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const result = await ctx.sdk.command.list({ directory: ctx.directory })
+          return result.data ?? []
+        } catch (err) {
+          if (attempt < retries) {
+            await new Promise((r) => setTimeout(r, 500 * (attempt + 1)))
+            continue
+          }
+          console.warn("command list fetch failed after retries", err)
+          footer.append({
+            kind: "error",
+            text: "Slash commands unavailable — some features may not work",
+            phase: "start",
+            source: "system",
+          })
+          return []
+        }
+      }
+    }
+
     const [agents, resources, commands] = await Promise.all([
       ctx.sdk.app
         .agents({ directory: ctx.directory })
@@ -394,13 +421,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         .list({ directory: ctx.directory })
         .then((x) => Object.values(x.data ?? {}))
         .catch(() => []),
-      ctx.sdk.command
-        .list({ directory: ctx.directory })
-        .then((x) => x.data ?? [])
-        .catch((err) => {
-          console.warn("command list fetch failed", err)
-          return [] as RunCommand[]
-        }),
+      fetchCommands(),
     ])
     if (footer.isClosed) {
       return
@@ -417,7 +438,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   void footer
     .idle()
     .then(loadCatalog)
-    .catch(() => {})
+    .catch((err) => {
+      console.warn("loadCatalog failed", err)
+    })
 
   if (Flag.OPENCODE_SHOW_TTFD) {
     footer.append({
@@ -439,7 +462,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
   }
 
   if (input.afterPaint) {
-    void Promise.resolve(input.afterPaint(ctx)).catch(() => {})
+    void Promise.resolve(input.afterPaint(ctx)).catch((err) => {
+      console.warn("afterPaint failed", err)
+    })
   }
 
   void modelTask.then((info) => {
@@ -545,7 +570,9 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               }),
           }),
         )
-        .catch(() => {})
+        .catch((err) => {
+          console.warn("replayOnResize failed", err)
+        })
     }, RESIZE_DELAY)
   })
 
@@ -773,7 +800,9 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
           throw new Error("Session not found")
         }
 
-        void input.share(sdk, next.id).catch(() => {})
+        void input.share(sdk, next.id).catch((err) => {
+          console.warn("session share failed", err)
+        })
         return {
           sessionID: next.id,
           sessionTitle: next.title,

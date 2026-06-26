@@ -17,11 +17,14 @@ export type OpenAICompatibleErrorData = z.infer<typeof openaiCompatibleErrorData
 
 export type ProviderErrorStructure<T> = {
   errorSchema: ZodType<T>
-  errorToMessage: (error: T) => string
-  isRetryable?: (response: Response, error?: T) => boolean
+  errorToMessage: (error: unknown) => string
+  isRetryable?: (response: Response, error?: unknown) => boolean
 }
 
 export const defaultOpenAICompatibleErrorStructure: ProviderErrorStructure<OpenAICompatibleErrorData> = {
   errorSchema: openaiCompatibleErrorDataSchema,
-  errorToMessage: (data) => data.error.message,
+  errorToMessage: (data: unknown) => {
+    const parsed = openaiCompatibleErrorDataSchema.safeParse(data)
+    return parsed.success ? parsed.data.error.message : String(data)
+  },
 }

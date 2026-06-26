@@ -459,7 +459,7 @@ export function RunCommandMenuBody(props: {
         : []),
     ]
     const commands = (props.commands() ?? [])
-      .filter((item) => item.source !== "skill" && !builtins.includes(item.name) && item.name !== "subagent" && item.name !== "subagents")
+      .filter((item) => !builtins.includes(item.name) && item.name !== "subagent" && item.name !== "subagents")
       .map(
         (item) =>
           ({

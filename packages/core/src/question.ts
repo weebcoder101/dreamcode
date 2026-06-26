@@ -101,9 +101,9 @@ export interface ReplyInput {
 }
 
 export interface Interface {
-  readonly ask: (input: AskInput) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
-  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
-  readonly reject: (requestID: ID) => Effect.Effect<void, NotFoundError>
+  readonly ask: (input: AskInput) => Effect.Effect<ReadonlyArray<Answer>, RejectedError | EventV2.InvalidSyncEventError>
+  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | EventV2.InvalidSyncEventError>
+  readonly reject: (requestID: ID) => Effect.Effect<void, NotFoundError | EventV2.InvalidSyncEventError>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 

@@ -16,7 +16,10 @@ import { SessionContextEpochTable, SessionTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
-class RevisionMismatch extends Error {}
+export class RevisionMismatch extends Schema.TaggedErrorClass<RevisionMismatch>()(
+  "SessionContextEpoch.RevisionMismatch",
+  {},
+) {}
 class LocationMismatch extends Error {}
 export class AgentMismatch extends Error {}
 export class AgentReplacementBlocked extends Schema.TaggedErrorClass<AgentReplacementBlocked>()(
@@ -25,17 +28,16 @@ export class AgentReplacementBlocked extends Schema.TaggedErrorClass<AgentReplac
 ) {}
 
 const retryRevisionMismatch = <A, E>(
-  attempt: () => Effect.Effect<A, E>,
+  attempt: () => Effect.Effect<A, E | RevisionMismatch>,
   remaining = 10,
-  delayMs = 50,
-): Effect.Effect<A, E> =>
+): Effect.Effect<A, E | RevisionMismatch> =>
   attempt().pipe(
-    Effect.catchDefect((defect) => {
-      if (!(defect instanceof RevisionMismatch) || remaining <= 0) {
-        return Effect.die(defect)
+    Effect.catchTag("SessionContextEpoch.RevisionMismatch", (error) => {
+      if (remaining <= 0) {
+        return Effect.fail(error)
       }
-      return Effect.sleep(`${delayMs} millis`).pipe(
-        Effect.zipRight(retryRevisionMismatch(attempt, remaining - 1, delayMs * 2)),
+      return Effect.yieldNow.pipe(
+        Effect.andThen(retryRevisionMismatch(attempt, remaining - 1)),
       )
     }),
   )
@@ -52,7 +54,7 @@ export function initialize(
   sessionID: SessionSchema.ID,
   location: Location.Ref,
   agent: AgentV2.ID,
-): Effect.Effect<Prepared | undefined, SystemContext.InitializationBlocked> {
+): Effect.Effect<Prepared | undefined, SystemContext.InitializationBlocked | RevisionMismatch> {
   return retryRevisionMismatch(() => initializeOnce(db, context, sessionID, location, agent)).pipe(
     Effect.withSpan("SessionContextEpoch.initialize"),
   )
@@ -65,7 +67,7 @@ export function prepare(
   sessionID: SessionSchema.ID,
   location: Location.Ref,
   agent: AgentV2.ID,
-): Effect.Effect<Prepared, SystemContext.InitializationBlocked | ContextSnapshotDecodeError | AgentReplacementBlocked> {
+): Effect.Effect<Prepared, SystemContext.InitializationBlocked | ContextSnapshotDecodeError | AgentReplacementBlocked | EventV2.InvalidSyncEventError | RevisionMismatch> {
   return retryRevisionMismatch(() => prepareOnce(db, events, context, sessionID, location, agent)).pipe(
     Effect.withSpan("SessionContextEpoch.prepare"),
   )
@@ -79,7 +81,8 @@ const prepareOnce = Effect.fnUntraced(function* (
   location: Location.Ref,
   agent: AgentV2.ID,
 ) {
-  const [value, stored] = yield* Effect.all([context, find(db, sessionID)], { concurrency: "unbounded" })
+  const value = yield* context
+  const stored = yield* find(db, sessionID)
   if (!stored) {
     const generation = yield* SystemContext.initialize(value)
     const baselineSeq = yield* insert(db, sessionID, location, agent, generation)
@@ -112,6 +115,12 @@ const prepareOnce = Effect.fnUntraced(function* (
     SessionEvent.ContextUpdated,
     { sessionID, messageID: SessionMessageID.ID.create(), timestamp: yield* DateTime.now, text: result.text },
     { commit: () => advance(db, sessionID, stored.revision, result.snapshot).pipe(Effect.orDie) },
+  ).pipe(
+    Effect.catch((error) => Effect.die(error)),
+    Effect.catchDefect((defect) => {
+      if (defect instanceof RevisionMismatch) return Effect.fail(defect)
+      return Effect.die(defect)
+    }),
   )
   return { baseline: stored.baseline, baselineSeq: stored.baseline_seq, revision: stored.revision + 1 }
 })
@@ -236,14 +245,18 @@ const insert = Effect.fnUntraced(function* (
             .returning({ sessionID: SessionContextEpochTable.session_id })
             .get()
             .pipe(
-              Effect.orDie,
-              Effect.flatMap((inserted) => (inserted ? Effect.void : Effect.die(new RevisionMismatch()))),
+              Effect.flatMap((inserted) => (inserted ? Effect.void : Effect.fail(new RevisionMismatch()))),
             )
           return baselineSeq
         }),
       { behavior: "immediate" },
     )
-    .pipe(Effect.orDie)
+      .pipe(
+        Effect.catch((error) => {
+          if (error instanceof RevisionMismatch) return Effect.fail(error)
+          return Effect.die(error)
+        }),
+      )
 })
 
 const replace = Effect.fnUntraced(function* (
@@ -277,12 +290,16 @@ const replace = Effect.fnUntraced(function* (
             )
             .returning({ revision: SessionContextEpochTable.revision })
             .get()
-            .pipe(Effect.orDie)
-          if (!updated) return yield* Effect.die(new RevisionMismatch())
+          if (!updated) return yield* Effect.fail(new RevisionMismatch())
         }),
       { behavior: "immediate" },
     )
-    .pipe(Effect.orDie)
+    .pipe(
+      Effect.catch((error) => {
+        if (error instanceof RevisionMismatch) return Effect.fail(error)
+        return Effect.die(error)
+      }),
+    )
 })
 
 const fence = Effect.fnUntraced(function* (
@@ -301,7 +318,7 @@ const fence = Effect.fnUntraced(function* (
   if (!current) return
   if (current.selected !== null && current.selected !== agent)
     return yield* Effect.die(new AgentMismatch())
-  if (current.revision !== expectedRevision) return yield* Effect.die(new RevisionMismatch())
+  if (current.revision !== expectedRevision) return yield* Effect.fail(new RevisionMismatch())
 })
 
 export const current = Effect.fn("SessionContextEpoch.current")(function* (
@@ -347,6 +364,5 @@ const advance = Effect.fnUntraced(function* (
     )
     .returning({ revision: SessionContextEpochTable.revision })
     .get()
-    .pipe(Effect.orDie)
-  if (!updated) return yield* Effect.die(new RevisionMismatch())
+  if (!updated) return yield* Effect.fail(new RevisionMismatch())
 })

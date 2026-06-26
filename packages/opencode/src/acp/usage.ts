@@ -209,7 +209,7 @@ export const layer = Layer.effect(
               cost: { amount: totalSessionCost(messages), currency: "USD" },
             },
           })
-          .catch(() => {}),
+          .catch((e) => console.warn("acp: usage session update failed", e)),
       )
     })
 

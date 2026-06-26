@@ -1,12 +1,13 @@
 import { Formatter, Logger, type LogLevel } from "effect"
 import path from "path"
 import { Global } from "../global"
+import { redactLogLine } from "./redact"
 import { runID } from "./shared"
 
 function formatter(id: string = runID) {
   return Logger.map(Logger.formatStructured, (output) => {
     const messages = Array.isArray(output.message) ? output.message : [output.message]
-    return [
+    const outputLine = [
       ["timestamp", output.timestamp],
       ["level", output.level],
       ["run", id],
@@ -17,6 +18,7 @@ function formatter(id: string = runID) {
     ]
       .map(([key, value]) => `${key}=${format(value)}`)
       .join(" ")
+    return redactLogLine(outputLine)
   })
 }
 

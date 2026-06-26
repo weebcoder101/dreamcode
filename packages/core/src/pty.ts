@@ -96,12 +96,14 @@ export const Event = {
   Deleted: EventV2.define({ type: "pty.deleted", schema: { id: PtyID } }),
 }
 
+export type PtyError = NotFoundError | EventV2.InvalidSyncEventError
+
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: PtyID) => Effect.Effect<Info, NotFoundError>
-  readonly create: (input: PreparedCreate) => Effect.Effect<Info>
-  readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
-  readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError>
+  readonly create: (input: PreparedCreate) => Effect.Effect<Info, PtyError>
+  readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, PtyError>
+  readonly remove: (id: PtyID) => Effect.Effect<void, PtyError>
   readonly resize: (id: PtyID, cols: number, rows: number) => Effect.Effect<void, NotFoundError>
   readonly write: (id: PtyID, data: string) => Effect.Effect<void, NotFoundError>
   readonly connect: (

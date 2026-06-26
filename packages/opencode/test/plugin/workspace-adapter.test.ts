@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Duration, Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Database } from "@opencode-ai/core/database/database"
@@ -100,7 +100,7 @@ describe("plugin.workspace", () => {
 
       yield* Effect.promise(() =>
         Bun.write(
-          path.join(dir, "opencode.json"),
+          path.join(dir, "dreamcode.json"),
           JSON.stringify(
             {
               $schema: "https://opencode.ai/config.json",
@@ -114,6 +114,8 @@ describe("plugin.workspace", () => {
 
       const plugin = yield* Plugin.Service
       yield* plugin.init()
+      // Allow async adapter registration to settle before querying
+      yield* Effect.sleep(Duration.millis(100))
       const workspace = yield* Workspace.Service
       const ctx = yield* InstanceState.context
       const info = yield* workspace.create({

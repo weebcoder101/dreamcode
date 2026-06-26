@@ -621,7 +621,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
                           expires: refreshedExpires,
                         },
                       })
-                      .catch(() => {})
+                      .catch((e) => console.warn("xai: oauth token persist failed, next restart will force re-login", e))
                     return { access: tokens.access_token, refresh: refreshedRefresh, expires: refreshedExpires }
                   })
                   .finally(() => {
