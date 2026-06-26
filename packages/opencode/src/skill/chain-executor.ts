@@ -20,7 +20,13 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
   let realpath: string
   try {
     realpath = fs.realpathSync(resolved)
-  } catch {
+  } catch (error) {
+    // Differentiate between ENOENT (normal — file doesn't exist yet) and
+    // other errors (symlink loops, permission denied) which are real problems.
+    const code = (error as NodeJS.ErrnoException)?.code
+    if (code !== "ENOENT") {
+      console.warn("[chain-executor] Unexpected realpath error", resolved, error)
+    }
     // realpathSync throws when the file doesn't exist or permission denied.
     // path.resolve does NOT resolve `..` segments — reject traversal patterns.
     realpath = path.resolve(resolved)

@@ -340,7 +340,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
               score,
             },
           }
-        }).pipe(Effect.orDie),
+        }),
     }
   }),
 )

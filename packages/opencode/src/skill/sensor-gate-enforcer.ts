@@ -5,7 +5,7 @@
  * - 45s periodic timer check on `chat.message`
  * - Token predictor / shipping checklist question generation
  * - NEURO enrichment when available
- * - Circuit breaker for execution safety (OWN instance, not shared with TokenPredictor)
+ * - Circuit breaker for execution safety (shared with TokenPredictor singleton)
  *
  * This plugin hooks into `chat.message` to trigger periodic checks
  * and `experimental.chat.system.transform` to inject questions.
@@ -15,10 +15,10 @@
  */
 
 import type { Hooks, PluginInput, Plugin as PluginInstance } from "@opencode-ai/plugin"
-import { resetPeriodicTimer, categorizeQuestion } from "./token-predictor.js"
+import { resetPeriodicTimer, categorizeQuestion, predictorBreaker } from "./token-predictor.js"
 import { resolvePythonCommand, resolveSkillsDir, getPythonArgs } from "./python-resolver.js"
-import { createCircuitBreaker } from "./circuit-breaker.js"
 import { validateScriptPath } from "./chain-executor.js"
+import path from "path"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,23 +56,25 @@ const QUESTIONS_TTL_MS = 60_000 // 60 seconds before questions expire
 const sessionStates = new Map<string, SessionState>()
 
 // ---------------------------------------------------------------------------
-// Enforcer's OWN circuit breaker (NOT shared with TokenPredictor)
+// Shared Circuit Breaker — imported from token-predictor (singleton)
 // ---------------------------------------------------------------------------
 
-const enforcerBreaker = createCircuitBreaker(3, 5 * 60 * 1000)
-
 // ---------------------------------------------------------------------------
-// Script Execution (uses enforcer's own circuit breaker)
+// Script Execution (uses shared predictorBreaker from token-predictor)
 // ---------------------------------------------------------------------------
 
 async function runPredictorScript(prompt: string, projectRoot?: string): Promise<PredictorResult | null> {
-  if (enforcerBreaker.isCircuitOpen()) {
+  if (predictorBreaker.isCircuitOpen()) {
     console.warn("[sensor-gate-enforcer] Circuit breaker open, skipping prediction")
     return null
   }
 
   const skillsDir = resolveSkillsDir()
-  const scriptPath = `${skillsDir}/token-predictor/scripts/predict.py`
+  if (!skillsDir) {
+    console.warn("[sensor-gate-enforcer] Skills directory not resolved, skipping prediction")
+    return null
+  }
+  const scriptPath = path.join(skillsDir, "token-predictor", "scripts", "predict.py")
   const pythonCmd = resolvePythonCommand()
   const pythonArgs = getPythonArgs()
 
@@ -123,20 +125,20 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
       const stderr = await new Response(proc.stderr).text()
 
       if (exitCode !== 0) {
-        enforcerBreaker.recordFailure()
+        predictorBreaker.recordFailure()
         console.warn("[sensor-gate-enforcer] Predictor script failed:", stderr.slice(0, 200))
         return null
       }
 
       const result = JSON.parse(stdout) as PredictorResult
-      enforcerBreaker.recordSuccess()
+      predictorBreaker.recordSuccess()
       return result
     } catch (e) {
       clearTimeout(timeout)
       throw e
     }
   } catch (e) {
-    enforcerBreaker.recordFailure()
+    predictorBreaker.recordFailure()
     console.warn("[sensor-gate-enforcer] Failed to spawn predictor:", String(e))
     return null
   }
@@ -239,7 +241,7 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
           state.pendingPromise = null
         }
         sessionStates.clear()
-        enforcerBreaker.reset()
+        predictorBreaker.reset()
       },
     }
 

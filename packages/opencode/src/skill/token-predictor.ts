@@ -17,6 +17,7 @@ import { resolvePythonCommand, resolveSkillsDir, getPythonArgs } from "./python-
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker.js"
 import { createHash } from "crypto"
 import { validateScriptPath } from "./chain-executor.js"
+import path from "path"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,8 +86,8 @@ export function categorizeQuestion(q: string): string {
 
 function resolvePredictorScript(): string {
   const skillsDir = resolveSkillsDir()
-  const scriptPath = `${skillsDir}/token-predictor/scripts/predict.py`
-  return scriptPath
+  if (!skillsDir) return ""
+  return path.join(skillsDir, "token-predictor", "scripts", "predict.py")
 }
 
 const generateImpl = (params: {
