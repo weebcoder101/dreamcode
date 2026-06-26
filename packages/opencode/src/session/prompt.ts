@@ -1568,6 +1568,8 @@ Before every response, verify your reasoning:
                       for (const result of pipelineResults) {
                         if (result.status === "ok" && result.output) {
                           system.push(`\n<chain-executor-result name="${result.name}">\n${result.output.slice(0, 5000)}\n</chain-executor-result>`)
+                        } else if (result.status === "error") {
+                          system.push(`\n<chain-executor-result name="${result.name}" status="warning">\n${result.output.slice(0, 2000)}\n</chain-executor-result>`)
                         }
                       }
 

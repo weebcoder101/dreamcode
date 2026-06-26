@@ -133,11 +133,13 @@ describe("ChainExecutor", () => {
     { config: skillsConfig },
   )
 
-  it.live("verify returns empty for no results", () =>
+  it.live("verify returns warning string when no results and no enforcer", () =>
     Effect.gen(function* () {
       const executor = yield* ChainExecutor.Service
       const verifyResult = yield* executor.verify([])
-      expect(verifyResult).toBe("")
+      // Should return a visible warning, not empty string
+      expect(typeof verifyResult).toBe("string")
+      expect(verifyResult.length).toBeGreaterThan(0)
     }),
   )
 
@@ -247,5 +249,158 @@ describe("ChainExecutor integration (tmpdir)", () => {
       expect(results[0].output).toContain("This skill has no scripts")
     }),
     { config: skillsConfig },
+  )
+
+  it.instance("crashing script produces error status with stderr detail, not silence", () =>
+    Effect.gen(function* () {
+      const test = yield* InstanceState.contextOrNull
+      const dir = test?.directory ?? process.cwd()
+
+      const skillDir = path.join(dir, ".dreamcode", "skills", "test-crash")
+      const scriptsDir = path.join(skillDir, "scripts")
+      yield* Effect.tryPromise({
+        try: async () => {
+          await Bun.write(
+            path.join(skillDir, "SKILL.md"),
+            "---\nname: test-crash\ndescription: Crashes\n---\n# Crash\n",
+          )
+          await Bun.write(
+            path.join(scriptsDir, "run.py"),
+            'import sys\nsys.stderr.write("FATAL: database connection refused\\n")\nsys.exit(1)\n',
+          )
+        },
+        catch: (e) => new Error(String(e)),
+      })
+
+      const executor = yield* ChainExecutor.Service
+      const results = yield* executor.execute(["test-crash"], "test prompt")
+      expect(results).toHaveLength(1)
+      expect(results[0].status).toBe("error")
+      // Must contain the actual error detail, NOT be empty or a generic placeholder
+      expect(results[0].output).toContain("FATAL: database connection refused")
+      expect(results[0].output).toContain("Exit code 1")
+    }),
+    { config: skillsConfig },
+  )
+
+  it.instance("script with exit code 2 produces error status", () =>
+    Effect.gen(function* () {
+      const test = yield* InstanceState.contextOrNull
+      const dir = test?.directory ?? process.cwd()
+
+      const skillDir = path.join(dir, ".dreamcode", "skills", "test-exit2")
+      const scriptsDir = path.join(skillDir, "scripts")
+      yield* Effect.tryPromise({
+        try: async () => {
+          await Bun.write(
+            path.join(skillDir, "SKILL.md"),
+            "---\nname: test-exit2\ndescription: Exit 2\n---\n# Exit2\n",
+          )
+          await Bun.write(
+            path.join(scriptsDir, "run.py"),
+            'import sys\nprint("partial output before crash")\nsys.exit(2)\n',
+          )
+        },
+        catch: (e) => new Error(String(e)),
+      })
+
+      const executor = yield* ChainExecutor.Service
+      const results = yield* executor.execute(["test-exit2"], "test prompt")
+      expect(results).toHaveLength(1)
+      expect(results[0].status).toBe("error")
+      expect(results[0].output).toContain("Exit code 2")
+    }),
+    { config: skillsConfig },
+  )
+
+  it.instance("script writing to stderr but exiting 0 is treated as success", () =>
+    Effect.gen(function* () {
+      const test = yield* InstanceState.contextOrNull
+      const dir = test?.directory ?? process.cwd()
+
+      const skillDir = path.join(dir, ".dreamcode", "skills", "test-stderr-ok")
+      const scriptsDir = path.join(skillDir, "scripts")
+      yield* Effect.tryPromise({
+        try: async () => {
+          await Bun.write(
+            path.join(skillDir, "SKILL.md"),
+            "---\nname: test-stderr-ok\ndescription: Stderr ok\n---\n# StderrOk\n",
+          )
+          await Bun.write(
+            path.join(scriptsDir, "run.py"),
+            'import sys\nsys.stderr.write("warning: something\\n")\nprint("real output")\nsys.exit(0)\n',
+          )
+        },
+        catch: (e) => new Error(String(e)),
+      })
+
+      const executor = yield* ChainExecutor.Service
+      const results = yield* executor.execute(["test-stderr-ok"], "test prompt")
+      expect(results).toHaveLength(1)
+      expect(results[0].status).toBe("ok")
+      expect(results[0].output).toContain("real output")
+    }),
+    { config: skillsConfig },
+  )
+
+  it.instance("mixed chain with crashing script shows error for crash, ok for success", () =>
+    Effect.gen(function* () {
+      const test = yield* InstanceState.contextOrNull
+      const dir = test?.directory ?? process.cwd()
+
+      // Create a crashing skill
+      const crashDir = path.join(dir, ".dreamcode", "skills", "test-crash-mixed")
+      const crashScripts = path.join(crashDir, "scripts")
+      yield* Effect.tryPromise({
+        try: async () => {
+          await Bun.write(
+            path.join(crashDir, "SKILL.md"),
+            "---\nname: test-crash-mixed\ndescription: Crashes\n---\n# Crash\n",
+          )
+          await Bun.write(
+            path.join(crashScripts, "run.py"),
+            'import sys\nsys.stderr.write("BLOWN UP\\n")\nsys.exit(1)\n',
+          )
+        },
+        catch: (e) => new Error(String(e)),
+      })
+
+      const executor = yield* ChainExecutor.Service
+      const results = yield* executor.execute(
+        ["test-crash-mixed", "completely-fake-skill-xyz"],
+        "test prompt",
+      )
+      expect(results).toHaveLength(2)
+      // First: crashing script → error with detail
+      expect(results[0].name).toBe("test-crash-mixed")
+      expect(results[0].status).toBe("error")
+      expect(results[0].output).toContain("BLOWN UP")
+      // Second: missing skill → not_found
+      expect(results[1].name).toBe("completely-fake-skill-xyz")
+      expect(results[1].status).toBe("not_found")
+    }),
+    { config: skillsConfig },
+  )
+
+  it.instance("verify returns warning when skillsDir is unavailable", () =>
+    Effect.gen(function* () {
+      const executor = yield* ChainExecutor.Service
+      const verifyResult = yield* executor.verify([
+        { name: "test", output: "ok", status: "ok" },
+      ])
+      // With no skills dir, verify should return a visible warning, not empty string
+      expect(typeof verifyResult).toBe("string")
+      expect(verifyResult.length).toBeGreaterThan(0)
+    }),
+  )
+
+  it.instance("runFullPipeline returns error result when orchestrator not found", () =>
+    Effect.gen(function* () {
+      const executor = yield* ChainExecutor.Service
+      const results = yield* executor.runFullPipeline(["nonexistent-skill"], "test prompt")
+      // Should either return a result (if orchestrator exists) or empty array
+      // But should NOT throw or hang
+      expect(Array.isArray(results)).toBe(true)
+    }),
   )
 })

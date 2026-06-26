@@ -77,7 +77,7 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   cwd: string,
 ) {
   if (!validateScriptPath(path.resolve(script), cwd)) {
-    return "[SKIPPED] Script path outside allowed skills directory"
+    return { output: "[SKIPPED] Script path outside allowed skills directory", exitCode: 0 }
   }
   // Pass prompt as --prompt argument instead of piping via stdin.
   // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
@@ -102,16 +102,25 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
           PROJECT_ROOT: cwd,
         },
       })
-      const text = await proc.stdout.text()
-      await proc.exited
-      return text || ""
+      const stdoutPromise = proc.stdout.text()
+      const stderrPromise = proc.stderr.text()
+      const exitCode = await proc.exited
+      const stdout = await stdoutPromise
+      const stderr = await stderrPromise
+      if (exitCode !== 0) {
+        const detail = (stderr || stdout || "").slice(0, 500)
+        console.warn("[chain-executor] script exited non-zero", { script, exitCode, detail })
+        return { output: `[ERROR] Exit code ${exitCode}: ${detail}`, exitCode }
+      }
+      return { output: stdout || "", exitCode: 0 }
     },
     catch: (err) => new Error(String(err)),
   }).pipe(
     Effect.timeout(Duration.seconds(150)),
-    Effect.catch(() => {
-      console.warn("[chain-executor] python script timed out", { script })
-      return Effect.succeed("")
+    Effect.catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.warn("[chain-executor] python script failed", { script, error: msg })
+      return Effect.succeed({ output: `[ERROR] ${msg}`, exitCode: -1 })
     }),
   )
 })
@@ -122,7 +131,7 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
   cwd: string,
 ) {
   if (!validateScriptPath(path.resolve(script), cwd)) {
-    return ""
+    return { output: "", exitCode: 0 }
   }
   // Cross-platform Python resolution
   const pythonCmd = resolvePythonCommand()
@@ -142,16 +151,25 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
           PROJECT_ROOT: cwd,
         },
       })
-      const text = await proc.stdout.text()
-      await proc.exited
-      return text || ""
+      const stdoutPromise = proc.stdout.text()
+      const stderrPromise = proc.stderr.text()
+      const exitCode = await proc.exited
+      const stdout = await stdoutPromise
+      const stderr = await stderrPromise
+      if (exitCode !== 0) {
+        const detail = (stderr || stdout || "").slice(0, 500)
+        console.warn("[chain-executor] advanced script exited non-zero", { script, exitCode, detail })
+        return { output: `[ERROR] Exit code ${exitCode}: ${detail}`, exitCode }
+      }
+      return { output: stdout || "", exitCode: 0 }
     },
     catch: (err) => new Error(String(err)),
   }).pipe(
     Effect.timeout(Duration.seconds(300)),
-    Effect.catch(() => {
-      console.warn("[chain-executor] advanced python script timed out", { script })
-      return Effect.succeed("")
+    Effect.catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.warn("[chain-executor] advanced python script failed", { script, error: msg })
+      return Effect.succeed({ output: `[ERROR] ${msg}`, exitCode: -1 })
     }),
   )
 })
@@ -188,17 +206,22 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
 
     // Execute the first discovered script
     const script = scripts[0]
-    const result = yield* runPythonScript(script, userPrompt, cwd).pipe(
-      Effect.catch((err) =>
-        Effect.succeed(`[ERROR] Script execution failed: ${err}`)
-      ),
-    )
+    const scriptResult = yield* runPythonScript(script, userPrompt, cwd)
 
-    results.push({
-      name: skillName,
-      output: result || "[SKILL EXECUTED: no output]",
-      status: result ? "ok" : "error",
-    })
+    if (scriptResult.exitCode !== 0) {
+      // Script crashed or was killed — propagate the error detail
+      results.push({
+        name: skillName,
+        output: scriptResult.output || `[ERROR] Script ${script} exited with code ${scriptResult.exitCode}`,
+        status: "error",
+      })
+    } else {
+      results.push({
+        name: skillName,
+        output: scriptResult.output || "[SKILL EXECUTED: no output]",
+        status: scriptResult.output ? "ok" : "error",
+      })
+    }
   }
 
   return results
@@ -227,27 +250,38 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
       try: () => Bun.file(executorScript).exists(),
       catch: () => false,
     })
-    if (exists) {
-      const pipelineResult = yield* runPythonScriptAdvanced(
-        executorScript,
-        ["--mode", chain.length > 3 ? "DREAM_INNOVATION" : "STANDARD", "--prompt", userPrompt],
-        cwd,
-      ).pipe(
-        Effect.catch(() => {
-          console.warn("[chain-executor] pipeline script timed out or failed", { path: executorScript })
-          return Effect.succeed("")
-        }),
-      )
-      if (pipelineResult) {
-        results.push({
-          name: "chain-executor-pipeline",
-          output: pipelineResult,
-          status: "ok",
-        })
-      }
+    if (!exists) {
+      results.push({
+        name: "chain-executor-pipeline",
+        output: `[WARNING] Pipeline orchestrator not found: ${executorScript}`,
+        status: "error",
+      })
+      return results
+    }
+    const pipelineResult = yield* runPythonScriptAdvanced(
+      executorScript,
+      ["--mode", chain.length > 3 ? "DREAM_INNOVATION" : "STANDARD", "--prompt", userPrompt],
+      cwd,
+    )
+    if (pipelineResult.exitCode !== 0) {
+      results.push({
+        name: "chain-executor-pipeline",
+        output: pipelineResult.output || `[ERROR] Pipeline script exited with code ${pipelineResult.exitCode}`,
+        status: "error",
+      })
+    } else if (pipelineResult.output) {
+      results.push({
+        name: "chain-executor-pipeline",
+        output: pipelineResult.output,
+        status: "ok",
+      })
     }
   } catch (e) {
-    console.warn("[chain-executor] pipeline script not available", { path: executorScript, error: String(e) })
+    results.push({
+      name: "chain-executor-pipeline",
+      output: `[ERROR] Pipeline execution failed: ${String(e)}`,
+      status: "error",
+    })
   }
 
   return results
@@ -258,8 +292,7 @@ export const verify = Effect.fn("ChainExecutor.verify")(function* (results: Chai
   const cwd = ctx?.directory ?? process.cwd()
   const skillsDir = resolveSkillsDir()
   if (!skillsDir) {
-    console.warn("[chain-executor] skills directory not found, skipping verify")
-    return ""
+    return "[WARNING] Skills directory not found — verify skipped"
   }
   const enforcerScript = path.join(skillsDir, "chain-orchestrator", "scripts", "enforcer.py")
 
@@ -269,8 +302,7 @@ export const verify = Effect.fn("ChainExecutor.verify")(function* (results: Chai
       catch: () => false,
     })
     if (!exists) {
-      console.warn("[chain-executor] enforcer script not found, skipping verify", { path: enforcerScript })
-      return ""
+      return `[WARNING] Enforcer script not found: ${enforcerScript} — verify skipped`
     }
 
     const summary = results
@@ -281,17 +313,13 @@ export const verify = Effect.fn("ChainExecutor.verify")(function* (results: Chai
       enforcerScript,
       ["--results", summary],
       cwd,
-    ).pipe(
-      Effect.catch(() => {
-        console.warn("[chain-executor] verifier script timed out or failed", { path: enforcerScript })
-        return Effect.succeed("")
-      }),
     )
-
-    return verifierResult || ""
+    if (verifierResult.exitCode !== 0) {
+      return verifierResult.output || `[ERROR] Enforcer exited with code ${verifierResult.exitCode}`
+    }
+    return verifierResult.output || ""
   } catch (e) {
-    console.warn("[chain-executor] verify failed", { error: String(e) })
-    return ""
+    return `[ERROR] Verify failed: ${String(e)}`
   }
 })
 
