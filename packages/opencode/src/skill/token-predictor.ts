@@ -13,10 +13,9 @@
  */
 
 import { Effect } from "effect"
-import { resolvePythonCommand, resolveSkillsDir, getPythonArgs } from "./python-resolver.js"
+import { resolvePythonCommand, resolveSkillsDir, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver.js"
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker.js"
 import { createHash } from "crypto"
-import { validateScriptPath } from "./chain-executor.js"
 import path from "path"
 
 // ---------------------------------------------------------------------------
@@ -115,13 +114,21 @@ const generateImpl = (params: {
       return yield* Effect.fail(`Script path validation failed: ${scriptPath}`)
     }
 
+    // Write prompt to temp file — avoids leaking it in process listings
+    let tmpFile = ""
+    try {
+      tmpFile = writePromptToTmpFile(params.prompt, params.projectRoot || process.cwd(), "tp-")
+    } catch (e) {
+      return yield* Effect.fail(`Failed to create temp file for prompt: ${e}`)
+    }
+
     // Build args
     const args: string[] = [
       ...pythonArgs,
       scriptPath,
       "--json",
-      "--prompt",
-      params.prompt,
+      "--prompt-file",
+      tmpFile,
       "--count",
       String(params.count ?? 5),
     ]
@@ -141,13 +148,10 @@ const generateImpl = (params: {
         const proc = Bun.spawn([pythonCmd, ...args], {
           stdout: "pipe",
           stderr: "pipe",
-          env: {
-            PATH: process.env.PATH,
-            HOME: process.env.HOME,
-            PYTHONPATH: process.env.PYTHONPATH ?? "",
-            NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
-            PROJECT_ROOT: params.projectRoot || process.cwd(),
-          },
+        env: {
+          ...BASE_SUBPROCESS_ENV,
+          PROJECT_ROOT: params.projectRoot || process.cwd(),
+        },
         })
 
         const timeout = setTimeout(() => {
@@ -188,7 +192,7 @@ const generateImpl = (params: {
         project_context: string
         timestamp: string
       },
-      catch: () => `Failed to parse predictor output: ${result.stdout.slice(0, 200)}`,
+      catch: () => `Failed to parse predictor output: ${result.stdout.slice(0, 500)}`,
     })
 
     predictorBreaker.recordSuccess()
@@ -199,6 +203,9 @@ const generateImpl = (params: {
       questionHash: createHash("sha256").update(q.toLowerCase().trim()).digest("hex"),
       category: categorizeQuestion(q),
     }))
+
+    // Clean up temp file
+    cleanupTmpFile(tmpFile)
 
     return {
       questions,

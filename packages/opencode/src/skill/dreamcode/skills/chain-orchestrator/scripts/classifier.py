@@ -7,6 +7,7 @@ Analyzes the user's prompt and returns the exact chain execution order.
 
 import json
 import re
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Task Detection Rules
@@ -161,11 +162,19 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Prompt Classifier")
-    parser.add_argument("--prompt", required=True, help="User prompt to classify")
+    parser.add_argument("--prompt", default=None, help="User prompt to classify")
+    parser.add_argument("--prompt-file", default=None, help="Read prompt from file")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
 
-    result = classify_prompt(args.prompt)
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text().strip()
+    elif args.prompt:
+        prompt = args.prompt
+    else:
+        parser.error("Either --prompt or --prompt-file is required")
+
+    result = classify_prompt(prompt)
 
     if args.json:
         print(json.dumps(result, indent=2))

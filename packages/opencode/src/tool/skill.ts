@@ -12,7 +12,7 @@ import * as Tool from "./tool"
 import * as path from "path"
 import * as fs from "fs"
 import DESCRIPTION from "./skill.txt"
-import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME } from "@/skill/python-resolver"
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME, writePromptToTmpFile, cleanupTmpFile } from "@/skill/python-resolver"
 
 const SKILLS_DIR = resolveSkillsDir()
 const CHAIN_LOG = path.join(HOME, ".dreamcode", "chain_log.jsonl")
@@ -133,26 +133,18 @@ function sanitizeSensorGateOutput(raw: string): string {
 // Unix socket EOF issue in compiled binaries.
 const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (prompt: string) {
   if (!SENSOR_GATE || !fs.existsSync(SENSOR_GATE)) return ""
-  const tmpBase = process.env.XDG_RUNTIME_DIR
-    ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
-    : path.join(HOME, ".dreamcode", "tmp")
-  let tmpDir = ""
   let tmpFile = ""
   try {
-    fs.mkdirSync(tmpBase, { recursive: true })
-    tmpDir = fs.mkdtempSync(path.join(tmpBase, "sg-"))
-    fs.chmodSync(tmpDir, 0o700)
-    tmpFile = path.join(tmpDir, "prompt.txt")
-    fs.writeFileSync(tmpFile, prompt, "utf-8")
-  } catch {
-    tmpFile = ""
+    tmpFile = writePromptToTmpFile(prompt, process.cwd(), "sg-")
+  } catch (e) {
+    // Temp file creation failed — do NOT fall back to --prompt CLI arg
+    // which would leak the prompt in process listings.
+    return Effect.fail(new Error(`[skill-tool] Failed to create temp file for prompt: ${e}`))
   }
   // Cross-platform Python resolution
   const pythonCmd = resolvePythonCommand()
   const versionArgs = getPythonArgs()
-  const args = tmpFile
-    ? [pythonCmd, ...versionArgs, SENSOR_GATE!, "--prompt-file", tmpFile]
-    : [pythonCmd, ...versionArgs, SENSOR_GATE!, "--prompt", prompt]
+  const args = [pythonCmd, ...versionArgs, SENSOR_GATE!, "--prompt-file", tmpFile]
   return yield* Effect.tryPromise({
     try: async () => {
       const proc = Bun.spawn(args, {
@@ -162,18 +154,12 @@ const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (promp
       const text = await proc.stdout.text()
       await proc.exited
       // Clean up temp file
-      if (tmpFile) {
-        try { fs.unlinkSync(tmpFile) } catch {}
-        try { fs.rmdirSync(tmpDir) } catch {}
-      }
+      cleanupTmpFile(tmpFile)
       return text || ""
     },
     catch: (err) => {
       // Clean up temp file on error too
-      if (tmpFile) {
-        try { fs.unlinkSync(tmpFile) } catch {}
-        try { fs.rmdirSync(tmpDir) } catch {}
-      }
+      cleanupTmpFile(tmpFile)
       return new Error(String(err))
     },
   }).pipe(
@@ -186,26 +172,18 @@ const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (promp
 // Prompt is written to a temp file instead of stdin pipe to avoid Bun.spawn
 // Unix socket EOF issue in compiled binaries.
 const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (script: string, prompt: string) {
-  const tmpBase = process.env.XDG_RUNTIME_DIR
-    ? path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")
-    : path.join(HOME, ".dreamcode", "tmp")
-  let tmpDir = ""
   let tmpFile = ""
   try {
-    fs.mkdirSync(tmpBase, { recursive: true })
-    tmpDir = fs.mkdtempSync(path.join(tmpBase, "sk-"))
-    fs.chmodSync(tmpDir, 0o700)
-    tmpFile = path.join(tmpDir, "prompt.txt")
-    fs.writeFileSync(tmpFile, prompt, "utf-8")
-  } catch {
-    tmpFile = ""
+    tmpFile = writePromptToTmpFile(prompt, process.cwd(), "sk-")
+  } catch (e) {
+    // Temp file creation failed — do NOT fall back to --prompt CLI arg
+    // which would leak the prompt in process listings.
+    return Effect.fail(new Error(`[skill-tool] Failed to create temp file for prompt: ${e}`))
   }
   // Cross-platform Python resolution
   const pythonCmd = resolvePythonCommand()
   const versionArgs = getPythonArgs()
-  const args = tmpFile
-    ? [pythonCmd, ...versionArgs, script, "--prompt-file", tmpFile]
-    : [pythonCmd, ...versionArgs, script, "--prompt", prompt]
+  const args = [pythonCmd, ...versionArgs, script, "--prompt-file", tmpFile]
   return yield* Effect.tryPromise({
     try: async () => {
       const proc = Bun.spawn(args, {
@@ -214,19 +192,11 @@ const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (scr
       })
       const text = await proc.stdout.text()
       await proc.exited
-      // Clean up temp file
-      if (tmpFile) {
-        try { fs.unlinkSync(tmpFile) } catch {}
-        try { fs.rmdirSync(tmpDir) } catch {}
-      }
+      cleanupTmpFile(tmpFile)
       return text || ""
     },
     catch: (err) => {
-      // Clean up temp file on error too
-      if (tmpFile) {
-        try { fs.unlinkSync(tmpFile) } catch {}
-        try { fs.rmdirSync(tmpDir) } catch {}
-      }
+      cleanupTmpFile(tmpFile)
       return new Error(String(err))
     },
   }).pipe(

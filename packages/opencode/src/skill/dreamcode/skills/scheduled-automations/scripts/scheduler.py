@@ -181,11 +181,19 @@ def cmd_add(args: argparse.Namespace) -> None:
         print(f"Job '{args.name}' already exists. Use 'update' to modify.")
         sys.exit(1)
 
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text().strip()
+    elif args.prompt:
+        prompt = args.prompt
+    else:
+        print("Error: --prompt or --prompt-file is required")
+        sys.exit(1)
+
     job = Job(
         name=args.name,
         schedule=args.schedule,
         chain=args.chain,
-        prompt=args.prompt,
+        prompt=prompt,
         enabled=not args.disabled,
         notify=args.notify,
     )
@@ -196,7 +204,7 @@ def cmd_add(args: argparse.Namespace) -> None:
     print(f"✓ Added job '{args.name}'")
     print(f"  Schedule: {args.schedule}")
     print(f"  Chain: {args.chain}")
-    print(f"  Prompt: {args.prompt[:80]}...")
+    print(f"  Prompt: {prompt[:80]}...")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -352,8 +360,10 @@ def main() -> None:
                        help="Cron schedule (e.g. '0 2 * * *')")
     p_add.add_argument("--chain", "-c", required=True,
                        help="Skill chain (e.g. 'security → quality')")
-    p_add.add_argument("--prompt", "-p", required=True,
+    p_add.add_argument("--prompt", "-p", default=None,
                        help="Prompt to send to agent")
+    p_add.add_argument("--prompt-file", default=None,
+                       help="Read prompt from file")
     p_add.add_argument("--notify", action="store_true",
                        help="Notify on completion")
     p_add.add_argument("--disabled", action="store_true",

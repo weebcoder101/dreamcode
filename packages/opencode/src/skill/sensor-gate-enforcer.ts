@@ -16,8 +16,7 @@
 
 import type { Hooks, PluginInput, Plugin as PluginInstance } from "@opencode-ai/plugin"
 import { resetPeriodicTimer, categorizeQuestion, predictorBreaker } from "./token-predictor.js"
-import { resolvePythonCommand, resolveSkillsDir, getPythonArgs } from "./python-resolver.js"
-import { validateScriptPath } from "./chain-executor.js"
+import { resolvePythonCommand, resolveSkillsDir, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver.js"
 import path from "path"
 
 // ---------------------------------------------------------------------------
@@ -84,12 +83,21 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
     return null
   }
 
+  // Write prompt to temp file — avoids leaking it in process listings
+  let tmpFile = ""
+  try {
+    tmpFile = writePromptToTmpFile(prompt, projectRoot || process.cwd(), "enf-")
+  } catch (e) {
+    console.warn("[sensor-gate-enforcer] Failed to create temp file for prompt:", e)
+    return null
+  }
+
   const args = [
     ...pythonArgs,
     scriptPath,
     "--json",
-    "--prompt",
-    prompt,
+    "--prompt-file",
+    tmpFile,
     "--count",
     String(MAX_QUESTIONS),
   ]
@@ -102,10 +110,7 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
       stdout: "pipe",
       stderr: "pipe",
       env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        PYTHONPATH: process.env.PYTHONPATH ?? "",
-        NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
+        ...BASE_SUBPROCESS_ENV,
         PROJECT_ROOT: projectRoot || process.cwd(),
       },
     })
@@ -126,7 +131,7 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
 
       if (exitCode !== 0) {
         predictorBreaker.recordFailure()
-        console.warn("[sensor-gate-enforcer] Predictor script failed:", stderr.slice(0, 200))
+        console.warn("[sensor-gate-enforcer] Predictor script failed:", stderr.slice(0, 500))
         return null
       }
 
@@ -141,6 +146,8 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
     predictorBreaker.recordFailure()
     console.warn("[sensor-gate-enforcer] Failed to spawn predictor:", String(e))
     return null
+  } finally {
+    cleanupTmpFile(tmpFile)
   }
 }
 

@@ -4,32 +4,10 @@ import * as fs from "fs"
 import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
-import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, HOME, isWindows, debugLog } from "./python-resolver"
+import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, HOME, isWindows, debugLog, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "./python-resolver"
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
-
-/** Resolve a writable temp directory, trying project-local first then fallbacks. */
-function resolveTmpBase(projectRoot: string): string {
-  if (isWindows()) {
-    return path.join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
-  }
-  const candidates = [
-    path.join(projectRoot, ".dreamcode", "tmp"),
-    ...(process.env.XDG_RUNTIME_DIR ? [path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")] : []),
-    path.join(HOME, ".dreamcode", "tmp"),
-  ]
-  for (const dir of candidates) {
-    try {
-      fs.mkdirSync(dir, { recursive: true })
-      const testFile = path.join(dir, ".write-test")
-      fs.writeFileSync(testFile, "")
-      fs.unlinkSync(testFile)
-      return dir
-    } catch {}
-  }
-  return candidates[0]
-}
 
 const RATE_MAX_SPAWNS = 5
 
@@ -341,7 +319,7 @@ export function evaluateSpawnNecessity(
   }
 }
 
-function depthScore(result: SensorGateResult): number {
+export function depthScore(result: SensorGateResult): number {
   // Compute task depth from multiple signals on a 1-5 scale
   const tags = result.domain_tags.filter(Boolean).length
   const chainLen = result.chain.filter(Boolean).length
@@ -550,6 +528,16 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
     }
   }
 
+  // Post-validate critical fields
+  if (!["low", "medium", "high"].includes(result.risk_level)) {
+    console.warn(`[sensor-gate] Invalid risk_level "${result.risk_level}" — defaulting to "medium"`)
+    result.risk_level = "medium"
+  }
+  if (!Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1) {
+    console.warn(`[sensor-gate] Invalid confidence "${result.confidence}" — clamping to [0,1]`)
+    result.confidence = Math.max(0, Math.min(1, result.confidence))
+  }
+
   return result
 }
 
@@ -585,24 +573,20 @@ function runSensorGateEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
-      // Write prompt to temp file instead of piping via stdin.
+      // Write prompt to temp file instead of piping via stdin or CLI --prompt arg.
       // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
       // and writer.close() doesn't send EOF through them, causing Python's
       // sys.stdin.read() to block forever. Temp file avoids this entirely.
-      const tmpBase = resolveTmpBase(projectRoot)
-      let tmpDir = ""
+      // Using --prompt-file also avoids leaking the prompt in process listings.
       let tmpFile = ""
       try {
-        fs.mkdirSync(tmpBase, { recursive: true })
-        tmpDir = fs.mkdtempSync(path.join(tmpBase, "sg-"))
-        // chmod is a no-op on Windows; skip it to avoid potential throw in edge cases
-        if (!isWindows()) fs.chmodSync(tmpDir, 0o700)
-        tmpFile = path.join(tmpDir, "prompt.txt")
-        fs.writeFileSync(tmpFile, clamped, "utf-8")
+        tmpFile = writePromptToTmpFile(clamped, projectRoot, "sg-")
         debugLog("[sensor-gate] temp file created:", tmpFile)
       } catch (e) {
-        debugLog("[sensor-gate] failed to create tmp file, falling back to --prompt arg:", e)
-        tmpFile = ""
+        // Temp file creation failed — do NOT fall back to --prompt CLI arg
+        // which would leak the prompt in process listings.
+        debugLog("[sensor-gate] failed to create tmp file:", e)
+        return Effect.fail(new Error(`[sensor-gate] Failed to create temp file for prompt: ${e}`))
       }
 
       // Cross-platform Python resolution with fallback chain.
@@ -617,9 +601,7 @@ function runSensorGateEffect(
           debugLog("[sensor-gate] sensor gate script:", sensorGate)
           for (const cmd of pythonCmds) {
             const versionArgs = getPythonArgs(cmd)
-            const args = tmpFile
-              ? [cmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
-              : [cmd, ...versionArgs, sensorGate, "--prompt", clamped]
+            const args = [cmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
             debugLog("[sensor-gate] trying:", cmd, "args:", args)
             try {
               proc = Bun.spawn(args, {
@@ -627,9 +609,7 @@ function runSensorGateEffect(
                 stdout: "pipe",
                 stderr: "pipe",
                 env: {
-                  PATH: process.env.PATH,
-                  HOME: process.env.HOME,
-                  PYTHONPATH: process.env.PYTHONPATH ?? "",
+                  ...BASE_SUBPROCESS_ENV,
                   PROJECT_ROOT: projectRoot,
                 },
               })
@@ -667,10 +647,7 @@ function runSensorGateEffect(
         try { proc.kill(9) } catch {}
       }
       // Clean up temp file
-      if (tmpFile) {
-        try { fs.unlinkSync(tmpFile) } catch {}
-        try { fs.rmdirSync(tmpDir) } catch {}
-      }
+      cleanupTmpFile(tmpFile)
       if (!output) {
         debugLog("[sensor-gate] empty output from subprocess — returning default result")
         return parseSensorGateOutput("")
@@ -721,26 +698,14 @@ function runNeuroHarnessEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
-      const tmpBase = resolveTmpBase(projectRoot)
-      try { fs.mkdirSync(tmpBase, { recursive: true }) } catch (e) {
-        debugLog("[sensor-gate] failed to create tmp base dir:", String(e), "tmpBase:", tmpBase)
-      }
-      let tmpDir = ""
-      try {
-        tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
-        if (!isWindows()) fs.chmodSync(tmpDir, 0o700)
-      } catch {}
-      const tmpFile = tmpDir ? path.join(tmpDir, "prompt.txt") : ""
+      let tmpFile = ""
       try {
         const promptResult = buildPrompt({
           scanType,
           files: [{ path: "user_prompt", content: clamped }],
           context: clamped.slice(0, 8000),
         })
-
-        if (tmpFile) {
-          fs.writeFileSync(tmpFile, promptResult.userPrompt, { mode: 0o600 })
-        }
+        tmpFile = writePromptToTmpFile(promptResult.userPrompt, projectRoot, "neuro-")
 
         const automationContext = JSON.stringify({
           task: clamped,
@@ -758,16 +723,14 @@ function runNeuroHarnessEffect(
               ...versionArgs,
               neuroHarness,
               "--scan-type", scanType,
-              ...(tmpFile ? ["--file", tmpFile] : ["--prompt", clamped.slice(0, 8000)]),
+              "--file", tmpFile,
               "--task", clamped.slice(0, 8000),
               "--automation-context", automationContext,
             ], {
               cwd: projectRoot,
               stdio: ["pipe", "pipe", "pipe"],
               env: {
-                PATH: process.env.PATH,
-                HOME: process.env.HOME,
-                PYTHONPATH: process.env.PYTHONPATH ?? "",
+                ...BASE_SUBPROCESS_ENV,
                 NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
                 PROJECT_ROOT: projectRoot,
               },
@@ -786,7 +749,7 @@ function runNeuroHarnessEffect(
         debugLog("[sensor-gate] runNeuroHarness subprocess failed:", String(e), "timeoutMs:", timeoutMs)
         return null
       } finally {
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+        cleanupTmpFile(tmpFile)
       }
     }).pipe(
       Effect.catch(() => Effect.succeed(null) as Effect.Effect<string | null>),

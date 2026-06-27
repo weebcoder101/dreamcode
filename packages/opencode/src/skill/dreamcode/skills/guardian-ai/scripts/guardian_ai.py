@@ -299,13 +299,21 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Guardian AI — NEURO-powered safety supervisor")
-    parser.add_argument("--prompt", required=True, help="User prompt to review")
+    parser.add_argument("--prompt", default=None, help="User prompt to review")
+    parser.add_argument("--prompt-file", default=None, help="Read prompt from file")
     parser.add_argument("--context", default="{}", help="JSON context (files, etc.)")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
 
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text().strip()
+    elif args.prompt:
+        prompt = args.prompt
+    else:
+        parser.error("Either --prompt or --prompt-file is required")
+
     context = json.loads(args.context) if args.context else {}
-    result = run_guardian(args.prompt, context)
+    result = run_guardian(prompt, context)
 
     if args.json:
         print(json.dumps(result, indent=2))

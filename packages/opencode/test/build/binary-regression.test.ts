@@ -1,0 +1,64 @@
+/**
+ * Binary Regression Tests
+ *
+ * Validates the compiled dreamcode binary is healthy.
+ * These are live tests — they require the binary to exist at the expected path.
+ */
+
+import { describe, expect, test } from "bun:test"
+import { existsSync, statSync } from "fs"
+import { resolve } from "path"
+
+// Adjust for test runner CWD: binary is at packages/opencode/dist/...
+const BINARY = resolve(import.meta.dir, "../../dist/dreamcode-linux-x64/bin/dreamcode")
+
+describe("binary regression", () => {
+  test("binary exists at expected path", () => {
+    expect(existsSync(BINARY)).toBe(true)
+  })
+
+  test("binary is executable", () => {
+    const stat = statSync(BINARY)
+    // Check that at least one execute bit is set
+    const isExecutable = (stat.mode & 0o111) !== 0
+    expect(isExecutable).toBe(true)
+  })
+
+  test("binary is non-empty", () => {
+    const stat = statSync(BINARY)
+    expect(stat.size).toBeGreaterThan(1_000_000) // Should be > 1MB
+  })
+
+  test(
+    "binary reports version via --version",
+    async () => {
+      // Increase timeout for this test — spawning the 175MB ELF binary can be
+      // slow when the test runner is under concurrent load from other suites.
+      const proc = Bun.spawnSync([BINARY, "--version"], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, DREAMCODE_CI: "1" },
+      })
+      expect(proc.exitCode).toBe(0)
+      const output = proc.stdout.toString().trim()
+      // Should output semver like "1.3.4"
+      expect(output).toMatch(/^\d+\.\d+\.\d+/)
+    },
+    { timeout: 15000 },
+  )
+
+  test("binary produces help-like output on --help", () => {
+    // --help may exit non-zero or produce output to stderr; we just check it
+    // doesn't crash and produces some text on either stream.
+    const proc = Bun.spawnSync([BINARY, "--help"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, DREAMCODE_CI: "1" },
+    })
+    // Accept any exit code — TUI may exit 0 or non-zero for unknown flags
+    const allOutput = (proc.stdout.toString() + proc.stderr.toString()).trim()
+    expect(allOutput.length).toBeGreaterThan(0)
+  })
+})

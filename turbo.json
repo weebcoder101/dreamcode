@@ -13,6 +13,11 @@
       "outputs": [],
       "passThroughEnv": ["*"]
     },
+    "opencode#test:integration": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "passThroughEnv": ["*"]
+    },
     "@opencode-ai/app#test": {
       "dependsOn": ["^build"],
       "outputs": []

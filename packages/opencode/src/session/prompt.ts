@@ -86,9 +86,11 @@ IMPORTANT:
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
 function sanitizeForSystemPrompt(text: string): string {
-  // Escape HTML/XML metacharacters to prevent prompt injection via tag injection.
-  // Order matters: & first to avoid double-escaping.
+  // Strip known dreamcode XML tags before HTML/XML escaping to prevent
+  // prompt injection via fake system tags (e.g. </sensor-gate>, <chain-gap>).
+  // Order matters: escape HTML/XML metacharacters, & first to avoid double-escaping.
   return text
+    .replace(/<\/?(sensor-gate|chain-gap|chain-verification|chain-executor-result|skill-result|skill-missing|loaded-skill|neuro-analysis|rate-budget|rate-limit|context-summary|persona-profiles?)\b[^>]*>/gi, "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -1558,8 +1560,12 @@ Before every response, verify your reasoning:
                     }
 
                     // Phase 5: Wire orphaned Python scripts — run for any task with 2+ skills
+                    // Note: runFullPipeline() takes no arguments. It uses --dashboard --json internally,
+                    // reading prompt/chain from the orchestrator's dashboards file. The old signature
+                    // (chain, userPrompt) was removed because the dashboard mode is stateless and
+                    // informational — it prints ecosystem health, not per-prompt results.
                     if (gateResult.complexity === "high" || gateResult.chain.length > 1) {
-                      const pipelineResults = yield* chainExecutor.runFullPipeline(gateResult.chain, userText).pipe(
+                      const pipelineResults = yield* chainExecutor.runFullPipeline().pipe(
                         Effect.catch((e) => {
                           console.warn("[chain-executor] runFullPipeline() failed:", e)
                           return Effect.succeed([])
@@ -1585,9 +1591,13 @@ Before every response, verify your reasoning:
                     }
 
                     // ─── Chain-Gap Detection ──────────────────────────
-                    // Hard enforcement: warn if any chain skill wasn't executed
+                    // Hard enforcement: warn if any chain skill wasn't executed.
+                    // Only count script-type results as "executed" — content-only (passive SKILL.md
+                    // injection) skills don't count because they don't run any code.
                     const missingSkills = gateResult.chain.filter(
-                      (name) => !chainResults.some((r) => r.name === name && r.status === "ok"),
+                      (name) => !chainResults.some(
+                        (r) => r.name === name && r.status === "ok" && r.executionType === "script",
+                      ),
                     )
                     // Mandated skills that MUST execute when in DREAM_INNOVATION mode
                     const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
@@ -1608,7 +1618,9 @@ Before every response, verify your reasoning:
                       }
                       // Update missing list after re-execution — warn about ALL remaining gaps
                       const stillMissing = gateResult.chain.filter(
-                        (name) => !chainResults.some((r) => r.name === name && r.status === "ok"),
+                        (name) => !chainResults.some(
+                          (r) => r.name === name && r.status === "ok" && r.executionType === "script",
+                        ),
                       )
                       if (stillMissing.length > 0) {
                         system.push(
