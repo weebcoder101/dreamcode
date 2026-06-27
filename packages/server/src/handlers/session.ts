@@ -86,6 +86,18 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   ),
                 )
               }),
+              Effect.catchTag("Session.NotFoundError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+              Effect.catchTag("Session.MessageDecodeError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+              Effect.catchTag("Session.OperationUnavailableError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+              Effect.catchTag("Session.PromptConflictError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
             ),
           }
         }),

@@ -4,7 +4,7 @@ import { PermissionSaved } from "@opencode-ai/core/permission/saved"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { PermissionNotFoundError } from "../errors"
+import { PermissionNotFoundError, UnknownError } from "../errors"
 import { response } from "../groups/location"
 
 function missingRequest(id: PermissionV2.ID) {
@@ -36,6 +36,11 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
           yield* permission
             .reply({ requestID: ctx.params.requestID, reply: ctx.payload.reply, message: ctx.payload.message })
             .pipe(Effect.catchTag("PermissionV2.NotFoundError", () => missingRequest(ctx.params.requestID)))
+            .pipe(
+              Effect.catchTag("EventV2.InvalidSyncEvent", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+            )
           return HttpApiSchema.NoContent.make()
         }),
       )

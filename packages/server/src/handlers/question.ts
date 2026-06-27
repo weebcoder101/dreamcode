@@ -2,7 +2,7 @@ import { QuestionV2 } from "@opencode-ai/core/question"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { QuestionNotFoundError } from "../errors"
+import { QuestionNotFoundError, UnknownError } from "../errors"
 import { response } from "../groups/location"
 
 function missingRequest(id: QuestionV2.ID) {
@@ -42,7 +42,12 @@ export const QuestionHandler = HttpApiBuilder.group(Api, "server.question", (han
           yield* withOwnedQuestion(ctx.params.sessionID, ctx.params.requestID, (question) =>
             question
               .reply({ requestID: ctx.params.requestID, answers: ctx.payload.answers })
-              .pipe(Effect.catchTag("QuestionV2.NotFoundError", () => missingRequest(ctx.params.requestID))),
+              .pipe(Effect.catchTag("QuestionV2.NotFoundError", () => missingRequest(ctx.params.requestID)))
+              .pipe(
+                Effect.catchTag("EventV2.InvalidSyncEvent", () =>
+                  Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+                ),
+              ),
           )
           return HttpApiSchema.NoContent.make()
         }),
@@ -53,7 +58,12 @@ export const QuestionHandler = HttpApiBuilder.group(Api, "server.question", (han
           yield* withOwnedQuestion(ctx.params.sessionID, ctx.params.requestID, (question) =>
             question
               .reject(ctx.params.requestID)
-              .pipe(Effect.catchTag("QuestionV2.NotFoundError", () => missingRequest(ctx.params.requestID))),
+              .pipe(Effect.catchTag("QuestionV2.NotFoundError", () => missingRequest(ctx.params.requestID)))
+              .pipe(
+                Effect.catchTag("EventV2.InvalidSyncEvent", () =>
+                  Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+                ),
+              ),
           )
           return HttpApiSchema.NoContent.make()
         }),

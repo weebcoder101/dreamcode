@@ -4,7 +4,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { ProviderNotFoundError, ServiceUnavailableError } from "../errors"
+import { ProviderNotFoundError, ServiceUnavailableError, UnknownError } from "../errors"
 import { response } from "../groups/location"
 
 const catalogUnavailable = new ServiceUnavailableError({
@@ -20,8 +20,17 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
         Effect.fn(function* () {
           const catalog = yield* Catalog.Service
           const pluginBoot = yield* PluginBoot.Service
-          yield* pluginBoot.wait().pipe(Effect.catchDefect(() => Effect.fail(catalogUnavailable)))
-          return yield* response(catalog.provider.available())
+          yield* pluginBoot.wait().pipe(
+            Effect.catchDefect(() => Effect.fail(catalogUnavailable)),
+            Effect.catchTag("EventV2.InvalidSyncEvent", () =>
+              Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+            ),
+          )
+          return yield* response(catalog.provider.available()).pipe(
+            Effect.catchTag("CredentialDecodeError", () =>
+              Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+            ),
+          )
         }),
       )
       .handle(
@@ -29,7 +38,12 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
         Effect.fn(function* (ctx) {
           const catalog = yield* Catalog.Service
           const pluginBoot = yield* PluginBoot.Service
-          yield* pluginBoot.wait().pipe(Effect.catchDefect(() => Effect.fail(catalogUnavailable)))
+          yield* pluginBoot.wait().pipe(
+            Effect.catchDefect(() => Effect.fail(catalogUnavailable)),
+            Effect.catchTag("EventV2.InvalidSyncEvent", () =>
+              Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+            ),
+          )
           return yield* response(catalog.provider.get(ctx.params.providerID)).pipe(
             Effect.catchTag("CatalogV2.ProviderNotFound", (error) =>
               Effect.fail(
@@ -38,6 +52,9 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
                   message: `Provider not found: ${error.providerID}`,
                 }),
               ),
+            ),
+            Effect.catchTag("CredentialDecodeError", () =>
+              Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
             ),
           )
         }),
