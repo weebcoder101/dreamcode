@@ -117,6 +117,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         location: Location.Ref.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionV2.Info }),
+      error: [UnknownError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.session.create",
@@ -150,7 +151,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         resume: Schema.Boolean.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionInput.Admitted }),
-      error: [ConflictError, SessionNotFoundError],
+      error: [ConflictError, SessionNotFoundError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
