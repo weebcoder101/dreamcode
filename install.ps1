@@ -76,7 +76,12 @@ if (-not $BuildFromSource) {
       Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
       $BuildFromSource = $true
     }
+  } catch {
+    Write-Color "ERROR: Failed to fetch latest release from GitHub API." $RED
+    Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
+    $BuildFromSource = $true
   }
+}
 
 # ─── Phase 1b: Extract pre-built binary ───────────────────────────────
 if (-not $BuildFromSource -and (Test-Path $tempArchive)) {

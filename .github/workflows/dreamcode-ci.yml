@@ -23,8 +23,7 @@ jobs:
       # has pre-existing Effect-TS v4 HttpApi error-type incompatibilities
       # that are unrelated to dreamcode changes.
       - name: Typecheck
-        working-directory: packages/opencode
-        run: bun run typecheck
+        run: bun run --cwd packages/opencode typecheck
 
   unit-tests:
     runs-on: ubuntu-latest
