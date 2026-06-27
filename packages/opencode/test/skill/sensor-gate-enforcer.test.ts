@@ -9,7 +9,7 @@ describe("SensorGateEnforcerPlugin", () => {
 
   test("plugin instance returns a hooks object", async () => {
     const instance = SensorGateEnforcerPlugin({} as any)
-    const hooks = await instance()
+    const hooks = await instance({} as any)
     expect(hooks).toBeDefined()
     expect(typeof hooks).toBe("object")
     expect(hooks).toHaveProperty(["chat.message"])
@@ -20,7 +20,7 @@ describe("SensorGateEnforcerPlugin", () => {
 
   test("chat.message handler skips on empty prompt", async () => {
     const instance = SensorGateEnforcerPlugin({} as any)
-    const hooks = await instance()
+    const hooks = await instance({} as any)
     // Should not throw when given an empty prompt
     const chatMessage = hooks["chat.message"]!
     await expect(
@@ -40,7 +40,7 @@ describe("SensorGateEnforcerPlugin", () => {
 
   test("transform handler does not throw when no session state exists", async () => {
     const instance = SensorGateEnforcerPlugin({} as any)
-    const hooks = await instance()
+    const hooks = await instance({} as any)
     const transform = hooks["experimental.chat.system.transform"]!
     await expect(
       transform(
