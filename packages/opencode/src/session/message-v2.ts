@@ -10,6 +10,7 @@ import {
   CompactionPart,
   ContextOverflowError,
   Info,
+  OutputFormat,
   OutputLengthError,
   Part,
   StructuredOutputError,
@@ -44,6 +45,10 @@ interface FetchDecompressionError extends Error {
   errno: number
   path: string
 }
+
+export type { OutputFormat, Part, WithParts } from "@opencode-ai/core/v1/session"
+
+export type Provenance = string
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
 export { isMedia }

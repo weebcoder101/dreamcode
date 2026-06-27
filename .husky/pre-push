@@ -18,7 +18,6 @@ if (process.versions.bun !== expectedBunVersion) {
 }
 '
 # packages/core and packages/llm do not exist in this fork — skipped.
-# packages/opencode has pre-existing type errors (Bun 1.3.x compat, etc.) that
-# are tolerated in CI via continue-on-error: true. The pre-push check logs them
-# but does not block the push so the fork can make incremental progress.
-cd packages/opencode && bun run typecheck || echo "[pre-push] packages/opencode typecheck encountered pre-existing errors (non-blocking)"
+# TODO: Make this blocking once all ~199 pre-existing Effect v4 beta API drift
+# errors in packages/opencode/src are resolved. Remove the || fallback.
+cd packages/opencode && bun run typecheck || echo "[pre-push] packages/opencode typecheck: ${?} error(s) (non-blocking until pre-existing Effect v4 drift is resolved)"

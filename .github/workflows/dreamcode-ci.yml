@@ -13,6 +13,9 @@ env:
 jobs:
   typecheck:
     runs-on: ubuntu-latest
+    # continue-on-error: true — ~199 pre-existing Effect v4 beta API drift errors remain
+    # in packages/opencode/src. Keep on to avoid blocking all CI until the Effect v4
+    # API surface stabilizes. Remove once all source type errors are fixed.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

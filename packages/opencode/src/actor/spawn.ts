@@ -284,7 +284,7 @@ export const layer = Layer.effect(
           yield* taskRegistry
             .start({ session_id: input.parentSessionID, id: input.task_id, owner: input.actorID })
             .pipe(
-              Effect.catchAllCause((cause) =>
+              Effect.catchCause((cause) =>
                 Effect.sync(() =>
                   log.error("auto-start of task failed", {
                     task_id: input.task_id,
@@ -701,7 +701,7 @@ export const layer = Layer.effect(
       if (input.forkContext) {
         forkContexts.set(child.id, input.forkContext) // peer's actorID === child.id
         yield* actorReg.persistForkContext(child.id, child.id, input.forkContext).pipe(
-          Effect.catchAllCause((cause) =>
+          Effect.catchCause((cause) =>
             Effect.sync(() => console.warn("[spawn] persistForkContext failed", { actorID: child.id, cause: String(cause) }))
           ),
         )
