@@ -17,6 +17,5 @@ if (process.versions.bun !== expectedBunVersion) {
   console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);
 }
 '
-cd packages/core && bun run typecheck
-cd packages/llm && bun run typecheck
-cd packages/core && bun run typecheck && cd ../llm && bun run typecheck && cd ../opencode && bun run typecheck
+# packages/core and packages/llm do not exist in this fork — skipped.
+cd packages/opencode && bun run typecheck

@@ -60,27 +60,23 @@ if (-not $BuildFromSource) {
     $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "dreamcode-installer" }
     $tag = $release.tag_name
     Write-Color "Latest release: $tag" $MUTED
-  } catch {
-    Write-Color "WARN: Could not fetch latest release. Using v1.3.1." $ORANGE
-    $tag = "v1.3.1"
+
+    # Find the windows-x64 asset (build system produces .zip for Windows)
+    $assetName = "dreamcode-windows-x64.zip"
+    $downloadUrl = "https://github.com/$OWNER/$REPO/releases/download/$tag/$assetName"
+    $tempArchive = "$tempDir\$assetName"
+    $extractDir = "$tempDir\extracted"
+
+    New-Item -ItemType Directory -Force -Path $tempDir, $extractDir | Out-Null
+
+    try {
+      Download-File $downloadUrl $tempArchive
+    } catch {
+      Write-Color "ERROR: Failed to download $downloadUrl" $RED
+      Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
+      $BuildFromSource = $true
+    }
   }
-
-  # Find the windows-x64 asset (build system produces .zip for Windows)
-  $assetName = "dreamcode-windows-x64.zip"
-  $downloadUrl = "https://github.com/$OWNER/$REPO/releases/download/$tag/$assetName"
-  $tempArchive = "$tempDir\$assetName"
-  $extractDir = "$tempDir\extracted"
-
-  New-Item -ItemType Directory -Force -Path $tempDir, $extractDir | Out-Null
-
-  try {
-    Download-File $downloadUrl $tempArchive
-  } catch {
-    Write-Color "ERROR: Failed to download $downloadUrl" $RED
-    Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
-    $BuildFromSource = $true
-  }
-}
 
 # ─── Phase 1b: Extract pre-built binary ───────────────────────────────
 if (-not $BuildFromSource -and (Test-Path $tempArchive)) {
@@ -165,7 +161,10 @@ if ($BuildFromSource) {
   Write-Color "Building version: $VERSION" $MUTED
 
   Set-Location $INSTALL_DIR
-  bun install
+  # Windows requires --linker hoisted for symlink compatibility (bun#12385)
+  $bunInstallArgs = @("install")
+  if ($env:OS -eq "Windows_NT") { $bunInstallArgs += "--linker", "hoisted" }
+  & "bun" @bunInstallArgs
 
   Set-Location packages\opencode
   bun run build --single --skip-embed-web-ui --skip-install

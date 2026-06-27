@@ -9,8 +9,17 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, statSync } from "fs"
 import { resolve } from "path"
 
-// Adjust for test runner CWD: binary is at packages/opencode/dist/...
-const BINARY = resolve(import.meta.dir, "../../dist/dreamcode-linux-x64/bin/dreamcode")
+// Platform-aware binary path — resolves to the platform-appropriate dist dir.
+// The build script (script/build.ts) produces artifacts under
+// dist/dreamcode-{platform}-{arch}/bin/dreamcode[.exe].
+const PLATFORM_MAP: Record<string, string> = {
+  linux: "linux",
+  darwin: "darwin",
+  win32: "windows",
+}
+const plat = PLATFORM_MAP[process.platform] ?? "linux"
+const ext = process.platform === "win32" ? ".exe" : ""
+const BINARY = resolve(import.meta.dir, `../../dist/dreamcode-${plat}-x64/bin/dreamcode${ext}`)
 
 describe("binary regression", () => {
   test("binary exists at expected path", () => {
