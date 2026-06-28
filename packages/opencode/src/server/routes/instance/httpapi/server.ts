@@ -53,6 +53,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { Skill } from "@/skill"
 import { ChainExecutor } from "@/skill/chain-executor"
 import { PiecesLTM } from "@/pieces-ltm"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Snapshot } from "@/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
@@ -268,6 +269,7 @@ export function createRoutes(
       FSUtil.defaultLayer,
       FetchHttpClient.layer,
       HttpServer.layerServices,
+      Layer.succeed(PluginBoot.Service, { wait: () => Effect.void }),
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Ripgrep.defaultLayer),

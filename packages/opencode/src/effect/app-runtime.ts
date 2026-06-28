@@ -56,6 +56,7 @@ import { ChainExecutor } from "@/skill/chain-executor"
 import { ContextCompressor } from "@/session/context-compressor"
 import { PiecesLTM } from "@/pieces-ltm"
 import { Actor } from "@/actor/spawn"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -108,6 +109,7 @@ export const AppLayer = Layer.mergeAll(
   ChainExecutor.defaultLayer,
   ContextCompressor.defaultLayer,
   PiecesLTM.defaultLayer,
+  Layer.succeed(PluginBoot.Service, { wait: () => Effect.void }),
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(InstanceLayer.layer),
