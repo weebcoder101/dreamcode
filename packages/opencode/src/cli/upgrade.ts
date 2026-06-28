@@ -9,7 +9,10 @@ export async function upgrade() {
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
   if (config.autoupdate === false || Flag.OPENCODE_DISABLE_AUTOUPDATE) return
   const method = await Installation.method()
-  const latest = await Installation.latest(method).catch(() => {})
+  const latest = await Installation.latest(method).catch((err) => {
+    console.error("[upgrade] failed to check latest version", err)
+    return undefined
+  })
   if (!latest) return
 
   if (Flag.OPENCODE_ALWAYS_NOTIFY_UPDATE) {
@@ -38,14 +41,23 @@ export async function upgrade() {
     return
   }
   await Installation.upgrade(method, latest)
-    .then(() =>
+    .then(() => {
       GlobalBus.emit("event", {
         directory: "global",
         payload: {
           type: Installation.Event.Updated.type,
           properties: { version: latest },
         },
-      }),
-    )
-    .catch(() => {})
+      })
+    })
+    .catch((err) => {
+      console.error("[upgrade] auto-upgrade failed", err)
+      GlobalBus.emit("event", {
+        directory: "global",
+        payload: {
+          type: Installation.Event.UpdateAvailable.type,
+          properties: { version: latest },
+        },
+      })
+    })
 }

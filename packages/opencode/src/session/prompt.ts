@@ -35,6 +35,7 @@ import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import { SensorGate, evaluateSpawnNecessity, type Persona, type SensorGateResult } from "@/skill/sensor-gate"
+import { SOCIAL_GREETING_RE } from "@/skill/question-complexity-schema"
 import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
 import { debugLog } from "@/skill/python-resolver"
 import * as PersonaTracker from "./persona-tracker"
@@ -86,11 +87,16 @@ IMPORTANT:
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
 function sanitizeForSystemPrompt(text: string): string {
-  // Strip known dreamcode XML tags before HTML/XML escaping to prevent
-  // prompt injection via fake system tags (e.g. </sensor-gate>, <chain-gap>).
+  // Strip ALL closing tags (</tag>) and self-closing tags (<tag/>) before
+  // HTML/XML escaping to prevent prompt injection via fake system tags.
+  // An allowlist approach is used: the system only injects opening tags with
+  // content (e.g. <chain-enforcement>...</chain-enforcement>), so stripping
+  // closing/self-closing tags prevents attackers from closing system blocks
+  // or injecting fake blocks — without needing a blocklist that goes stale.
   // Order matters: escape HTML/XML metacharacters, & first to avoid double-escaping.
   return text
-    .replace(/<\/?(sensor-gate|chain-gap|chain-verification|chain-executor-result|skill-result|skill-missing|loaded-skill|neuro-analysis|rate-budget|rate-limit|context-summary|persona-profiles?)\b[^>]*>/gi, "")
+    .replace(/<[a-zA-Z][^>]*\/>/g, "")      // self-closing tags: <tag/>
+    .replace(/<\/[a-zA-Z][^>]*>/g, "")       // closing tags: </tag>
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -1483,11 +1489,21 @@ Before every response, verify your reasoning:
                   // but the TypeScript fallback generated personas, override the necessity veto.
                   // Without this, evaluateSpawnNecessity scores 0 and persona spawning is skipped,
                   // causing the LLM to spawn generic subagents instead of named personas (Windows).
+                  // However, if the gate result is a social greeting, NEVER override — keep shouldSpawn: false.
+                  const isSocialGreeting = gateResult.is_social_greeting || SOCIAL_GREETING_RE.test(userText.trim())
                   const isFallbackPersonas = gateResult.domain_tags.length === 0 && gateResult.personas.length > 0
                   if (isFallbackPersonas && !spawnEval.shouldSpawn) {
-                    spawnEval.shouldSpawn = true
-                    spawnEval.suggestedCount = Math.max(spawnEval.suggestedCount, gateResult.personas.length)
-                    spawnEval.reason = "Fallback personas generated after sensor gate failure"
+                    // Check rate limit BEFORE overriding spawn decision
+                    const rateCheck = checkRateLimit(sessionID)
+                    if (isSocialGreeting || !rateCheck.allowed) {
+                      spawnEval.reason = isSocialGreeting
+                        ? "Social greeting — fallback personas suppressed"
+                        : "Rate limit reached — fallback personas suppressed"
+                    } else {
+                      spawnEval.shouldSpawn = true
+                      spawnEval.suggestedCount = Math.max(spawnEval.suggestedCount, gateResult.personas.length)
+                      spawnEval.reason = "Fallback personas generated after sensor gate failure"
+                    }
                   }
 
                   const sensorBlock = [
@@ -1514,6 +1530,20 @@ Before every response, verify your reasoning:
                   sensorBlock.push("</sensor-gate>")
                   system.push(sensorBlock.join("\n"))
 
+                  // ─── Pre-Execution Enforcement Guard ────────────────
+                  // Inject BEFORE skill loading to set expectations:
+                  // skills must execute scripts, not just load text.
+                  if (gateResult.chain.length > 0) {
+                    system.push(
+                      `\n<chain-pre-enforcement>` +
+                      `\nIMPORTANT: These skills auto-execute Python scripts when loaded:` +
+                      `\n${gateResult.chain.map((s) => `  - ${s}`).join("\n")}` +
+                      `\nThe script results appear in <script-result> blocks below.` +
+                      `\nDo NOT skip skill loading — the scripts provide analysis, planning, and debugging assistance.` +
+                      `\n</chain-pre-enforcement>`,
+                    )
+                  }
+
                   // Skill manifest: UUIDs + dependency graph, not full content
                   // Agent loads skills via the `skill` tool at runtime using UUIDs
                   const manifestSkills: string[] = []
@@ -1531,11 +1561,14 @@ Before every response, verify your reasoning:
                     `\nChain skills for this task: ${chainSkillNames}` +
                     `\n${manifestSkills.join("\n")}` +
                     `\n</skill-chain>` +
-                    `\n<chain-mandatory>` +
-                    `\nCRITICAL: You MUST load EACH skill from the chain above using the \`skill\` tool BEFORE proceeding with your analysis.` +
-                    `\nYour FIRST action must be: call \`skill\` for each skill in the chain. Only after ALL chain skills are loaded may you begin analysis.` +
-                    `\nFailure to load chain skills will result in incomplete analysis and is forbidden.` +
-                    `\n</chain-mandatory>`,
+                    `\n<chain-enforcement>` +
+                    `\nCRITICAL: You MUST call the \`skill\` tool for EACH skill in the chain above to load its instructions.` +
+                    `\nWhen you call the \`skill\` tool, you will see "Loading skill..." in the sidebar, then "skill loaded ✓" — this confirms it worked.` +
+                    `\nAfter loading ALL chain skills, add "[SKILLS LOADED]" to your response.` +
+                    `\nThe system has already run automated analysis scripts for each skill — those results are in <script-result> blocks below.` +
+                    `\nBut you still MUST load each skill's content via the \`skill\` tool to get the full context.` +
+                    `\nDo NOT begin analysis until ALL skills are loaded and acknowledged.` +
+                    `\n</chain-enforcement>`,
                   )
 
                   // ─── ChainExecutor: Execute skills programmatically ──
@@ -1551,11 +1584,11 @@ Before every response, verify your reasoning:
                     )
                     for (const result of chainResults) {
                       if (result.status === "ok" && result.output) {
-                        system.push(`\n<skill-result name="${result.name}">\n${result.output.slice(0, 5000)}\n</skill-result>`)
+                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
                       } else if (result.status === "not_found") {
-                        system.push(`\n<skill-missing name="${result.name}"/>`)
+                        system.push(`\n<skill-missing name="${sanitizeForSystemPrompt(result.name)}"/>`)
                       } else {
-                        system.push(`\n<skill-result name="${result.name}" status="error">\n${result.output.slice(0, 2000)}\n</skill-result>`)
+                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" status="error">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</script-result>`)
                       }
                     }
 
@@ -1573,9 +1606,9 @@ Before every response, verify your reasoning:
                       )
                       for (const result of pipelineResults) {
                         if (result.status === "ok" && result.output) {
-                          system.push(`\n<chain-executor-result name="${result.name}">\n${result.output.slice(0, 5000)}\n</chain-executor-result>`)
+                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</chain-executor-result>`)
                         } else if (result.status === "error") {
-                          system.push(`\n<chain-executor-result name="${result.name}" status="warning">\n${result.output.slice(0, 2000)}\n</chain-executor-result>`)
+                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}" status="warning">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</chain-executor-result>`)
                         }
                       }
 
@@ -1586,17 +1619,17 @@ Before every response, verify your reasoning:
                         }),
                       )
                       if (verifyResult) {
-                        system.push(`\n<chain-verification>\n${verifyResult.slice(0, 2000)}\n</chain-verification>`)
+                        system.push(`\n<chain-verification>\n${sanitizeForSystemPrompt(verifyResult.slice(0, 2000))}\n</chain-verification>`)
                       }
                     }
 
                     // ─── Chain-Gap Detection ──────────────────────────
                     // Hard enforcement: warn if any chain skill wasn't executed.
-                    // Only count script-type results as "executed" — content-only (passive SKILL.md
-                    // injection) skills don't count because they don't run any code.
+                    // Accept status === "ok" regardless of executionType — content-only
+                    // skills (no scripts) are valid results and should NOT trigger gaps.
                     const missingSkills = gateResult.chain.filter(
                       (name) => !chainResults.some(
-                        (r) => r.name === name && r.status === "ok" && r.executionType === "script",
+                        (r) => r.name === name && r.status === "ok",
                       ),
                     )
                     // Mandated skills that MUST execute when in DREAM_INNOVATION mode
@@ -1613,18 +1646,18 @@ Before every response, verify your reasoning:
                       // Inject re-execution outputs into system prompt so LLM can see them
                       for (const result of reExecuteResult) {
                         if (result.status === "ok" && result.output) {
-                          system.push(`\n<skill-result name="${result.name}" source="mandated-rerun">\n${result.output.slice(0, 5000)}\n</skill-result>`)
+                          system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" source="mandated-rerun">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
                         }
                       }
                       // Update missing list after re-execution — warn about ALL remaining gaps
                       const stillMissing = gateResult.chain.filter(
                         (name) => !chainResults.some(
-                          (r) => r.name === name && r.status === "ok" && r.executionType === "script",
+                          (r) => r.name === name && r.status === "ok",
                         ),
                       )
                       if (stillMissing.length > 0) {
                         system.push(
-                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${stillMissing.join(", ")}. ` +
+                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(stillMissing.join(", "))}. ` +
                           `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
                           `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
                         )
@@ -1632,9 +1665,35 @@ Before every response, verify your reasoning:
                     } else if (missingSkills.length > 0) {
                       // Non-mandated gaps — always warn even if no mandated skills were missing
                       system.push(
-                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${missingSkills.join(", ")}. ` +
+                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(missingSkills.join(", "))}. ` +
                         `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
                         `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+                      )
+                    }
+
+                    // ─── Runtime Skill Loading Enforcement ─────────────
+                    // Scan assistant messages for actual `skill` tool calls to verify
+                    // the agent loaded skill content at runtime (not just via script results).
+                    // This provides hard enforcement: if the agent calls the skill tool,
+                    // the TUI shows "Loading skill..." → "skill loaded ✓".
+                    const skillToolCalls = new Set<string>()
+                    for (const msg of msgs) {
+                      if (msg.info.role !== "assistant") continue
+                      for (const part of msg.parts) {
+                        if (part.type !== "tool") continue
+                        if (part.tool !== "skill") continue
+                        if (part.state.status === "completed") {
+                          skillToolCalls.add(part.state.input.name ?? "")
+                        }
+                      }
+                    }
+                    const unloadedChainSkills = gateResult.chain.filter((name) => !skillToolCalls.has(name))
+                    if (unloadedChainSkills.length > 0) {
+                      system.push(
+                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
+                        `Script execution results are available in <script-result> blocks, but you MUST also load the skill content ` +
+                        `via the \`skill\` tool to get the full workflow instructions. ` +
+                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.</skill-loading-gap>`,
                       )
                     }
 
@@ -1884,15 +1943,19 @@ Before every response, verify your reasoning:
                             // === SEMI-STATIC: context block (same for all personas in same turn) ===
                             contextBlock,
                             "",
-                            // Skill chain context — pass gateResult info so subagent knows the skill chain
-                            ...(gateResult ? [
-                              "## Skill Chain Context",
-                              `Mode: ${safeMode}`,
-                              `Complexity: ${safeComplexity}`,
-                              `Chain: ${safeChain}`,
-                              `Use the \`skill\` tool to load any skill by name or UUID from the chain as needed.`,
-                              "",
-                            ] : []),
+                              // Skill chain context — pass gateResult info so subagent knows the skill chain
+                              ...(gateResult ? [
+                                "## Skill Chain Context",
+                                `Mode: ${safeMode}`,
+                                `Complexity: ${safeComplexity}`,
+                                `Chain: ${safeChain}`,
+                                "",
+                                "CRITICAL: You MUST load EACH skill from this chain using the `skill` tool BEFORE providing your analysis.",
+                                "Your FIRST action must be: call `skill` for each skill in the chain.",
+                                "Script execution results are available in <script-result> blocks, but you must also load the skill content.",
+                                "Failure to load chain skills will result in incomplete analysis.",
+                                "",
+                              ] : []),
                             "## User Prompt",
                             sanitizeForSystemPrompt(userText.trim()),
                             "",

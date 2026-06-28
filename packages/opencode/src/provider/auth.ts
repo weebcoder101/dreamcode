@@ -4,7 +4,7 @@ import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Auth } from "@/auth"
 import { InstanceState } from "@/effect/instance-state"
 import { optionalOmitUndefined } from "@opencode-ai/core/schema"
-import { Plugin } from "../plugin"
+import { Service as PluginService, defaultLayer as PluginDefaultLayer, node as PluginNode } from "../plugin"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Array as Arr, Effect, Layer, Record, Result, Context, Schema } from "effect"
 
@@ -106,11 +106,11 @@ export class Service extends Context.Service<Service, Interface>()("@dreamcode/P
 
 export const use = serviceUse(Service)
 
-export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.effect(
+export const layer: Layer.Layer<Service, never, Auth.Service | PluginService> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const auth = yield* Auth.Service
-    const plugin = yield* Plugin.Service
+    const plugin = yield* PluginService
     const state = yield* InstanceState.make<State>(
       Effect.fn("ProviderAuth.state")(function* () {
         const plugins = yield* plugin.list()
@@ -225,9 +225,9 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
 )
 
 export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(Layer.provide(Auth.defaultLayer), Layer.provide(Plugin.defaultLayer)),
+  layer.pipe(Layer.provide(Auth.defaultLayer), Layer.provide(PluginDefaultLayer)),
 )
 
-export const node = LayerNode.make(layer, [Auth.node, Plugin.node])
+export const node = LayerNode.make(layer, [Auth.node, PluginNode])
 
 export * as ProviderAuth from "./auth"

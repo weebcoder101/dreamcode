@@ -167,13 +167,14 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
   chain: string[],
   userPrompt: string,
 ) {
+  const startTime = Date.now()
   const skillService = yield* Skill.Service
   const ctx = yield* InstanceState.contextOrNull
   const cwd = ctx?.directory ?? process.cwd()
   const results: ChainResult[] = []
 
   for (const skillName of chain) {
-    const skillInfo = yield* skillService.require(skillName).pipe(Effect.option)
+    const skillInfo = yield* skillService.require(skillName, { skipAutoExecute: true }).pipe(Effect.option)
     if (skillInfo._tag === "None") {
       results.push({ name: skillName, output: "", status: "not_found", executionType: "content" })
       continue
@@ -228,7 +229,7 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
       outputLen: r.output.length,
     })),
     timestamp: new Date().toISOString(),
-    totalDuration: Date.now(),
+    totalDuration: Date.now() - startTime,
   })
 
   return results

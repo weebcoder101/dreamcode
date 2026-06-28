@@ -13,7 +13,7 @@ import { LLM } from "../../src/session/llm"
 import { SessionCompaction } from "../../src/session/compaction"
 import { Token } from "@/util/token"
 import { Permission } from "../../src/permission"
-import { Plugin } from "../../src/plugin"
+import { Service as PluginService, defaultLayer as PluginDefaultLayer } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
 import { Session as SessionNs } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -230,7 +230,7 @@ const deps = Layer.mergeAll(
   wide().layer,
   layer("continue"),
   Agent.defaultLayer,
-  Plugin.defaultLayer,
+  PluginDefaultLayer,
   EventV2Bridge.defaultLayer,
   Config.defaultLayer,
   RuntimeFlags.layer({ experimentalEventSystem: true }),
@@ -262,7 +262,7 @@ const itCompaction = testEffect(compactionEnv)
 type CompactionProcessOptions = {
   result?: "continue" | "compact"
   llm?: Layer.Layer<LLM.Service>
-  plugin?: Layer.Layer<Plugin.Service>
+  plugin?: Layer.Layer<PluginService>
   provider?: ReturnType<typeof ProviderTest.fake>
   config?: Layer.Layer<Config.Service>
 }
@@ -290,7 +290,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(options?.llm ?? LLM.defaultLayer),
     Layer.provide(Permission.defaultLayer),
     Layer.provide(Agent.defaultLayer),
-    Layer.provide(options?.plugin ?? Plugin.defaultLayer),
+    Layer.provide(options?.plugin ?? PluginDefaultLayer),
     Layer.provide(status),
     Layer.provide(events),
     Layer.provide(options?.config ?? Config.defaultLayer),
@@ -359,7 +359,7 @@ function reply(
 }
 
 function plugin(ready: Deferred.Deferred<void>) {
-  return Layer.mock(Plugin.Service)({
+  return Layer.mock(PluginService)({
     trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) => {
       if (name !== "experimental.session.compacting") return Effect.succeed(output)
       return Effect.sync(() => Deferred.doneUnsafe(ready, Effect.void)).pipe(
@@ -373,7 +373,7 @@ function plugin(ready: Deferred.Deferred<void>) {
 }
 
 function autocontinue(enabled: boolean) {
-  return Layer.mock(Plugin.Service)({
+  return Layer.mock(PluginService)({
     trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) => {
       if (name !== "experimental.compaction.autocontinue") return Effect.succeed(output)
       return Effect.sync(() => {
@@ -1257,9 +1257,9 @@ describe("session.compaction.process", () => {
 
         yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
         const start = Date.now()
-        yield* Fiber.interruptFork(fiber)
+        yield* Fiber.interrupt(fiber)
         const exit = yield* pollWithTimeout(
-          Fiber.poll(fiber).pipe(Effect.map(Option.getOrUndefined)),
+          Fiber.await(fiber),
           "fiber did not complete after interrupt",
           "5 seconds",
         )
@@ -1293,9 +1293,9 @@ describe("session.compaction.process", () => {
             .pipe(Effect.forkChild)
 
           yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
-          yield* Fiber.interruptFork(fiber)
+          yield* Fiber.interrupt(fiber)
           const exit = yield* pollWithTimeout(
-            Fiber.poll(fiber).pipe(Effect.map(Option.getOrUndefined)),
+            Fiber.await(fiber),
             "fiber did not complete after interrupt",
             "5 seconds",
           )

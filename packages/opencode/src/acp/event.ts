@@ -74,6 +74,13 @@ export class Subscription {
         return this.handlePartUpdated(event)
       case "message.part.delta":
         return this.handlePartDelta(event)
+      case "installation.update-available":
+      case "installation.updated":
+        // ACP protocol does not currently support forwarding global events
+        // to IDE extensions. The SDK's global event SSE endpoint delivers
+        // these; IDE plugins should subscribe through that directly.
+        console.warn("acp: global event not forwarded via ACP", event.type, event.properties)
+        return
     }
   }
 

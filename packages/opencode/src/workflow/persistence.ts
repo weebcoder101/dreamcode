@@ -2,9 +2,10 @@ import { Effect } from "effect"
 import path from "path"
 import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync } from "node:fs"
-import { Database, eq, desc } from "../storage"
+import { eq, desc } from "drizzle-orm"
+import { Database } from "@opencode-ai/core/database/database"
 import { WorkflowRunTable } from "./workflow.sql"
-import { Global } from "../global"
+import { Global } from "@opencode-ai/core/global"
 import type { SessionID } from "../session/schema"
 
 // Recursively sort object keys so JSON.stringify is canonical (key order in the
@@ -15,8 +16,7 @@ function canonical(value: unknown): unknown {
   return Object.fromEntries(
     Object.keys(value as Record<string, unknown>)
       .sort()
-      .map((k) => [k, canonical((value as Record<string, unknown>)[k])]),
-  )
+      .map((k) => [k, canonical((value as Record<string, unknown>)[k])]))
 }
 
 // Content hash for one agent() call: sha256 over the SEMANTIC fields only
@@ -133,99 +133,93 @@ const recordStart = (input: {
    * unbounded — which would let a wedged mimo TTFT stall the run forever. */
   agentTimeoutMs?: number
 }) =>
-  Effect.sync(() =>
-    Database.use((db) =>
-      db
-        .insert(WorkflowRunTable)
-        .values({
-          id: input.runID,
-          session_id: input.sessionID,
-          name: input.name,
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* Effect.orDie(db
+      .insert(WorkflowRunTable)
+      .values({
+        id: input.runID,
+        session_id: input.sessionID,
+        name: input.name,
+        status: "running",
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        parent_actor_id: input.parentActorID ?? null,
+        args: input.args ?? null,
+        script_sha: input.scriptSha ?? null,
+        agent_timeout_ms: input.agentTimeoutMs ?? null,
+      })
+      // On resume the row already exists. We reset the counters AND re-stamp the
+      // script_sha: launch passes the CURRENT script's sha, so a same-script
+      // resume re-writes the identical sha (no-op) while a changed-script relaunch
+      // (the P1-2 mismatch path) overwrites the stale sha with the new one — so a
+      // SUBSEQUENT resume of the now-current script replays correctly. The sha
+      // COMPARISON happens in resume() against load()'s pre-launch value, before
+      // this overwrite runs, so re-stamping here never hides the mismatch.
+      // agent_timeout_ms is overwritten ONLY when the caller passes one (i.e. an
+      // explicit override on resume); undefined input preserves the persisted
+      // value via the COALESCE-style guard below.
+      .onConflictDoUpdate({
+        target: WorkflowRunTable.id,
+        set: {
           status: "running",
           running: 0,
           succeeded: 0,
           failed: 0,
-          parent_actor_id: input.parentActorID ?? null,
-          args: input.args ?? null,
           script_sha: input.scriptSha ?? null,
-          agent_timeout_ms: input.agentTimeoutMs ?? null,
-        })
-        // On resume the row already exists. We reset the counters AND re-stamp the
-        // script_sha: launch passes the CURRENT script's sha, so a same-script
-        // resume re-writes the identical sha (no-op) while a changed-script relaunch
-        // (the P1-2 mismatch path) overwrites the stale sha with the new one — so a
-        // SUBSEQUENT resume of the now-current script replays correctly. The sha
-        // COMPARISON happens in resume() against load()'s pre-launch value, before
-        // this overwrite runs, so re-stamping here never hides the mismatch.
-        // agent_timeout_ms is overwritten ONLY when the caller passes one (i.e. an
-        // explicit override on resume); undefined input preserves the persisted
-        // value via the COALESCE-style guard below.
-        .onConflictDoUpdate({
-          target: WorkflowRunTable.id,
-          set: {
-            status: "running",
-            running: 0,
-            succeeded: 0,
-            failed: 0,
-            script_sha: input.scriptSha ?? null,
-            ...(input.agentTimeoutMs !== undefined ? { agent_timeout_ms: input.agentTimeoutMs } : {}),
-          },
-        })
-        .run(),
-    ),
-  )
+          ...(input.agentTimeoutMs !== undefined ? { agent_timeout_ms: input.agentTimeoutMs } : {}),
+        },
+      })
+      .run())
+  })
 
 const recordPhase = (input: { runID: string; phase: string }) =>
-  Effect.sync(() =>
-    Database.use((db) =>
-      db.update(WorkflowRunTable).set({ current_phase: input.phase }).where(eq(WorkflowRunTable.id, input.runID)).run(),
-    ),
-  )
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* Effect.orDie(db.update(WorkflowRunTable).set({ current_phase: input.phase }).where(eq(WorkflowRunTable.id, input.runID)).run())
+  })
 
 const flushCounters = (input: { runID: string; running: number; succeeded: number; failed: number }) =>
-  Effect.sync(() =>
-    Database.use((db) =>
-      db
-        .update(WorkflowRunTable)
-        .set({ running: input.running, succeeded: input.succeeded, failed: input.failed })
-        .where(eq(WorkflowRunTable.id, input.runID))
-        .run(),
-    ),
-  )
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* Effect.orDie(db
+      .update(WorkflowRunTable)
+      .set({ running: input.running, succeeded: input.succeeded, failed: input.failed })
+      .where(eq(WorkflowRunTable.id, input.runID))
+      .run())
+  })
 
 const recordTerminal = (input: { runID: string; status: "completed" | "failed" | "cancelled"; error?: string }) =>
-  Effect.sync(() =>
-    Database.use((db) =>
-      db
-        .update(WorkflowRunTable)
-        .set({ status: input.status, ...(input.error ? { error: input.error } : {}) })
-        .where(eq(WorkflowRunTable.id, input.runID))
-        .run(),
-    ),
-  )
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* Effect.orDie(db
+      .update(WorkflowRunTable)
+      .set({ status: input.status, ...(input.error ? { error: input.error } : {}) })
+      .where(eq(WorkflowRunTable.id, input.runID))
+      .run())
+  })
 
 const list = (input?: { sessionID?: SessionID }) =>
-  Effect.sync(() =>
-    Database.use((db) => {
-      const rows = input?.sessionID
-        ? db
-            .select()
-            .from(WorkflowRunTable)
-            .where(eq(WorkflowRunTable.session_id, input.sessionID))
-            .orderBy(desc(WorkflowRunTable.time_created))
-            .all()
-        : db.select().from(WorkflowRunTable).orderBy(desc(WorkflowRunTable.time_created)).all()
-      return rows.map(toSummary)
-    }),
-  )
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const rows = input?.sessionID
+      ? yield* Effect.orDie(db
+          .select()
+          .from(WorkflowRunTable)
+          .where(eq(WorkflowRunTable.session_id, input.sessionID))
+          .orderBy(desc(WorkflowRunTable.time_created))
+          .all())
+      : yield* Effect.orDie(db.select().from(WorkflowRunTable).orderBy(desc(WorkflowRunTable.time_created)).all())
+    return rows.map(toSummary)
+  })
 
 const load = (runID: string) =>
-  Effect.sync(() =>
-    Database.use((db) => {
-      const row = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).get()
-      return row ? toSummary(row) : undefined
-    }),
-  )
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const row = yield* Effect.orDie(db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).get())
+    return row ? toSummary(row) : undefined
+  })
 
 const writeScript = (runID: string, body: string) =>
   Effect.promise(async () => {

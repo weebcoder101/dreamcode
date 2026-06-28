@@ -12,7 +12,7 @@ import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
-import type { Plugin } from "@/plugin"
+import type { Interface as PluginInterface } from "@/plugin"
 import { mergeDeep } from "remeda"
 
 const USER_AGENT = `dreamcode/${InstallationVersion}`
@@ -30,7 +30,7 @@ type PrepareInput = {
   readonly tools: Record<string, Tool>
   readonly provider: Provider.Info
   readonly auth: Auth.Info | undefined
-  readonly plugin: Plugin.Interface
+  readonly plugin: PluginInterface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
 }

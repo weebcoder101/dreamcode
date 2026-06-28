@@ -7,6 +7,7 @@ import { IntegrationSchema } from "./integration/schema"
 import { NonNegativeInt, withStatics } from "./schema"
 import { Identifier } from "./util/identifier"
 import { CredentialTable } from "./credential/sql"
+import { encryptCredential, decryptCredential } from "./credential/encryption"
 
 export const ID = Schema.String.pipe(
   Schema.brand("Credential.ID"),
@@ -72,7 +73,10 @@ export const layer = Layer.effect(
     const decodeValue = Schema.decodeUnknownEffect(Info)
     const stored = (row: typeof CredentialTable.$inferSelect): Effect.Effect<Stored | undefined, CredentialDecodeError> => {
       if (row.integration_id == null) return Effect.succeed(undefined)
-      return decodeValue(row.value).pipe(
+      // Decrypt credential value before schema decoding
+      const rawValue = row.value as unknown
+      const decrypted = typeof rawValue === "string" ? decryptCredential(rawValue) : rawValue
+      return decodeValue(decrypted).pipe(
         Effect.map((value) =>
           new Stored({
             id: row.id,
@@ -122,6 +126,8 @@ export const layer = Layer.effect(
           label: input.label ?? "default",
           value: input.value,
         })
+        // Encrypt credential value before storing
+        const encryptedValue = encryptCredential(JSON.stringify(credential.value))
         yield* db
           .transaction((tx) =>
             Effect.gen(function* () {
@@ -135,7 +141,7 @@ export const layer = Layer.effect(
                   id: credential.id,
                   integration_id: credential.integrationID,
                   label: credential.label,
-                  value: credential.value,
+                  value: encryptedValue,
                 })
                 .run()
             }),
@@ -145,9 +151,11 @@ export const layer = Layer.effect(
       }),
       update: Effect.fn("Credential.update")(function* (id, updates) {
         if (!updates.label && !updates.value) return
+        // Encrypt credential value before updating
+        const encryptedValue = updates.value ? encryptCredential(JSON.stringify(updates.value)) : undefined
         yield* db
           .update(CredentialTable)
-          .set({ label: updates.label, value: updates.value })
+          .set({ label: updates.label, value: encryptedValue })
           .where(eq(CredentialTable.id, id))
           .run()
           .pipe(Effect.orDie)

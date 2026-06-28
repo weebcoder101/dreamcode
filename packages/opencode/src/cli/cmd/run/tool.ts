@@ -394,9 +394,10 @@ function runTodo(p: ToolProps<typeof TodoWriteTool>): ToolInline {
 }
 
 function runSkill(p: ToolProps<typeof SkillTool>): ToolInline {
+  const loading = p.frame.status === "running" || p.frame.status === "pending"
   return {
-    icon: "→",
-    title: `Skill "${p.input.name ?? ""}"`,
+    icon: loading ? "…" : "✓",
+    title: `${loading ? "Loading" : "Loaded"} skill "${p.input.name ?? ""}"`,
   }
 }
 

@@ -15,16 +15,18 @@
  */
 
 import type { Hooks, PluginInput, Plugin as PluginInstance } from "@opencode-ai/plugin"
-import { resetPeriodicTimer, categorizeQuestion, predictorBreaker } from "./token-predictor.js"
+import { resetPeriodicTimer, predictorBreaker } from "./token-predictor.js"
 import { resolvePythonCommand, resolveSkillsDir, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver.js"
 import path from "path"
+import { COMPLEXITY_SPAWN_MAP, categorizeQuestion, type ComplexityLevel } from "./question-complexity-schema.js"
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 interface PredictorResult {
-  questions: string[]
+  questions: Array<{ question: string; complexity: string }>
+  max_complexity: string
   context_hash: string
   signals: Record<string, boolean>
   project_context: string
@@ -33,7 +35,8 @@ interface PredictorResult {
 
 interface SessionState {
   lastPrompt: string
-  lastQuestions: string[]
+  lastQuestions: Array<{ question: string; complexity: ComplexityLevel }>
+  maxComplexity: ComplexityLevel
   lastRunTimestamp: number
   lastCheckTime: number
   pendingPromise: Promise<PredictorResult | null> | null
@@ -176,7 +179,7 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
           state.lastCheckTime = now
         } else {
           // First call — create state and allow check
-          state = { lastPrompt: "", lastQuestions: [], lastRunTimestamp: 0, lastCheckTime: Date.now(), pendingPromise: null }
+          state = { lastPrompt: "", lastQuestions: [], maxComplexity: "low", lastRunTimestamp: 0, lastCheckTime: Date.now(), pendingPromise: null }
           sessionStates.set(sessionKey, state)
         }
 
@@ -190,9 +193,14 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
         state.pendingPromise = runPredictorScript(prompt, input.client?.directory)
           .then((result) => {
             if (result && result.questions.length > 0) {
-              state!.lastQuestions = result.questions
+              const questions = result.questions.map((q) => ({
+                question: typeof q === "string" ? q : q.question,
+                complexity: (typeof q === "object" && "complexity" in q ? q.complexity : "low") as ComplexityLevel,
+              }))
+              state!.lastQuestions = questions
+              state!.maxComplexity = (result.max_complexity ?? "low") as ComplexityLevel
               console.log(
-                `[sensor-gate-enforcer] Generated ${result.questions.length} shipping checklist questions`,
+                `[sensor-gate-enforcer] Generated ${result.questions.length} shipping checklist questions (max complexity: ${state!.maxComplexity})`,
               )
             }
             state!.pendingPromise = null
@@ -221,22 +229,27 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
 
         if (state.lastQuestions.length === 0) return
 
+        const spawnRange = COMPLEXITY_SPAWN_MAP[state.maxComplexity]
         const questionBlock = [
           "",
-          "<shipping-checklist>",
-          "Before proceeding, consider these shipping readiness questions:",
-          ...state.lastQuestions.map((q, i) => `  ${i + 1}. ${q.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}`),
+          `<shipping-checklist complexity="${state.maxComplexity}" suggested-spawns="${spawnRange.min}-${spawnRange.max}">`,
+          `Before proceeding, consider these shipping readiness questions (complexity: ${state.maxComplexity}):`,
+          ...state.lastQuestions.map((q, i) => {
+            const safeQ = q.question.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+            return `  ${i + 1}. [${q.complexity}] ${safeQ}`
+          }),
           "Answer each question before proceeding with the task.",
           "</shipping-checklist>",
           "",
         ].join("\n")
 
-        output.system.push(questionBlock)
-
-        // Check TTL BEFORE clearing to avoid injecting stale questions
+        // Check TTL BEFORE injecting to avoid stale questions in this turn
         if (Date.now() - state.lastRunTimestamp > QUESTIONS_TTL_MS) {
           state.lastQuestions = []
+          return
         }
+
+        output.system.push(questionBlock)
       },
 
       // --- dispose: cleanup ---

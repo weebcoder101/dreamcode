@@ -42,10 +42,11 @@ describe("token predictor integration (Python subprocess)", () => {
     expect(Array.isArray(parsed.questions)).toBe(true)
     expect(parsed.questions.length).toBeGreaterThan(0)
     expect(parsed.questions.length).toBeLessThanOrEqual(3)
-    // Each question should be a non-empty string
+    // Each question should be a non-empty string (or object with .question field)
     for (const q of parsed.questions) {
-      expect(typeof q).toBe("string")
-      expect(q.length).toBeGreaterThan(0)
+      const text = typeof q === "string" ? q : q.question
+      expect(typeof text).toBe("string")
+      expect(text.length).toBeGreaterThan(0)
     }
   }, SCRIPT_TIMEOUT + 5000)
 
@@ -75,8 +76,8 @@ describe("token predictor integration (Python subprocess)", () => {
     expect(exit1).toBe(0)
     expect(exit2).toBe(0)
     // Different prompts should produce different questions
-    const q1 = parsed1.questions.join(" ")
-    const q2 = parsed2.questions.join(" ")
+    const q1 = parsed1.questions.map((q: any) => (typeof q === "string" ? q : q.question)).join(" ")
+    const q2 = parsed2.questions.map((q: any) => (typeof q === "string" ? q : q.question)).join(" ")
     expect(q1).not.toBe(q2)
   }, SCRIPT_TIMEOUT * 2 + 5000)
 

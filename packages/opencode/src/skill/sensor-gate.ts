@@ -5,6 +5,7 @@ import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
 import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, HOME, isWindows, debugLog, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "./python-resolver"
+import { SOCIAL_GREETING_RE, COMPLEXITY_SPAWN_MAP, COMPLEXITY_SCORES, maxComplexityFromQuestions, spawnCountForComplexity, type RatedQuestion, type ComplexityLevel } from "./question-complexity-schema"
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
@@ -222,6 +223,7 @@ export interface SpawnEvaluation {
 export function evaluateSpawnNecessity(
   result: SensorGateResult,
   prompt: string,
+  activeQuestions?: readonly RatedQuestion[],
 ): SpawnEvaluation {
   const reasons: string[] = []
   let score = 0
@@ -239,7 +241,7 @@ export function evaluateSpawnNecessity(
   }
 
   // 1. Social greetings — never spawn for "hello", "thanks", etc.
-  if (result.is_social_greeting) {
+  if (result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())) {
     return { shouldSpawn: false, reason: "Social greeting — no specialists needed", suggestedCount: 0 }
   }
 
@@ -274,6 +276,18 @@ export function evaluateSpawnNecessity(
 
   if (isSimpleTask) {
     return { shouldSpawn: false, reason: "Simple high-confidence task — agent handles directly", suggestedCount: 0 }
+  }
+
+  // NEW: Incorporate question complexity into spawn count
+  // Active questions from the shipping checklist carry complexity ratings
+  // that directly influence how many subagents should be spawned.
+  if (activeQuestions && activeQuestions.length > 0) {
+    const maxQComplexity = maxComplexityFromQuestions(activeQuestions)
+    const qScore = COMPLEXITY_SCORES[maxQComplexity]
+    if (qScore > 0) {
+      score += qScore
+      reasons.push(`Question-derived complexity: ${maxQComplexity} (${activeQuestions.length} active questions)`)
+    }
   }
 
   // Scale up count for multi-faceted tasks
@@ -644,7 +658,7 @@ function runSensorGateEffect(
       )
       // Kill zombie process on timeout — prevent accumulation of hanging subprocesses
       if (proc) {
-        try { proc.kill(9) } catch {}
+        try { proc.kill(9) } catch (e) { console.warn("[sensor-gate] kill zombie proc failed:", String(e)) }
       }
       // Clean up temp file
       cleanupTmpFile(tmpFile)
@@ -699,6 +713,7 @@ function runNeuroHarnessEffect(
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
       let tmpFile = ""
+      let taskFile = ""
       try {
         const promptResult = buildPrompt({
           scanType,
@@ -706,6 +721,10 @@ function runNeuroHarnessEffect(
           context: clamped.slice(0, 8000),
         })
         tmpFile = writePromptToTmpFile(promptResult.userPrompt, projectRoot, "neuro-")
+
+        // Write task content to a separate temp file instead of passing via
+        // --task CLI arg, which would leak the prompt in process listings.
+        taskFile = writePromptToTmpFile(clamped.slice(0, 8000), projectRoot, "neuro-task-")
 
         const automationContext = JSON.stringify({
           task: clamped,
@@ -724,7 +743,7 @@ function runNeuroHarnessEffect(
               neuroHarness,
               "--scan-type", scanType,
               "--file", tmpFile,
-              "--task", clamped.slice(0, 8000),
+              "--task-file", taskFile,
               "--automation-context", automationContext,
             ], {
               cwd: projectRoot,
@@ -750,6 +769,7 @@ function runNeuroHarnessEffect(
         return null
       } finally {
         cleanupTmpFile(tmpFile)
+        cleanupTmpFile(taskFile)
       }
     }).pipe(
       Effect.catch(() => Effect.succeed(null) as Effect.Effect<string | null>),
@@ -780,8 +800,20 @@ export const layer = Layer.effect(
           // Fallback: when Python script fails (empty domain_tags = default result),
           // selectPersonas() returns [] because there are no tags to match.
           // Generate fallback personas so natural prompts can still trigger spawning.
-          if (result.personas.length === 0 && result.domain_tags.length === 0 && !result.is_social_greeting) {
-            const fallbackCount = Math.min(3, PERSONA_PROFILES.length)
+          // Defense-in-depth: also check the raw prompt for social greetings, since Python's
+          // social greeting early-return produces empty stdout and is_social_greeting is false.
+          const promptIsSocialGreeting = result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())
+          if (result.personas.length === 0 && result.domain_tags.length === 0 && !promptIsSocialGreeting) {
+            // Use question complexity to determine fallback count instead of hardcoded 3.
+            // If we have active rated questions, use their max complexity; otherwise default to medium.
+            const complexity: ComplexityLevel = result.complexity === "high" ? "high"
+              : result.complexity === "medium" ? "medium"
+              : result.risk_level === "high" ? "high"
+              : result.risk_level === "medium" ? "medium"
+              : "low"
+            const spawnConfig = COMPLEXITY_SPAWN_MAP[complexity]
+            const fallbackCount = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
+            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, count=${fallbackCount}`)
             result.personas = PERSONA_PROFILES.slice(0, fallbackCount).map((p) => ({
               name: p.name,
               role: p.role,

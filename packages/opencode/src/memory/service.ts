@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import path from "path"
 import os from "os"
-import { Global } from "../global"
+import { Global } from "@opencode-ai/core/global"
 import { Database } from "../storage/storage"
 import { Config } from "../config/config"
 import { reconcileMemory } from "./reconcile"
@@ -32,10 +32,11 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/Memory") {}
 
-export const layer: Layer.Layer<Service, never, Config.Service> = Layer.effect(
+export const layer: Layer.Layer<Service, never, Config.Service | Database.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const { db } = yield* Database.Service
     const root = path.join(Global.Path.data, "memory")
     const ccBase = path.join(os.homedir(), ".claude", "projects")
 
@@ -46,7 +47,7 @@ export const layer: Layer.Layer<Service, never, Config.Service> = Layer.effect(
     const reconcile = Effect.fn("Memory.reconcile")(function* () {
       const cfg = yield* config.get()
       const cc = cfg.memory?.cc_index ? ccBase : undefined
-      return yield* Effect.promise(() => reconcileMemory({ mimo: root, cc }))
+      return yield* reconcileMemory(db, { mimo: root, cc })
     })
 
     const search = Effect.fn("Memory.search")(function* (input: {
@@ -60,7 +61,7 @@ export const layer: Layer.Layer<Service, never, Config.Service> = Layer.effect(
       const cfg = yield* config.get()
       if (cfg.checkpoint?.memory_reconcile_on_search ?? true) {
         const cc = cfg.memory?.cc_index ? ccBase : undefined
-        yield* Effect.promise(() => reconcileMemory({ mimo: root, cc }))
+        yield* reconcileMemory(db, { mimo: root, cc })
       }
 
       const limit = input.limit ?? 10
@@ -114,7 +115,7 @@ export const layer: Layer.Layer<Service, never, Config.Service> = Layer.effect(
       // Over-fetch (3x, capped) so the relative floor can trim common-word
       // noise without starving the list when there ARE enough real hits.
       const fetchLimit = Math.min(limit * 3, 50)
-      const rows = Database.Client().$client.query(sql).all(ftsQuery, ...params, fetchLimit) as SearchRow[]
+      const rows = db.$client.query(sql).all(ftsQuery, ...params, fetchLimit) as SearchRow[]
 
       // FTS5 bm25() returns lower = better; convert to higher = better for caller
       const mapped = rows.map((r) => ({

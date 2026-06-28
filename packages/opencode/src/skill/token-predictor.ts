@@ -15,6 +15,7 @@
 import { Effect } from "effect"
 import { resolvePythonCommand, resolveSkillsDir, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver.js"
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker.js"
+import { categorizeQuestion } from "./question-complexity-schema.js"
 import { createHash } from "crypto"
 import path from "path"
 
@@ -26,10 +27,12 @@ export interface ShippingQuestion {
   readonly question: string
   readonly questionHash: string
   readonly category: string
+  readonly complexity: "low" | "medium" | "high"
 }
 
 export interface PredictorResult {
   readonly questions: readonly ShippingQuestion[]
+  readonly maxComplexity: "low" | "medium" | "high"
   readonly contextHash: string
   readonly signals: Record<string, boolean>
   readonly projectContext: string
@@ -63,25 +66,9 @@ export function resetPeriodicTimer(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Question Categorization (exported for shared use)
-// ---------------------------------------------------------------------------
-
-export function categorizeQuestion(q: string): string {
-  const lower = q.toLowerCase()
-  if (lower.includes("auth") || lower.includes("credential") || lower.includes("token")) return "security"
-  if (lower.includes("database") || lower.includes("migration") || lower.includes("query")) return "data"
-  if (lower.includes("test") || lower.includes("coverage") || lower.includes("edge case")) return "testing"
-  if (lower.includes("deploy") || lower.includes("rollback") || lower.includes("release")) return "deployment"
-  if (lower.includes("performance") || lower.includes("latency") || lower.includes("cache")) return "performance"
-  if (lower.includes("error") || lower.includes("exception") || lower.includes("fault")) return "reliability"
-  if (lower.includes("type") || lower.includes("schema") || lower.includes("validation")) return "types"
-  if (lower.includes("backward") || lower.includes("breaking") || lower.includes("migration guide")) return "compatibility"
-  return "general"
-}
-
-// ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
+// categorizeQuestion is imported from question-complexity-schema.ts (single source of truth)
 
 function resolvePredictorScript(): string {
   const skillsDir = resolveSkillsDir()
@@ -114,15 +101,24 @@ const generateImpl = (params: {
       return yield* Effect.fail(`Script path validation failed: ${scriptPath}`)
     }
 
-    // Write prompt to temp file — avoids leaking it in process listings
+    // Write prompt, sessionContext, and neuroResult to temp files — avoids leaking in process listings
+    const cwd = params.projectRoot || process.cwd()
     let tmpFile = ""
+    let ctxTmpFile = ""
+    let neuroTmpFile = ""
     try {
-      tmpFile = writePromptToTmpFile(params.prompt, params.projectRoot || process.cwd(), "tp-")
+      tmpFile = writePromptToTmpFile(params.prompt, cwd, "tp-")
+      if (params.sessionContext) {
+        ctxTmpFile = writePromptToTmpFile(params.sessionContext, cwd, "tp-ctx-")
+      }
+      if (params.neuroResult) {
+        neuroTmpFile = writePromptToTmpFile(params.neuroResult, cwd, "tp-neuro-")
+      }
     } catch (e) {
-      return yield* Effect.fail(`Failed to create temp file for prompt: ${e}`)
+      return yield* Effect.fail(`Failed to create temp files: ${e}`)
     }
 
-    // Build args
+    // Build args — use temp file paths instead of inline data to avoid ps aux leaks
     const args: string[] = [
       ...pythonArgs,
       scriptPath,
@@ -135,15 +131,16 @@ const generateImpl = (params: {
     if (params.projectRoot) {
       args.push("--project-root", params.projectRoot)
     }
-    if (params.sessionContext) {
-      args.push("--session-context", params.sessionContext)
+    if (ctxTmpFile) {
+      args.push("--session-context-file", ctxTmpFile)
     }
-    if (params.neuroResult) {
-      args.push("--neuro-result", params.neuroResult)
+    if (neuroTmpFile) {
+      args.push("--neuro-result-file", neuroTmpFile)
     }
 
     // Execute script using Bun.spawn (same pattern as chain-executor)
-    const result = yield* Effect.tryPromise({
+    // Use Effect.ensuring to guarantee temp file cleanup on all paths (success, error, early return)
+    return yield* Effect.tryPromise({
       try: async () => {
         const proc = Bun.spawn([pythonCmd, ...args], {
           stdout: "pipe",
@@ -174,7 +171,13 @@ const generateImpl = (params: {
         }
       },
       catch: (e) => `Failed to spawn predictor script: ${String(e)}`,
-    })
+    }).pipe(Effect.ensuring(
+      Effect.sync(() => {
+        cleanupTmpFile(tmpFile)
+        cleanupTmpFile(ctxTmpFile)
+        cleanupTmpFile(neuroTmpFile)
+      })
+    ))
 
     if (result.exitCode !== 0) {
       predictorBreaker.recordFailure()
@@ -186,7 +189,8 @@ const generateImpl = (params: {
     // Parse JSON output
     const parsed = yield* Effect.try({
       try: () => JSON.parse(result.stdout) as {
-        questions: string[]
+        questions: Array<{ question: string; complexity: string }>
+        max_complexity: string
         context_hash: string
         signals: Record<string, boolean>
         project_context: string
@@ -199,16 +203,17 @@ const generateImpl = (params: {
 
     // Map to typed result — use real SHA-256 hashes for dedup
     const questions: ShippingQuestion[] = parsed.questions.map((q) => ({
-      question: q,
-      questionHash: createHash("sha256").update(q.toLowerCase().trim()).digest("hex"),
-      category: categorizeQuestion(q),
+      question: typeof q === "string" ? q : q.question,
+      complexity: (typeof q === "object" && "complexity" in q ? q.complexity : "low") as "low" | "medium" | "high",
+      questionHash: createHash("sha256").update((typeof q === "string" ? q : q.question).toLowerCase().trim()).digest("hex"),
+      category: categorizeQuestion(typeof q === "string" ? q : q.question),
     }))
 
-    // Clean up temp file
-    cleanupTmpFile(tmpFile)
+    // Note: temp file cleanup is guaranteed by Effect.ensuring above
 
     return {
       questions,
+      maxComplexity: (parsed.max_complexity ?? "low") as "low" | "medium" | "high",
       contextHash: parsed.context_hash,
       signals: parsed.signals,
       projectContext: parsed.project_context,

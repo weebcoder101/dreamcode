@@ -100,7 +100,7 @@ const SUBAGENT_NAMES = new Set(["general", "explore"])
 
 const BUILD_COMMAND_RE = /^(npm|pip|yarn|pnpm|bun|make|cargo|go\s+build|dotnet\s+build|mvn|gradle|sbt|mix|composer)\s+(install|build|run\s+build|run\s+test|run\s+check|compile|deploy|add|publish)/i
 
-function classifyToolCall(tool: string, args: Record<string, unknown>, ctx: Tool.Context): string | undefined {
+function classifyToolCall(tool: string, args: Record<string, unknown>, ctx: Context): string | undefined {
   if (!SUBAGENT_NAMES.has(ctx.agent)) return undefined
   if (tool !== "bash" && tool !== "shell") return undefined
   const command = (args.command as string | undefined) ?? (args.script as string | undefined) ?? ""

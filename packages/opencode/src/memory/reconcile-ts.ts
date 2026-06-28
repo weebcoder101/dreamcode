@@ -34,7 +34,9 @@ export function reconcileMemory(memoryDir: string, indexPath: string): MemoryInd
       const tokens = extractTokens(content)
       index.files.push({ path: f, type: "memory", size: content.length, tokens: tokens.size, top_tokens: [...tokens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20) })
       index.total_tokens += tokens.size
-    } catch {}
+    } catch (e) {
+      console.warn("[reconcile-ts] failed to index file:", f, String(e))
+    }
   }
   fs.mkdirSync(path.dirname(indexPath), { recursive: true })
   fs.writeFileSync(indexPath, JSON.stringify(index, null, 2))

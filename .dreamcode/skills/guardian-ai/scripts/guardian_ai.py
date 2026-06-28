@@ -44,12 +44,33 @@ GUARDIAN_LOG = EVOLUTION_DIR / "guardian_ai.jsonl"
 
 # Load NEURO API config
 def _load_env():
-    """Load .env files for NEURO_API_KEY."""
+    """Load .env files for NEURO_API_KEY.
+    
+    Security checks:
+    - Refuses world-readable files (mode & 0o004) to prevent credential exposure
+    - Refuses world-writable files (mode & 0o002) to prevent injection attacks
+    - Logs a warning to stderr for unsafe permissions
+    """
     if os.environ.get("NEURO_API_KEY"):
         return
     for env_file in [".env.secret", ".env.neuro", ".env"]:
         path = PROJECT_ROOT / env_file
         if path.exists():
+            try:
+                import stat as _stat
+                file_mode = path.stat().st_mode
+                if file_mode & _stat.S_IROTH:
+                    print(f"WARNING: {path} is world-readable ({oct(file_mode & 0o777)}). "
+                          "Set permissions to 0600 (chmod 600). Refusing to load.",
+                          file=sys.stderr)
+                    continue
+                if file_mode & _stat.S_IWOTH:
+                    print(f"WARNING: {path} is world-writable ({oct(file_mode & 0o777)}). "
+                          "Set permissions to 0600 (chmod 600). Refusing to load.",
+                          file=sys.stderr)
+                    continue
+            except OSError:
+                continue
             for line in path.read_text().splitlines():
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:

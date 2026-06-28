@@ -16,7 +16,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Glob } from "@opencode-ai/core/util/glob"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
-import { resolvePythonCommand, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "./python-resolver"
+import { resolvePythonCommand, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV, resolveSkillDirName } from "./python-resolver"
 
 // ─── Script Execution Helpers ────────────────────────────────────
 // Used by Skill.Service.require() to auto-execute Python scripts when loading
@@ -421,12 +421,13 @@ export const layer = Layer.effect(
 
     const get = Effect.fn("Skill.get")(function* (name: string) {
       const s = yield* InstanceState.get(state)
-      return s.skills[name]
+      return s.skills[name] ?? s.skills[resolveSkillDirName(name)]
     })
 
-    const require = Effect.fn("Skill.require")(function* (name: string) {
+    const require = Effect.fn("Skill.require")(function* (name: string, opts?: { skipAutoExecute?: boolean }) {
       const s = yield* InstanceState.get(state)
-      const info = s.skills[name]
+      // Try direct lookup first, then alias (e.g. "api-design" → "api")
+      const info = s.skills[name] ?? s.skills[resolveSkillDirName(name)]
       if (!info) {
         return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
       }
@@ -435,7 +436,8 @@ export const layer = Layer.effect(
       // When a skill has Python scripts, execute them and append results
       // to the content. This bridges the gap between skill loading
       // (SKILL.md text) and ChainExecutor (prompt-build-time execution).
-      if (info.location !== "<built-in>") {
+      // Skip when called from ChainExecutor — it handles its own execution.
+      if (!opts?.skipAutoExecute && info.location !== "<built-in>") {
         const ctx = yield* InstanceState.contextOrNull
         const cwd = ctx?.directory ?? process.cwd()
         const scripts = yield* Effect.tryPromise({

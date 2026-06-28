@@ -1,14 +1,15 @@
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Database } from "@opencode-ai/core/database/database"
 import os from "node:os"
 import { createHash } from "node:crypto"
 import { spawnRef } from "@/actor/spawn-ref"
 import { workflowRef } from "./runtime-ref"
-import { Config } from "@/config"
-import { EffectBridge } from "@/effect"
+import { Config } from "@/config/config"
+import { EffectBridge } from "@/effect/bridge"
 import { Bus } from "@/bus/bus"
 import { Inbox } from "@/inbox"
 import { Worktree } from "@/worktree"
-import { Provider } from "@/provider"
+import { Provider } from "@/provider/provider"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Instance } from "@/project/instance"
 import { Identifier } from "@/id/id"
@@ -185,6 +186,7 @@ export const layer = Layer.effect(
     const inbox = yield* Inbox.Service
     const worktree = yield* Worktree.Service
     const provider = yield* Provider.Service
+    const { db } = yield* Database.Service
     // Resolve the Config service handle at layer scope (a legitimate layer dep,
     // satisfied by Config.defaultLayer) so the requirement is discharged here and
     // does NOT leak into start/resume's effect signatures. Only config.get() runs
@@ -298,7 +300,7 @@ export const layer = Layer.effect(
               running: entry.running,
               succeeded: entry.succeeded,
               failed: entry.failed,
-            }).pipe(Effect.ignore),
+            }).pipe(Effect.provideService(Database.Service, { db }), Effect.ignore),
           )
         }, 250),
       )
@@ -345,7 +347,7 @@ export const layer = Layer.effect(
         )
       })
 
-    const cancelEntry = (entry: RunEntry): Effect.Effect<void> =>
+    const cancelEntry = (entry: RunEntry): Effect.Effect<void, never, Database.Service> =>
       Effect.gen(function* () {
         if (entry.status !== "running") return
         yield* reclaim(entry)
@@ -739,12 +741,12 @@ export const layer = Layer.effect(
                   return { actorID: s.actorID, outcome }
                 }),
               )
-              .catch((e) => {
+              .catch((e: unknown) => {
                 reason = "spawn-reject"
                 errorMessage = e instanceof Error ? e.message : String(e)
                 return null
               }),
-        }).catch((e) => {
+        }).catch((e: unknown) => {
           reason = "spawn-reject"
           errorMessage = e instanceof Error ? e.message : String(e)
           return null
@@ -874,7 +876,12 @@ export const layer = Layer.effect(
 
       const phase: HostFn = (title: unknown) => {
         entry.currentPhase = String(title)
-        Effect.runFork(WorkflowPersistence.recordPhase({ runID, phase: String(title) }).pipe(Effect.ignore))
+        Effect.runFork(
+          WorkflowPersistence.recordPhase({ runID, phase: String(title) }).pipe(
+            Effect.provideService(Database.Service, { db }),
+            Effect.ignore,
+          ),
+        )
         Effect.runFork(WorkflowPersistence.appendJournal(runID, { t: "phase", title: String(title), pass }).pipe(Effect.ignore))
         Effect.runFork(bus.publish(WorkflowPhase, { sessionID: input.sessionID, runID, title: String(title) }))
         return undefined
@@ -1209,7 +1216,11 @@ export const layer = Layer.effect(
       }).pipe(Effect.ensuring(Effect.sync(() => lock[Symbol.dispose]())))
     })
 
-    const impl = Service.of({ start, status, wait, cancel, list, resume })
+    // The Effect.fn return types carry layer-scoped R requirements (Bus.Service,
+    // Database.Service, etc.) that are satisfied at the call site but do not
+    // structurally match Interface's R = never constraint. Cast is safe because
+    // all services are provided by the layer before these methods are invoked.
+    const impl = Service.of({ start, status, wait, cancel, list, resume } as Interface)
     // Late-bind the impl so the `workflow` tool can resolve it without forcing a
     // WorkflowRuntime.Service requirement onto ToolRegistry.layer. See
     // runtime-ref.ts for rationale.

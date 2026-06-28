@@ -1,5 +1,5 @@
 import { Context, Deferred, Effect, Layer } from "effect"
-import { Bus } from "@/bus/bus"
+import * as Bus from "@/bus/bus"
 import { ActorRegistry } from "@/actor/registry"
 import type { Actor } from "@/actor/schema"
 import { Session } from "@/session/session"

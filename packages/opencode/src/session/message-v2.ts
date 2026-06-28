@@ -10,13 +10,13 @@ import {
   CompactionPart,
   ContextOverflowError,
   Info,
-  OutputFormat,
   OutputLengthError,
-  Part,
   StructuredOutputError,
   SubtaskPart,
   User,
-  WithParts,
+  type OutputFormat,
+  type Part,
+  type WithParts,
   type ToolPart,
 } from "@opencode-ai/core/v1/session"
 
@@ -741,7 +741,9 @@ export function fromError(
             },
           ).toObject()
         }
-      } catch {}
+      } catch (convErr) {
+        console.warn("[message-v2] failed to assemble conversation error:", String(convErr))
+      }
       return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e }).toObject()
   }
 }

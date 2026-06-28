@@ -38,7 +38,9 @@ export function debugLog(...args: unknown[]): void {
     const logPath = join(HOME, ".dreamcode", "logs", "python-resolver.log")
     mkdirSync(dirname(logPath), { recursive: true })
     appendFileSync(logPath, line + "\n")
-  } catch {}
+  } catch (e) {
+    console.warn("[python-resolver] debugLog write failed:", String(e))
+  }
 }
 
 export function isWindows(): boolean {
@@ -64,6 +66,7 @@ export function writePromptToTmpFile(prompt: string, cwd: string, prefix: string
   if (!isWindows()) chmodSync(tmpDir, 0o700)
   const tmpFile = join(tmpDir, "prompt.txt")
   writeFileSync(tmpFile, prompt, "utf-8")
+  if (!isWindows()) chmodSync(tmpFile, 0o600)
   return tmpFile
 }
 
@@ -135,6 +138,40 @@ export function getPythonArgs(cmd?: string): string[] {
     return ["-3"]
   }
   return []
+}
+
+// ---------------------------------------------------------------------------
+// Skill Directory Name Aliases
+// ---------------------------------------------------------------------------
+// The source tree (src/skill/dreamcode/skills/) uses short names (api, data, etc.)
+// while the deployed directory (.dreamcode/skills/) uses descriptive names (api-design, etc.).
+// This mapping bridges the gap without filesystem changes.
+
+const SKILL_DIR_ALIASES: Record<string, string> = {
+  "api-design": "api",
+  "data-science": "data",
+  "git-workflow": "git",
+  "product-thinking": "product",
+  "python-best-practices": "python",
+  "quantum-poc": "quantum",
+}
+
+/**
+ * Resolve a skill name to its actual directory name, checking aliases.
+ * If the canonical name exists as-is, return it. Otherwise check the alias map.
+ */
+export function resolveSkillDirName(canonicalName: string): string {
+  // If the canonical name exists directly, use it
+  const skillsDir = resolveSkillsDir()
+  if (skillsDir) {
+    try {
+      if (existsSync(join(skillsDir, canonicalName)) && statSync(join(skillsDir, canonicalName)).isDirectory()) {
+        return canonicalName
+      }
+    } catch { /* fall through to alias check */ }
+  }
+  // Check alias map (e.g. "api-design" → "api")
+  return SKILL_DIR_ALIASES[canonicalName] ?? canonicalName
 }
 
 /**
