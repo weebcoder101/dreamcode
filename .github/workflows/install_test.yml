@@ -11,9 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run installer
+      - name: Run installer (from local checkout)
         run: bash install.sh
         shell: bash
+        env:
+          DREAMCODE_DIR: ${{ github.workspace }}
       - name: Verify binary on PATH
         run: dreamcode --version
         shell: bash
@@ -57,9 +59,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run installer (pre-built binary download)
+      - name: Run installer (build from source for PR validation)
         shell: pwsh
-        run: .\install.ps1
+        run: .\install.ps1 -BuildFromSource
+        env:
+          DREAMCODE_DIR: ${{ github.workspace }}
       - name: Verify binary
         shell: pwsh
         run: dreamcode --version
