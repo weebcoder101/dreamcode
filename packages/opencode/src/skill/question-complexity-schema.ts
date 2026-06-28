@@ -57,7 +57,7 @@ export const COMPLEXITY_SCORES: Record<ComplexityLevel, number> = {
 // Social greeting patterns (shared across sensor gate)
 // ---------------------------------------------------------------------------
 
-export const SOCIAL_GREETING_RE = /^\s*(hi|hello|hey|thanks|thank you|bye|goodbye|cheers|sup|yo)\s*[!.?]*\s*$/i
+export const SOCIAL_GREETING_RE = /^\s*(?:(?:say|just|please)\s+)*(hi|hello|hey|thanks|thank you|bye|goodbye|cheers|sup|yo)\b/i
 
 // ---------------------------------------------------------------------------
 // Helpers

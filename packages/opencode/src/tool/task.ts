@@ -302,9 +302,19 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
-      // Tracks subagent session cost from DB so we can propagate it to the parent session
-      let subagentCost = 0
-      let subagentTokens: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined
+      // Helper to fetch subagent session cost/tokens from DB after task completes
+      const subagentSessionCost = (): Effect.Effect<{
+        cost: number
+        tokens: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined
+      }> =>
+        Effect.option(sessions.get(nextSession.id)).pipe(
+          Effect.catchAll(() => Effect.logWarning("Subagent session not found for cost read").pipe(Effect.as(Option.none()))),
+          Effect.map(Option.match({ onNone: () => ({ cost: 0, tokens: undefined }), onSome: (s) => ({ cost: s.cost, tokens: s.tokens }) })),
+        )
+
+      // Refs track cost/tokens populated by runTask AFTER its prompt completes
+      const costRef = yield* Ref.make(0)
+      const tokensRef = yield* Ref.make<{ input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined>(undefined)
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         let parts = yield* ops.resolvePromptParts(params.prompt)
@@ -327,10 +337,10 @@ export const TaskTool = Tool.define(
           agent: next.name,
           parts,
         })
-        // Fetch subagent session cost/tokens from DB so they can be propagated to parent session
-        const childSession = yield* sessions.get(nextSession.id).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-        subagentCost = childSession?.cost ?? 0
-        subagentTokens = childSession?.tokens
+        // Capture cost from DB AFTER prompt completes — projector has committed step-finish parts by now
+        const { cost, tokens } = yield* subagentSessionCost()
+        yield* Ref.set(costRef, cost)
+        yield* Ref.set(tokensRef, tokens)
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 
@@ -361,6 +371,12 @@ export const TaskTool = Tool.define(
             ],
           })
           .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
+        // Propagate subagent cost to parent session so parent's SessionTable.cost includes child cost
+        const childCost = yield* Ref.get(costRef)
+        if (childCost > 0) {
+          const parent = yield* sessions.get(ctx.sessionID)
+          yield* sessions.update(ctx.sessionID, { cost: (parent.cost ?? 0) + childCost })
+        }
       })
 
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
@@ -374,67 +390,51 @@ export const TaskTool = Tool.define(
         )
       })
 
-      if (yield* background.extend({ id: nextSession.id, run: runTask() })) {
-        return {
-          title: params.description,
-          metadata: {
-            ...metadata,
-            background: true,
-            jobId: nextSession.id,
-          },
-          output: renderOutput({
-            sessionID: nextSession.id,
-            state: "running",
-            summary: "Background task updated",
-            text: BACKGROUND_UPDATED,
-          }),
-          subagentCost,
-          subagentTokens,
-        }
-      }
+      // Try to extend existing background job. If it exists, the new runTask is queued
+      // and we fall through to wait for it — no early return (avoids stale cost).
+      const extended = yield* background.extend({ id: nextSession.id, run: runTask() })
 
-      const info = yield* background.start({
-        id: nextSession.id,
-        type: id,
-        title: params.description,
-        metadata,
-        onPromote: Effect.all([
-          ctx.metadata({
-            title: params.description,
-            metadata: { ...metadata, background: true, jobId: nextSession.id },
-          }),
-          notify(nextSession.id),
-        ]),
-        run: runTask().pipe(
-          Effect.onInterrupt(() => ops.cancel(nextSession.id)),
-          Effect.ensuring(
-            Ref.update(activeSubagentSessions, (set) => { set.delete(nextSession.id); return set }),
+      if (!extended) {
+        // Start new background job
+        const info = yield* background.start({
+          id: nextSession.id,
+          type: id,
+          title: params.description,
+          metadata,
+          onPromote: Effect.all([
+            ctx.metadata({
+              title: params.description,
+              metadata: { ...metadata, background: true, jobId: nextSession.id },
+            }),
+            notify(nextSession.id),
+          ]),
+          run: runTask().pipe(
+            Effect.onInterrupt(() => ops.cancel(nextSession.id)),
+            Effect.ensuring(
+              Ref.update(activeSubagentSessions, (set) => { set.delete(nextSession.id); return set }),
+            ),
           ),
-        ),
-      })
+        })
 
-      function backgroundResult() {
-        return {
-          title: params.description,
-          metadata: {
-            ...metadata,
-            background: true,
-            jobId: info.id,
-          },
-          output: renderOutput({
-            sessionID: nextSession.id,
-            state: "running",
-            summary: "Background task started",
-            text: BACKGROUND_STARTED,
-          }),
-          subagentCost,
-          subagentTokens,
+        if (runInBackground) {
+          yield* notify(info.id)
+          return {
+            title: params.description,
+            metadata: {
+              ...metadata,
+              background: true,
+              jobId: info.id,
+            },
+            output: renderOutput({
+              sessionID: nextSession.id,
+              state: "running",
+              summary: "Background task started",
+              text: BACKGROUND_STARTED,
+            }),
+            subagentCost: yield* Ref.get(costRef),
+            subagentTokens: yield* Ref.get(tokensRef),
+          }
         }
-      }
-
-      if (runInBackground) {
-        yield* notify(info.id)
-        return backgroundResult()
       }
 
       const runCancel = yield* EffectBridge.make()
@@ -454,17 +454,34 @@ export const TaskTool = Tool.define(
               background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
               background.waitForPromotion(nextSession.id),
             )
-            if (result?.metadata?.background === true) return backgroundResult()
+            if (result?.metadata?.background === true) {
+              // Task was promoted from background — cost captured by runTask in costRef
+              return {
+                title: params.description,
+                metadata: {
+                  ...metadata,
+                  background: true,
+                  jobId: nextSession.id,
+                },
+                output: renderOutput({
+                  sessionID: nextSession.id,
+                  state: "running",
+                  summary: "Background task started",
+                  text: BACKGROUND_STARTED,
+                }),
+                subagentCost: yield* Ref.get(costRef),
+                subagentTokens: yield* Ref.get(tokensRef),
+              }
+            }
             if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
             if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
-            // Also fetch latest cost/tokens from DB in case runTask's capture ran before session was fully updated
-            const finalSession = yield* sessions.get(nextSession.id).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+            // Read cost from Ref (populated by runTask after prompt completes)
             return {
               title: params.description,
               metadata,
               output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
-              subagentCost: finalSession?.cost ?? subagentCost,
-              subagentTokens: finalSession?.tokens ?? subagentTokens,
+              subagentCost: yield* Ref.get(costRef),
+              subagentTokens: yield* Ref.get(tokensRef),
             }
           }),
         (_, exit) =>

@@ -69,7 +69,10 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 20
-        run: bun turbo test --output-logs=errors-only --log-order=grouped --log-prefix=task
+        # Scope to opencode#test only — `bun turbo test` runs ALL workspace
+        # test tasks including sub-packages that require native compilation
+        # (node-gyp, VS Build Tools) and fail on Windows.
+        run: bun turbo opencode#test --output-logs=errors-only --log-order=grouped --log-prefix=task
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
@@ -135,6 +138,7 @@ jobs:
         run: bun --cwd packages/app test:e2e:local
         env:
           CI: true
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
         timeout-minutes: 30
 
       - name: Upload Playwright artifacts

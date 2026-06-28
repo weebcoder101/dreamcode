@@ -452,12 +452,13 @@ export const layer = Layer.effect(
       assistantMessage.finish = "tool-calls"
       assistantMessage.time.completed = Date.now()
       // Propagate subagent cost/tokens to parent session for accurate TUI context display
-      if ((result as any)?.subagentCost) {
-        assistantMessage.cost = (assistantMessage.cost ?? 0) + (result as any).subagentCost
+      const sc = (result as any)?.subagentCost
+      if (sc != null && sc > 0) {
+        assistantMessage.cost = (assistantMessage.cost ?? 0) + sc
       }
-      if ((result as any)?.subagentTokens) {
+      const st = (result as any)?.subagentTokens
+      if (st != null) {
         const t = assistantMessage.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-        const st = (result as any).subagentTokens
         assistantMessage.tokens = {
           input: t.input + (st.input ?? 0),
           output: t.output + (st.output ?? 0),
@@ -469,6 +470,39 @@ export const layer = Layer.effect(
         }
       }
       yield* sessions.updateMessage(assistantMessage)
+
+      // Normalize potentially partial subagent tokens to the full shape StepFinishPart schema requires
+      // (all fields non-nullable — missing reasoning/cache would produce NaN in SQLite via applyUsage)
+      const normalizeTokens = (t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] => {
+        const cache = t?.cache as Record<string, unknown> | undefined
+        return {
+          input: (t?.input as number) ?? 0,
+          output: (t?.output as number) ?? 0,
+          reasoning: (t?.reasoning as number) ?? 0,
+          cache: {
+            read: (cache?.read as number) ?? 0,
+            write: (cache?.write as number) ?? 0,
+          },
+        }
+      }
+
+      // Create a step-finish part so the projector's PartUpdated handler
+      // propagates subagent cost/tokens to the session's DB cost row.
+      // This mirrors the main LLM flow (processor.ts) where step-finish parts
+      // carry cost/tokens and trigger applyUsage in the projector.
+      const subagentCost_ = (result as any)?.subagentCost
+      const subagentTokens_ = (result as any)?.subagentTokens
+      if (subagentCost_ != null && subagentCost_ > 0) {
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistantMessage.id,
+          sessionID: assistantMessage.sessionID,
+          type: "step-finish",
+          reason: "completed",
+          cost: subagentCost_,
+          tokens: normalizeTokens(subagentTokens_),
+        } satisfies SessionV1.StepFinishPart)
+      }
 
       if (result && part.state.status === "running") {
         yield* sessions.updatePart({

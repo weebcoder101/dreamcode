@@ -318,7 +318,7 @@ def _rank(p):
 
 
 def _is_social_greeting(prompt: str) -> bool:
-    social_patterns = r'^\s*(hi|hello|hey|thanks|thank you|bye|goodbye|cheers|sup|yo)\s*[!.?]*\s*$'
+    social_patterns = r'^\s*(?:(?:say|just|please)\s+)*(hi|hello|hey|thanks|thank you|bye|goodbye|cheers|sup|yo)\b'
     return bool(re.match(social_patterns, prompt.strip(), re.IGNORECASE))
 
 
