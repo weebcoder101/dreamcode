@@ -23,6 +23,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
 import { InstanceHttpApi } from "../api"
 import * as ApiError from "../errors"
+import { dieSyncError } from "./sync-util"
 import { CursorQuery, PtyConnectApi } from "../groups/pty"
 import { WebSocketTracker } from "../websocket-tracker"
 
@@ -59,32 +60,36 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     })
 
     const list = Effect.fn("PtyHttpApi.list")(function* () {
-      return yield* pty(Pty.Service.use((service) => service.list()))
+      return yield* dieSyncError(pty(Pty.Service.use((service) => service.list())))
     })
 
     const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
-      return yield* pty(
-        Pty.Service.use((service) =>
-          Effect.flatMap(
-            PtyPreparation.prepareCreate({
-              ...ctx.payload,
-              args: ctx.payload.args ? [...ctx.payload.args] : undefined,
-              env: ctx.payload.env ? { ...ctx.payload.env } : undefined,
-            }),
-            service.create,
+      return yield* dieSyncError(
+        pty(
+          Pty.Service.use((service) =>
+            Effect.flatMap(
+              PtyPreparation.prepareCreate({
+                ...ctx.payload,
+                args: ctx.payload.args ? [...ctx.payload.args] : undefined,
+                env: ctx.payload.env ? { ...ctx.payload.env } : undefined,
+              }),
+              service.create,
+            ),
           ),
         ),
       )
     })
 
     const get = Effect.fn("PtyHttpApi.get")(function* (ctx: { params: { ptyID: PtyID } }) {
-      return yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
-            }),
+      return yield* dieSyncError(
+        pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
           ),
         ),
       )
@@ -94,33 +99,37 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       params: { ptyID: PtyID }
       payload: typeof Pty.UpdateInput.Type
     }) {
-      return yield* pty(
-        Pty.Service.use((service) =>
-          service.update(ctx.params.ptyID, {
-            ...ctx.payload,
-            size: ctx.payload.size ? { ...ctx.payload.size } : undefined,
-          }),
-        ),
-      ).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
+      return yield* dieSyncError(
+        pty(
+          Pty.Service.use((service) =>
+            service.update(ctx.params.ptyID, {
+              ...ctx.payload,
+              size: ctx.payload.size ? { ...ctx.payload.size } : undefined,
             }),
+          ),
+        ).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
           ),
         ),
       )
     })
 
     const remove = Effect.fn("PtyHttpApi.remove")(function* (ctx: { params: { ptyID: PtyID } }) {
-      yield* pty(Pty.Service.use((service) => service.remove(ctx.params.ptyID))).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
-            }),
+      yield* dieSyncError(
+        pty(Pty.Service.use((service) => service.remove(ctx.params.ptyID))).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
           ),
         ),
       )
@@ -131,13 +140,15 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       const request = yield* HttpServerRequest.HttpServerRequest
       if (request.headers[PTY_CONNECT_TOKEN_HEADER] !== PTY_CONNECT_TOKEN_HEADER_VALUE || !validOrigin(request, cors))
         return yield* new ApiError.PtyForbiddenError({ message: "Invalid PTY connect token request" })
-      yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-        Effect.catchTag("Pty.NotFoundError", (error) =>
-          Effect.fail(
-            new ApiError.PtyNotFoundError({
-              ptyID: error.ptyID,
-              message: `PTY session not found: ${error.ptyID}`,
-            }),
+      yield* dieSyncError(
+        pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
           ),
         ),
       )
@@ -179,9 +190,11 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
         params: { ptyID: PtyID }
         request: HttpServerRequest.HttpServerRequest
       }) {
-        const exists = yield* pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-          Effect.as(true),
-          Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(false)),
+        const exists = yield* dieSyncError(
+          pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+            Effect.as(true),
+            Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(false)),
+          ),
         )
         if (!exists) return HttpServerResponse.empty({ status: 404 })
 

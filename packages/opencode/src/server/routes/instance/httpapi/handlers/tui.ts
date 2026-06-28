@@ -28,13 +28,16 @@ export const tuiHandlers = HttpApiBuilder.group(InstanceHttpApi, "tui", (handler
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
     const session = yield* Session.Service
+    const publishSync = <A, E>(effect: Effect.Effect<void, E, A>) =>
+      effect.pipe(Effect.catchAll(() => Effect.void))
+
     const publishCommand = (command: typeof TuiEvent.CommandExecute.data.Type.command | undefined) =>
-      events.publish(TuiEvent.CommandExecute, { command } as typeof TuiEvent.CommandExecute.data.Type)
+      publishSync(events.publish(TuiEvent.CommandExecute, { command } as typeof TuiEvent.CommandExecute.data.Type))
 
     const appendPrompt = Effect.fn("TuiHttpApi.appendPrompt")(function* (ctx: {
       payload: typeof TuiEvent.PromptAppend.data.Type
     }) {
-      yield* events.publish(TuiEvent.PromptAppend, ctx.payload)
+      yield* publishSync(events.publish(TuiEvent.PromptAppend, ctx.payload))
       return true
     })
 
@@ -79,19 +82,19 @@ export const tuiHandlers = HttpApiBuilder.group(InstanceHttpApi, "tui", (handler
     const showToast = Effect.fn("TuiHttpApi.showToast")(function* (ctx: {
       payload: typeof TuiEvent.ToastShow.data.Type
     }) {
-      yield* events.publish(TuiEvent.ToastShow, ctx.payload)
+      yield* publishSync(events.publish(TuiEvent.ToastShow, ctx.payload))
       return true
     })
 
     const publish = Effect.fn("TuiHttpApi.publish")(function* (ctx: { payload: typeof TuiPublishPayload.Type }) {
       if (ctx.payload.type === TuiEvent.PromptAppend.type)
-        yield* events.publish(TuiEvent.PromptAppend, ctx.payload.properties)
+        yield* publishSync(events.publish(TuiEvent.PromptAppend, ctx.payload.properties))
       if (ctx.payload.type === TuiEvent.CommandExecute.type)
-        yield* events.publish(TuiEvent.CommandExecute, ctx.payload.properties)
+        yield* publishSync(events.publish(TuiEvent.CommandExecute, ctx.payload.properties))
       if (ctx.payload.type === TuiEvent.ToastShow.type)
-        yield* events.publish(TuiEvent.ToastShow, ctx.payload.properties)
+        yield* publishSync(events.publish(TuiEvent.ToastShow, ctx.payload.properties))
       if (ctx.payload.type === TuiEvent.SessionSelect.type)
-        yield* events.publish(TuiEvent.SessionSelect, ctx.payload.properties)
+        yield* publishSync(events.publish(TuiEvent.SessionSelect, ctx.payload.properties))
       return true
     })
 
@@ -100,7 +103,7 @@ export const tuiHandlers = HttpApiBuilder.group(InstanceHttpApi, "tui", (handler
     }) {
       if (!ctx.payload.sessionID.startsWith("ses")) return yield* new HttpApiError.BadRequest({})
       yield* SessionError.mapStorageNotFound(session.get(ctx.payload.sessionID))
-      yield* events.publish(TuiEvent.SessionSelect, ctx.payload)
+      yield* publishSync(events.publish(TuiEvent.SessionSelect, ctx.payload))
       return true
     })
 

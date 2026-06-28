@@ -10,6 +10,7 @@ import ignore from "ignore"
 import path from "path"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
+import { dieSyncError } from "./sync-util"
 
 export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handlers) =>
   Effect.gen(function* () {
@@ -47,7 +48,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       const limit = ctx.query.limit ?? 10
       const type = ctx.query.type ?? (ctx.query.dirs === "false" ? "file" : undefined)
       const started = performance.now()
-      const found = yield* filesystem(FileSystem.Service.use((fs) => fs.find({ query: ctx.query.query, limit, type })))
+      const found = yield* dieSyncError(filesystem(FileSystem.Service.use((fs) => fs.find({ query: ctx.query.query, limit, type }))))
       yield* Effect.logInfo("find file", {
         query: ctx.query.query,
         type,
@@ -65,7 +66,7 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
 
     const list = Effect.fn("FileHttpApi.list")(function* (ctx: { query: { path: string } }) {
       const directory = (yield* InstanceState.context).directory
-      return yield* filesystem(
+      return yield* dieSyncError(filesystem(
         Effect.gen(function* () {
           const fs = yield* FileSystem.Service
           const raw = yield* FSUtil.Service
@@ -98,28 +99,30 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       const file = path.resolve(directory, ctx.query.path)
       if (!FSUtil.contains(directory, file)) return yield* Effect.die(new Error("Path escapes the location"))
       if (!(yield* FSUtil.Service.use((fs) => fs.existsSafe(file)))) return { type: "text" as const, content: "" }
-      return yield* filesystem(
-        FileSystem.Service.use((fs) => fs.read({ path: RelativePath.make(ctx.query.path) })),
-      ).pipe(
-        Effect.flatMap((item) =>
-          Effect.gen(function* () {
-            const text = item.content.includes(0)
-              ? Option.none<string>()
-              : yield* Effect.sync(() => new TextDecoder("utf-8", { fatal: true }).decode(item.content)).pipe(
-                  Effect.option,
-                )
-            return { item, text }
-          }),
-        ),
-        Effect.map(({ item, text }) =>
-          Option.isSome(text)
-            ? { type: "text" as const, content: text.value.trim() }
-            : {
-                type: "binary" as const,
-                content: Buffer.from(item.content).toString("base64"),
-                encoding: "base64" as const,
-                mimeType: item.mime,
-              },
+      return yield* dieSyncError(
+        filesystem(
+          FileSystem.Service.use((fs) => fs.read({ path: RelativePath.make(ctx.query.path) })),
+        ).pipe(
+          Effect.flatMap((item) =>
+            Effect.gen(function* () {
+              const text = item.content.includes(0)
+                ? Option.none<string>()
+                : yield* Effect.sync(() => new TextDecoder("utf-8", { fatal: true }).decode(item.content)).pipe(
+                    Effect.option,
+                  )
+              return { item, text }
+            }),
+          ),
+          Effect.map(({ item, text }) =>
+            Option.isSome(text)
+              ? { type: "text" as const, content: text.value.trim() }
+              : {
+                  type: "binary" as const,
+                  content: Buffer.from(item.content).toString("base64"),
+                  encoding: "base64" as const,
+                  mimeType: item.mime,
+                },
+          ),
         ),
       )
     })

@@ -293,7 +293,8 @@ export const layer = Layer.effect(
 
         return { result, updated }
       })
-      yield* Effect.forEach(Array.from({ length: clients.updated }), () => events.publish(Event.Updated, {}), {
+      yield* Effect.forEach(Array.from({ length: clients.updated }), () =>
+        events.publish(Event.Updated, {}).pipe(Effect.catchAll(() => Effect.void)), {
         discard: true,
       })
       return clients.result

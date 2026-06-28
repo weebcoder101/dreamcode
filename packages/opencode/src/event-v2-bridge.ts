@@ -21,18 +21,27 @@ export const layer = Layer.effect(
 
     const publish: EventV2.Interface["publish"] = (definition, data, options) =>
       Effect.gen(function* () {
-        if (options?.location) return yield* events.publish(definition, data, options)
-        const ctx = yield* InstanceRef
-        if (!ctx) return yield* events.publish(definition, data, options)
-        const workspaceID = yield* WorkspaceRef
-        return yield* events.publish(definition, data, {
-          ...options,
-          location: new Location.Info({
-            directory: AbsolutePath.make(ctx.directory),
-            ...(workspaceID ? { workspaceID } : {}),
-            project: { id: Project.ID.make(ctx.project.id), directory: AbsolutePath.make(ctx.worktree) },
-          }),
-        })
+        const inner =
+          options?.location
+            ? events.publish(definition, data, options)
+            : Effect.gen(function* () {
+                const ctx = yield* InstanceRef
+                if (!ctx) return yield* events.publish(definition, data, options)
+                const workspaceID = yield* WorkspaceRef
+                return yield* events.publish(definition, data, {
+                  ...options,
+                  location: new Location.Info({
+                    directory: AbsolutePath.make(ctx.directory),
+                    ...(workspaceID ? { workspaceID } : {}),
+                    project: { id: Project.ID.make(ctx.project.id), directory: AbsolutePath.make(ctx.worktree) },
+                  }),
+                })
+              })
+        return yield* inner.pipe(
+          Effect.catchTag("InvalidSyncEventError", (e) =>
+            Effect.die(e as unknown),
+          ),
+        )
       })
 
     const unsubscribe = yield* events.listen((event) =>
