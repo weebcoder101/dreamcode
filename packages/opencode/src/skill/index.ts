@@ -93,7 +93,7 @@ function logSkillExecution(entry: {
   timestamp: string
   promptLen: number
 }) {
-  Effect.tryPromise({
+  return Effect.tryPromise({
     try: async () => {
       const { mkdir } = await import("fs/promises")
       await mkdir(path.dirname(SKILL_EXEC_LOG), { recursive: true })

@@ -16,7 +16,7 @@ function logChainExecution(entry: {
   timestamp: string
   totalDuration: number
 }) {
-  Effect.tryPromise({
+  return Effect.tryPromise({
     try: async () => {
       const { mkdir } = await import("fs/promises")
       await mkdir(path.dirname(CHAIN_EXEC_LOG), { recursive: true })
