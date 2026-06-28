@@ -1,6 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import path from "path"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Effect, Layer, Context, Schema, Duration } from "effect"
 import { NamedError } from "@opencode-ai/core/util/error"
 import type { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -16,6 +16,97 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Glob } from "@opencode-ai/core/util/glob"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
+import { resolvePythonCommand, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "./python-resolver"
+
+// ─── Script Execution Helpers ────────────────────────────────────
+// Used by Skill.Service.require() to auto-execute Python scripts when loading
+// skill content. This bridges the gap between the skill tool (which loads
+// content) and ChainExecutor (which runs scripts at prompt-build time).
+
+const SCRIPT_OUTPUT_LIMIT = 4096
+
+/** Discover Python scripts in a skill's scripts/ directory */
+async function discoverSkillScripts(skillLocation: string): Promise<string[]> {
+  const dir = path.dirname(skillLocation)
+  try {
+    const { Glob: G } = await import("@opencode-ai/core/util/glob")
+    return await G.scan("scripts/*.py", { cwd: dir, absolute: true }) as string[]
+  } catch {
+    return []
+  }
+}
+
+/** Execute a Python script with a prompt, returning stdout or error */
+async function executeSkillScript(
+  script: string,
+  prompt: string,
+  cwd: string,
+): Promise<{ output: string; exitCode: number }> {
+  const pythonCmd = resolvePythonCommand()
+  const versionArgs = getPythonArgs()
+  let tmpFile = ""
+  try {
+    tmpFile = writePromptToTmpFile(prompt, cwd, "sk-")
+  } catch (e) {
+    return { output: `[ERROR] Failed to create temp file: ${e}`, exitCode: -1 }
+  }
+  try {
+    const proc = Bun.spawn([pythonCmd, ...versionArgs, script, "--prompt-file", tmpFile], {
+      cwd,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...BASE_SUBPROCESS_ENV, PROJECT_ROOT: cwd },
+    })
+    const stdout = await new Response(proc.stdout).text()
+    const stderr = await new Response(proc.stderr).text()
+    const exitCode = await proc.exited
+    if (exitCode !== 0) {
+      const detail = (stderr || stdout || "").slice(0, 500)
+      return { output: `[ERROR] Exit code ${exitCode}: ${detail}`, exitCode }
+    }
+    return { output: (stdout || "").slice(0, SCRIPT_OUTPUT_LIMIT), exitCode: 0 }
+  } catch (e) {
+    return { output: `[ERROR] ${e}`, exitCode: -1 }
+  } finally {
+    cleanupTmpFile(tmpFile)
+  }
+}
+
+/** Sanitize a string for safe inclusion in system prompt XML tags */
+function sanitizeForXml(raw: string): string {
+  return raw.replace(/]/g, "]\\").replace(/-->/g, "--\\>")
+}
+
+const SKILL_EXEC_LOG = path.join(
+  process.env.HOME ?? "~",
+  ".dreamcode",
+  "skill-executions.jsonl",
+)
+
+/** Fire-and-forget structured audit log for skill script executions */
+function logSkillExecution(entry: {
+  skill: string
+  script: string
+  exitCode: number
+  outputLen: number
+  timestamp: string
+  promptLen: number
+}) {
+  Effect.tryPromise({
+    try: async () => {
+      const { mkdir } = await import("fs/promises")
+      await mkdir(path.dirname(SKILL_EXEC_LOG), { recursive: true })
+      await Bun.write(SKILL_EXEC_LOG, JSON.stringify(entry) + "\n", {
+        append: true,
+        createPath: true,
+      })
+    },
+    catch: () => {}, // Audit log failure is non-fatal
+  }).pipe(Effect.catch(() => Effect.void))
+}
+
+// ─── End Script Execution Helpers ────────────────────────────────
 
 // Deterministic skill ID from name — stable across restarts for tool-based loading
 function skillId(name: string): string {
@@ -336,8 +427,53 @@ export const layer = Layer.effect(
     const require = Effect.fn("Skill.require")(function* (name: string) {
       const s = yield* InstanceState.get(state)
       const info = s.skills[name]
-      if (info) return info
-      return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
+      if (!info) {
+        return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
+      }
+
+      // ─── Auto-execute scripts ──────────────────────────────────
+      // When a skill has Python scripts, execute them and append results
+      // to the content. This bridges the gap between skill loading
+      // (SKILL.md text) and ChainExecutor (prompt-build-time execution).
+      if (info.location !== "<built-in>") {
+        const ctx = yield* InstanceState.contextOrNull
+        const cwd = ctx?.directory ?? process.cwd()
+        const scripts = yield* Effect.tryPromise({
+          try: () => discoverSkillScripts(info.location),
+          catch: () => [] as string[],
+        })
+
+        if (scripts.length > 0) {
+          // Execute the entry point script — prefer run.py, else first found
+          const entryScript = scripts.find((s) => path.basename(s) === "run.py") ?? scripts[0]
+          const scriptResult = yield* Effect.tryPromise({
+            try: () => executeSkillScript(entryScript, "", cwd),
+            catch: (e) => ({ output: `[ERROR] Script execution failed: ${e}`, exitCode: -1 }),
+          }).pipe(Effect.timeout(Duration.seconds(60)))
+
+          // Structured audit log — fire-and-forget, non-blocking
+          yield* logSkillExecution({
+            skill: name,
+            script: entryScript,
+            exitCode: scriptResult.exitCode,
+            outputLen: scriptResult.output.length,
+            timestamp: new Date().toISOString(),
+            promptLen: 0,
+          })
+
+          if (scriptResult.exitCode === 0 && scriptResult.output) {
+            // Append script result to SKILL.md content
+            return {
+              ...info,
+              content:
+                info.content +
+                `\n\n<script-result name="${sanitizeForXml(name)}" source="skill-load">\n${sanitizeForXml(scriptResult.output)}\n</script-result>`,
+            }
+          }
+        }
+      }
+
+      return info
     })
 
     const all = Effect.fn("Skill.all")(function* () {

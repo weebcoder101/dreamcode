@@ -5,7 +5,29 @@ import { Skill } from "@/skill"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver"
-    // realpathSync throws when the file doesn't exist or permission denied.
+
+const CHAIN_EXEC_LOG = path.join(HOME, ".dreamcode", "chain-executions.jsonl")
+
+/** Fire-and-forget structured audit log for chain executor executions */
+function logChainExecution(entry: {
+  chain: string[]
+  promptLen: number
+  results: Array<{ name: string; status: string; executionType: string; outputLen: number }>
+  timestamp: string
+  totalDuration: number
+}) {
+  Effect.tryPromise({
+    try: async () => {
+      const { mkdir } = await import("fs/promises")
+      await mkdir(path.dirname(CHAIN_EXEC_LOG), { recursive: true })
+      await Bun.write(CHAIN_EXEC_LOG, JSON.stringify(entry) + "\n", {
+        append: true,
+        createPath: true,
+      })
+    },
+    catch: () => {}, // Audit log failure is non-fatal
+  }).pipe(Effect.catch(() => Effect.void))
+}
 export interface ChainResult {
   name: string
   output: string
@@ -68,8 +90,8 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
           PROJECT_ROOT: cwd,
         },
       })
-      const stdoutPromise = proc.stdout.text()
-      const stderrPromise = proc.stderr.text()
+      const stdoutPromise = new Response(proc.stdout).text()
+      const stderrPromise = new Response(proc.stderr).text()
       const exitCode = await proc.exited
       const stdout = await stdoutPromise
       const stderr = await stderrPromise
@@ -118,8 +140,8 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
           PROJECT_ROOT: cwd,
         },
       })
-      const stdoutPromise = proc.stdout.text()
-      const stderrPromise = proc.stderr.text()
+      const stdoutPromise = new Response(proc.stdout).text()
+      const stderrPromise = new Response(proc.stderr).text()
       const exitCode = await proc.exited
       const stdout = await stdoutPromise
       const stderr = await stderrPromise
@@ -193,6 +215,21 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
       })
     }
   }
+
+  // ─── Structured audit log ──────────────────────────────────────
+  // Fire-and-forget: log every chain execution for debugging and metrics.
+  yield* logChainExecution({
+    chain,
+    promptLen: userPrompt.length,
+    results: results.map((r) => ({
+      name: r.name,
+      status: r.status,
+      executionType: r.executionType,
+      outputLen: r.output.length,
+    })),
+    timestamp: new Date().toISOString(),
+    totalDuration: Date.now(),
+  })
 
   return results
 })
