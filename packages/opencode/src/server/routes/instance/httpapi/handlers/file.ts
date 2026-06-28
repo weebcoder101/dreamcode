@@ -66,31 +66,33 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
 
     const list = Effect.fn("FileHttpApi.list")(function* (ctx: { query: { path: string } }) {
       const directory = (yield* InstanceState.context).directory
-      return yield* dieSyncError(filesystem(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.Service
-          const raw = yield* FSUtil.Service
-          const location = yield* Location.Service
-          const ignored = ignore()
-          const gitignore = yield* raw
-            .readFileString(path.join(location.project.directory, ".gitignore"))
-            .pipe(Effect.catch(() => Effect.succeed("")))
-          if (gitignore) ignored.add(gitignore)
-          const ignorefile = yield* raw
-            .readFileString(path.join(location.project.directory, ".ignore"))
-            .pipe(Effect.catch(() => Effect.succeed("")))
-          if (ignorefile) ignored.add(ignorefile)
-          return (yield* fs.list({ path: RelativePath.make(ctx.query.path) })).map((item) => ({
-            name: path.basename(item.path),
-            path: item.path,
-            absolute: path.resolve(location.directory, item.path),
-            type: item.type,
-            ignored: ignored.ignores(
-              path.relative(location.project.directory, path.resolve(location.directory, item.path)) +
-                (item.type === "directory" ? "/" : ""),
-            ),
-          }))
-        }),
+      return yield* dieSyncError(
+        filesystem(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.Service
+            const raw = yield* FSUtil.Service
+            const location = yield* Location.Service
+            const ignored = ignore()
+            const gitignore = yield* raw
+              .readFileString(path.join(location.project.directory, ".gitignore"))
+              .pipe(Effect.catch(() => Effect.succeed("")))
+            if (gitignore) ignored.add(gitignore)
+            const ignorefile = yield* raw
+              .readFileString(path.join(location.project.directory, ".ignore"))
+              .pipe(Effect.catch(() => Effect.succeed("")))
+            if (ignorefile) ignored.add(ignorefile)
+            return (yield* fs.list({ path: RelativePath.make(ctx.query.path) })).map((item) => ({
+              name: path.basename(item.path),
+              path: item.path,
+              absolute: path.resolve(location.directory, item.path),
+              type: item.type,
+              ignored: ignored.ignores(
+                path.relative(location.project.directory, path.resolve(location.directory, item.path)) +
+                  (item.type === "directory" ? "/" : ""),
+              ),
+            }))
+          }),
+        ),
       )
     })
 
