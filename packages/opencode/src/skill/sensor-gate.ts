@@ -256,6 +256,19 @@ export function evaluateSpawnNecessity(
   const uniqueDomains = new Set(result.domain_tags.filter(Boolean)).size
   const hasCodeBlocks = prompt.includes("```") || prompt.includes("src/") || prompt.includes("import ")
 
+  // CPU-HEAVY TASK DETECTION: cap personas to 2 for compute-bound operations.
+  // Typecheck, build, and compilation tasks are CPU-intensive — running 5+ parallel
+  // tsc/bun processes causes OOM and degrades performance without benefit.
+  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
+  const isCpuHeavy = CPU_HEAVY_RE.test(prompt)
+  if (isCpuHeavy) {
+    return {
+      shouldSpawn: true,
+      reason: "CPU-heavy task detected — limited to at most 2 specialist personas",
+      suggestedCount: Math.min(2, userCount > 0 ? userCount : 2),
+    }
+  }
+
   // HARD RULE: DREAM_INNOVATION always spawns — creative tasks need multiple perspectives
   if (result.mode === "DREAM_INNOVATION") {
     return {
@@ -384,7 +397,12 @@ export function selectPersonas(result: SensorGateResult): Persona[] {
   // Dynamic depth-based count — now supports 0 specialists for simple tasks
   const dd = depthScore(result)
   let count: number
-  if (mode === "DREAM_INNOVATION") {
+  // CPU-heavy task override — max 2 personas for build/typecheck/compile
+  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
+  const isCpuHeavy = CPU_HEAVY_RE.test(result.intent)
+  if (isCpuHeavy) {
+    count = Math.min(2, Math.max(1, Math.ceil(dd / 2)))
+  } else if (mode === "DREAM_INNOVATION") {
     count = Math.min(5, Math.max(1, Math.ceil(dd * 1.2)))
   } else if (mode === "TRIVIAL") {
     count = 0
