@@ -143,7 +143,6 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
 )
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
-    SensorGate.defaultLayer,
     configHandlers,
     experimentalHandlers,
     fileHandlers,
@@ -203,7 +202,7 @@ export function createRoutes(
   corsOptions?: CorsOptions,
   options?: { serveUI?: boolean },
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  const merged = [
+  const merged: Layer.Layer<never, EffectConfig.ConfigError, unknown>[] = [
     rootApiRoutes,
     eventApiRoutes,
     ptyConnectApiRoutes,
@@ -212,7 +211,7 @@ export function createRoutes(
     docRoute,
   ]
   if (options?.serveUI !== false) merged.push(uiRoute)
-  return Layer.mergeAll(...merged).pipe(
+  return (Layer.mergeAll(...(merged as [any, ...any[]])) as Layer.Layer<any, any, any>).pipe(
     Layer.provide([
       errorLayer,
       compressionLayer,

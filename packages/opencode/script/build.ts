@@ -28,10 +28,10 @@ const plugin = createSolidTransformPlugin()
 // bun 1.3.x corrupts rest parameters at the JSC engine level, breaking
 // Schema.Union, Schema.check, etc. These patches run during Bun.build and
 // are included in the compiled binary.
-const effectPlugin: Bun.plugin = {
+const effectPlugin: any = {
   name: "effect-bun-patches",
-  setup(build) {
-    build.onLoad({ filter: /\/effect\/dist\//, namespace: "file" }, async (args) => {
+  setup(build: any) {
+    build.onLoad({ filter: /\/effect\/dist\//, namespace: "file" }, async (args: any) => {
       let source = await Bun.file(args.path).text()
       source = source.replace(/\/\*[#@]\s*__PURE__\s*\*\//g, "")
       source = source.replace(/\bencoder\.(encode|encodeInto)\(/g, "new TextEncoder().$1(")
@@ -264,7 +264,7 @@ for (const item of targets) {
   const skillsDest = path.resolve(`dist/${name}/bin/skills`)
   if (fs.existsSync(skillsSrc)) {
     fs.cpSync(skillsSrc, skillsDest, { recursive: true, force: true })
-    const pyCount = fs.readdirSync(skillsDest, { recursive: true }).filter((f: string) => f.endsWith(".py")).length
+    const pyCount = (fs.readdirSync(skillsDest, { recursive: true }) as string[]).filter((f) => f.endsWith(".py")).length
     console.log(`Bundled ${pyCount} Python skill scripts for ${name}`)
   }
 

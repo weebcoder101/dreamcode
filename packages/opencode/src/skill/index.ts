@@ -95,12 +95,9 @@ function logSkillExecution(entry: {
 }) {
   return Effect.tryPromise({
     try: async () => {
-      const { mkdir } = await import("fs/promises")
+      const { mkdir, appendFile } = await import("fs/promises")
       await mkdir(path.dirname(SKILL_EXEC_LOG), { recursive: true })
-      await Bun.write(SKILL_EXEC_LOG, JSON.stringify(entry) + "\n", {
-        append: true,
-        createPath: true,
-      })
+      await appendFile(SKILL_EXEC_LOG, JSON.stringify(entry) + "\n")
     },
     catch: () => {}, // Audit log failure is non-fatal
   }).pipe(Effect.catch(() => Effect.void))
@@ -365,25 +362,23 @@ export const layer = Layer.effect(
     const globalSkillsDir = path.join(global.home, ".config", "dreamcode", "skills")
     const installSkillsDir = path.join(global.home, ".dreamcode", "skills")
     const repoSkillsDir = path.join(global.home, "dreamcode", ".dreamcode", "skills")
-    yield* Effect.tryPromise({
-      try: async () => {
-        const { stat, mkdir, readdir, cp } = await import("fs/promises")
-        const globalEmpty = !(await stat(globalSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-        if (!globalEmpty) return
-        const source = (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-          ? installSkillsDir
-          : (await stat(repoSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-            ? repoSkillsDir
-            : undefined
-        if (!source) return
-        await mkdir(globalSkillsDir, { recursive: true })
-        const entries = await readdir(source)
-        for (const entry of entries) {
-          const src = path.join(source, entry)
-          const dst = path.join(globalSkillsDir, entry)
-          await cp(src, dst, { recursive: true }).catch((e) => console.warn("skill: copy to global config failed", e))
-        }
-      },
+    yield* Effect.tryPromise(async (_signal: AbortSignal) => {
+      const { stat, mkdir, readdir, cp } = await import("fs/promises")
+      const globalEmpty = !(await stat(globalSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+      if (!globalEmpty) return
+      const source = (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+        ? installSkillsDir
+        : (await stat(repoSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+          ? repoSkillsDir
+          : undefined
+      if (!source) return
+      await mkdir(globalSkillsDir, { recursive: true })
+      const entries = await readdir(source)
+      for (const entry of entries) {
+        const src = path.join(source, entry)
+        const dst = path.join(globalSkillsDir, entry)
+        await cp(src, dst, { recursive: true }).catch((e) => console.warn("skill: copy to global config failed", e))
+      }
     }).pipe(
       Effect.catch((e) => Effect.logWarning("skill sync to global config failed (non-fatal)", { error: String(e) })),
     )
@@ -494,7 +489,7 @@ export const layer = Layer.effect(
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
     })
 
-    return Service.of({ get, require, all, dirs, available })
+    return Service.of({ get, require: require as Interface["require"], all, dirs, available })
   }),
 )
 

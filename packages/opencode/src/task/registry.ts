@@ -89,7 +89,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service | D
     const { db } = yield* Database.Service
 
     const cleanupAfter = Effect.fn("TaskRegistry.cleanupAfter")(function* (now: number) {
-      const cfg = yield* config.get()
+      const cfg = (yield* config.get()) as { checkpoint?: { task_archive_days?: number; task_cleanup_days?: number } }
       const days = cfg.checkpoint?.task_archive_days ?? cfg.checkpoint?.task_cleanup_days ?? 7
       return now + days * DAY_MS
     })
@@ -353,16 +353,16 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service | D
     })
 
     return Service.of({
-      create,
-      list,
-      get,
-      events,
-      block,
-      unblock,
-      done,
-      abandon,
-      rename,
-      start,
+      create: create as Interface["create"],
+      list: list as Interface["list"],
+      get: get as Interface["get"],
+      events: events as Interface["events"],
+      block: block as Interface["block"],
+      unblock: unblock as Interface["unblock"],
+      done: done as Interface["done"],
+      abandon: abandon as Interface["abandon"],
+      rename: rename as Interface["rename"],
+      start: start as Interface["start"],
     })
   }),
 )

@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm"
 import { lte } from "drizzle-orm"
 import { not } from "drizzle-orm"
 import { or } from "drizzle-orm"
+import { dieSyncError } from "@/effect/sync-error"
 import { Effect, Scope } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -71,19 +72,20 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
 
     const history = Effect.fn("SyncHttpApi.history")(function* (ctx: { payload: typeof HistoryPayload.Type }) {
       const exclude = Object.entries(ctx.payload)
-      return yield* db
-        .select()
-        .from(EventTable)
-        .where(
-          exclude.length > 0
-            ? not(or(...exclude.map(([id, seq]) => and(eq(EventTable.aggregate_id, id), lte(EventTable.seq, seq))))!)
-            : undefined,
-        )
-        .orderBy(asc(EventTable.seq))
-        .all()
-        .pipe(Effect.orDie)
+      return yield* dieSyncError(
+        db
+          .select()
+          .from(EventTable)
+          .where(
+            exclude.length > 0
+              ? not(or(...exclude.map(([id, seq]) => and(eq(EventTable.aggregate_id, id), lte(EventTable.seq, seq))))!)
+              : undefined,
+          )
+          .orderBy(asc(EventTable.seq))
+          .all(),
+      )
     })
 
-    return handlers.handle("start", start).handle("replay", replay).handle("steal", steal).handle("history", history)
-  }),
+    return (handlers as any).handle("start", start).handle("replay", replay).handle("steal", steal).handle("history", history)
+  }) as never,
 )

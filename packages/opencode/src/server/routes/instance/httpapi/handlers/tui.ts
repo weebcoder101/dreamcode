@@ -29,7 +29,7 @@ export const tuiHandlers = HttpApiBuilder.group(InstanceHttpApi, "tui", (handler
     const events = yield* EventV2Bridge.Service
     const session = yield* Session.Service
     const publishSync = <A, E>(effect: Effect.Effect<void, E, A>) =>
-      effect.pipe(Effect.catchAll(() => Effect.void))
+      effect.pipe(Effect.catch(() => Effect.void))
 
     const publishCommand = (command: typeof TuiEvent.CommandExecute.data.Type.command | undefined) =>
       publishSync(events.publish(TuiEvent.CommandExecute, { command } as typeof TuiEvent.CommandExecute.data.Type))

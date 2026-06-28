@@ -20,10 +20,8 @@ function logChainExecution(entry: {
     try: async () => {
       const { mkdir } = await import("fs/promises")
       await mkdir(path.dirname(CHAIN_EXEC_LOG), { recursive: true })
-      await Bun.write(CHAIN_EXEC_LOG, JSON.stringify(entry) + "\n", {
-        append: true,
-        createPath: true,
-      })
+      const { appendFile } = await import("fs/promises")
+      await appendFile(CHAIN_EXEC_LOG, JSON.stringify(entry) + "\n")
     },
     catch: () => {}, // Audit log failure is non-fatal
   }).pipe(Effect.catch(() => Effect.void))
@@ -174,7 +172,7 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
   const results: ChainResult[] = []
 
   for (const skillName of chain) {
-    const skillInfo = yield* skillService.require(skillName, { skipAutoExecute: true }).pipe(Effect.option)
+    const skillInfo = yield* skillService.require(skillName).pipe(Effect.option)
     if (skillInfo._tag === "None") {
       results.push({ name: skillName, output: "", status: "not_found", executionType: "content" })
       continue
@@ -338,9 +336,9 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     return Service.of({
-      execute: (chain, userPrompt) => execute(chain, userPrompt),
-      runFullPipeline: () => runFullPipeline(),
-      verify: (results) => verify(results),
+      execute: ((chain, userPrompt) => execute(chain, userPrompt).pipe(Effect.catch(Effect.die))) as Interface["execute"],
+      runFullPipeline: (() => runFullPipeline().pipe(Effect.catch(Effect.die))) as Interface["runFullPipeline"],
+      verify: ((results) => verify(results).pipe(Effect.catch(Effect.die))) as Interface["verify"],
     })
   }),
 )

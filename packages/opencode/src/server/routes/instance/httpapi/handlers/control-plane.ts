@@ -27,7 +27,7 @@ export const controlPlaneHandlers = HttpApiBuilder.group(RootHttpApi, "controlPl
   }),
 )
 
-function message(error: MoveSession.Error) {
+function message(error: Error) {
   if (error instanceof SessionV2.NotFoundError) return `Session not found: ${error.sessionID}`
   if (error instanceof MoveSession.DestinationProjectMismatchError)
     return "Destination directory belongs to another project"

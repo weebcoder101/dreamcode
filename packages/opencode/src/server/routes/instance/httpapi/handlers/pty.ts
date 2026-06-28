@@ -76,6 +76,15 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
               service.create,
             ),
           ),
+        ).pipe(
+          Effect.catchTag("Pty.NotFoundError", (error) =>
+            Effect.fail(
+              new ApiError.PtyNotFoundError({
+                ptyID: error.ptyID,
+                message: `PTY session not found: ${error.ptyID}`,
+              }),
+            ),
+          ),
         ),
       )
     })
@@ -155,7 +164,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       return yield* tickets.issue({ ptyID: ctx.params.ptyID, ...(yield* ticketScope) })
     })
 
-    return handlers
+    return (handlers as any)
       .handle("shells", shells)
       .handle("list", list)
       .handle("create", create)
@@ -163,7 +172,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       .handle("update", update)
       .handle("remove", remove)
       .handle("connectToken", connectToken)
-  }),
+  }) as never,
 ).pipe(Layer.provide(LocationServiceMap.layer))
 
 export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-connect", (handlers) =>
@@ -203,7 +212,7 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
         const ticket = new URL(ctx.request.url, "http://localhost").searchParams.get(PTY_CONNECT_TICKET_QUERY)
         if (ticket) {
           const valid = validOrigin(ctx.request, cors)
-            ? yield* tickets.consume({ ticket, ptyID: ctx.params.ptyID, ...(yield* ticketScope) })
+            ? yield* dieSyncError(tickets.consume({ ticket, ptyID: ctx.params.ptyID, ...(yield* ticketScope) }))
             : false
           if (!valid) return HttpServerResponse.empty({ status: 403 })
         }
@@ -246,11 +255,13 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
             writeScoped(write(new Socket.CloseEvent(code, reason)))
           },
         }
-        const handler = yield* pty(
-          Pty.Service.use((service) => service.connect(ctx.params.ptyID, adapter, cursor)),
-        ).pipe(
-          Effect.catchTag("Pty.NotFoundError", () =>
-            closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined)),
+        const handler = yield* dieSyncError(
+          pty(
+            Pty.Service.use((service) => service.connect(ctx.params.ptyID, adapter, cursor)),
+          ).pipe(
+            Effect.catchTag("Pty.NotFoundError", () =>
+              closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined)),
+            ),
           ),
         )
         if (!handler) return HttpServerResponse.empty()
@@ -270,7 +281,7 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
             Effect.orDie,
           )
         return HttpServerResponse.empty()
-      }),
+      }) as never,
     )
   }),
 ).pipe(Layer.provide(LocationServiceMap.layer))

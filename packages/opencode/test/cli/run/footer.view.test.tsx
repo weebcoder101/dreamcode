@@ -347,6 +347,7 @@ test("direct command panel renders grouped command palette", async () => {
           onEditor={() => {}}
           onSkill={() => {}}
           onSubagent={() => {}}
+          onSubagentModel={() => {}}
           onQueued={() => {}}
           onVariant={() => {}}
           onVariantCycle={() => {}}
@@ -488,6 +489,7 @@ test("direct command panel shows subagent entry when available", async () => {
           onEditor={() => {}}
           onSkill={() => {}}
           onSubagent={() => {}}
+          onSubagentModel={() => {}}
           onQueued={() => {}}
           onVariant={() => {}}
           onVariantCycle={() => {}}
@@ -536,6 +538,7 @@ test("direct command panel keeps completed subagents available", async () => {
           onEditor={() => {}}
           onSkill={() => {}}
           onSubagent={() => {}}
+          onSubagentModel={() => {}}
           onQueued={() => {}}
           onVariant={() => {}}
           onVariantCycle={() => {}}
@@ -908,6 +911,7 @@ test("direct footer shows editable prompts and additional queued work while runn
             providerID: "opencode",
             modelID: "a-model-name-long-enough-to-force-responsive-truncation",
           })}
+          currentSubagentModel={() => undefined}
           variants={() => []}
           currentVariant={() => undefined}
           state={state}
@@ -930,6 +934,8 @@ test("direct footer shows editable prompts and additional queued work while runn
           onInputClear={() => {}}
           onExit={() => {}}
           onModelSelect={() => {}}
+          onSubagentModelSelect={() => {}}
+          onSubagentModelClear={() => {}}
           onVariantSelect={() => {}}
           onRows={() => {}}
           onLayout={() => {}}

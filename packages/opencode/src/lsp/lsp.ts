@@ -155,6 +155,7 @@ export const layer = Layer.effect(
           yield* Effect.logInfo("all LSPs are disabled")
         } else {
           for (const server of Object.values(LSPServer)) {
+            if (!("id" in server)) continue
             servers[server.id] = server
           }
 
@@ -294,7 +295,7 @@ export const layer = Layer.effect(
         return { result, updated }
       })
       yield* Effect.forEach(Array.from({ length: clients.updated }), () =>
-        events.publish(Event.Updated, {}).pipe(Effect.catchAll(() => Effect.void)), {
+        events.publish(Event.Updated, {}).pipe(Effect.catch(() => Effect.void)), {
         discard: true,
       })
       return clients.result

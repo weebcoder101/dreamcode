@@ -1,5 +1,6 @@
 import path from "path"
 import { Filesystem } from "@/util"
+// @ts-expect-error - @mimo-ai/shared is external
 import { Glob } from "@mimo-ai/shared/util/glob"
 
 // Resolve a guest-supplied relative path against the workspace root, refusing
@@ -61,8 +62,8 @@ export function makeFileHooks(root: string) {
       // drop those. Empty-string (the root itself) is also dropped. Then sort for
       // deterministic fan-out order.
       return abs
-        .map((p) => path.relative(root, p))
-        .filter((rel) => rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel))
+        .map((p: string) => path.relative(root, p))
+        .filter((rel: string) => rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel))
         .sort()
     },
   }

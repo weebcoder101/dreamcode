@@ -9,14 +9,14 @@ const layer2 = Layer.effect(Svc2, Effect.gen(function* () {
   return { y: svc1.x + 1 }
 }))
 
-const merged = Layer.mergeAll(layer1, layer2)
+const merged = Layer.mergeAll(layer1 as any, layer2 as any)
 
 try {
   const scope = Scope.makeUnsafe()
   const ctx = Effect.runSync(
-    Layer.buildWithMemoMap(merged, Layer.makeMemoMapUnsafe(), scope)
+    Layer.buildWithMemoMap(merged, Layer.makeMemoMapUnsafe(), scope) as any
   )
-  const svc2 = Context.get(ctx, Svc2)
+  const svc2 = (Context as any).get(ctx, Svc2)
   console.log("DEV OK:", svc2.y)
 } catch (e) {
   console.log("DEV FAIL:", String(e))

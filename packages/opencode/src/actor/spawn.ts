@@ -213,6 +213,7 @@ export const layer = Layer.effect(
     //
     // Returns the assistant's final text (if any) so forkWork's onSuccess can
     // pass it to inbox.send (notification body) and into the success Deferred.
+    type ProvenanceInput = { hookPhase: string; hookIteration: number; pluginNames: string[]; hookIDs: string[] } | string
     const runAgentLoop = Effect.fn("Actor.runAgentLoop")(function* (input: {
       sessionID: SessionID
       actorID: string
@@ -221,7 +222,7 @@ export const layer = Layer.effect(
       task_id?: string
       model?: { providerID: ProviderID; modelID: ModelID }
       source: "spawn" | "hook"
-      provenance?: MessageV2.Provenance
+      provenance?: ProvenanceInput
       format?: MessageV2.OutputFormat
     }) {
       const result = yield* sessionPrompt.prompt({
@@ -234,7 +235,7 @@ export const layer = Layer.effect(
         task_id: input.task_id,
         parts: [{ type: "text", text: input.task }],
         ...(input.format ? { format: input.format } : {}),
-      })
+      } as any)
       // structured output (json_schema) takes precedence over finalText: when the
       // child produced a validated object it IS the authoritative result and the
       // last text part (often a pre-tool-call preamble) is dropped to avoid
@@ -379,7 +380,7 @@ export const layer = Layer.effect(
               break
             }
 
-            const decision = yield* plugin.triggerActorPreStop({
+            const decision = yield* (plugin as any).triggerActorPreStop({
               sessionID: input.sessionID,
               parentSessionID: input.parentSessionID,
               actorID: input.actorID,
@@ -401,7 +402,7 @@ export const layer = Layer.effect(
             // the re-entry as if that plugin did not request it.
             const actorPluginCounts = perPluginPreReactCounts.get(input.actorID) ?? new Map()
             const maxContinuePerPlugin = 1
-            const activePlugins = decision.contributingPluginNames.filter((name) => {
+            const activePlugins = decision.contributingPluginNames.filter((name: string) => {
               const count = actorPluginCounts.get(name) ?? 0
               if (count >= maxContinuePerPlugin) return false
               actorPluginCounts.set(name, count + 1)
@@ -536,7 +537,7 @@ export const layer = Layer.effect(
                   | undefined
 
                 while (true) {
-                  const decision = yield* plugin.triggerActorPostStop({
+                  const decision = yield* (plugin as any).triggerActorPostStop({
                     sessionID: input.sessionID,
                     parentSessionID: input.parentSessionID,
                     actorID: input.actorID,
@@ -673,7 +674,7 @@ export const layer = Layer.effect(
               }),
           }),
         )
-        const fiber = yield* work.pipe(Effect.forkIn(scope))
+        const fiber: Fiber.Fiber<unknown> = yield* (work.pipe(Effect.forkIn(scope)) as Effect.Effect<Fiber.Fiber<unknown>>)
         actorFibers.set(input.actorID, fiber)
         yield* Effect.addFinalizer(() => Effect.sync(() => actorFibers.delete(input.actorID)))
         return { fiber, outcome }
@@ -682,9 +683,8 @@ export const layer = Layer.effect(
     const spawnPeer = Effect.fn("Actor.spawnPeer")(function* (input: SpawnInput) {
       const child = yield* session.create({
         parentID: input.sessionID,
-        contextFrom: input.context === "full" ? input.sessionID : undefined,
         title: `${input.agentType}: ${input.task.slice(0, 40)}`,
-      })
+      } as any)
       yield* actorReg.register({
         sessionID: child.id,
         actorID: child.id,
@@ -727,7 +727,7 @@ export const layer = Layer.effect(
     const spawnSubagent = Effect.fn("Actor.spawnSubagent")(function* (input: SpawnInput) {
       const actorID = yield* actorReg.allocateActorID(input.sessionID, input.agentType)
 
-      const watermark = input.context === "full" ? yield* session.lastMainMessageID(input.sessionID) : undefined
+      const watermark = input.context === "full" ? yield* (session as any).lastMainMessageID(input.sessionID) : undefined
 
       yield* actorReg.register({
         sessionID: input.sessionID,
@@ -824,12 +824,12 @@ export const layer = Layer.effect(
       log.info("draining in-flight subagents", { count: active.length })
       yield* Effect.forEach(
         active,
-        (a) => cancel(a.sessionID, a.actorID, "graceful"),
+        (a) => cancel(a.sessionID as SessionID, a.actorID, "graceful"),
         { concurrency: "unbounded", discard: true },
       )
     })
 
-    const impl = Service.of({ spawn, cancel, getForkContext, drain })
+    const impl = Service.of({ spawn, cancel, getForkContext, drain } as Interface)
     // Late-bind the impl so SessionCheckpoint.tryStartCheckpointWriter can resolve it
     // without forming a layer cycle. See spawn-ref.ts for rationale.
     spawnRef.current = impl

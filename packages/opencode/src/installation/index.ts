@@ -320,7 +320,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
           stderr: upgradeResult.stderr,
         })
         // Verify the newly installed binary resolves correctly
-        if (m === "npm" || m === "pnpm" || m === "bun" || m === "yarn") {
+        if (m === "npm" || m === "pnpm" || m === "bun") {
           const which = yield* text(["which", "dreamcode"]).pipe(Effect.catch(() => Effect.succeed("")))
           if (!which.trim()) {
             yield* Effect.logWarning("upgrade: 'which dreamcode' returned nothing — binary may not be on PATH", {

@@ -600,7 +600,7 @@ function runSensorGateEffect(
         // Temp file creation failed — do NOT fall back to --prompt CLI arg
         // which would leak the prompt in process listings.
         debugLog("[sensor-gate] failed to create tmp file:", e)
-        return Effect.fail(new Error(`[sensor-gate] Failed to create temp file for prompt: ${e}`))
+        return yield* Effect.fail(new Error(`[sensor-gate] Failed to create temp file for prompt: ${e}`))
       }
 
       // Cross-platform Python resolution with fallback chain.
@@ -608,30 +608,29 @@ function runSensorGateEffect(
       const pythonCmds = resolvePythonCommands()
 
       let proc: ReturnType<typeof Bun.spawn> | undefined
-      const output = yield* Effect.tryPromise({
-        try: async () => {
-          let lastError: unknown
-          debugLog("[sensor-gate] Python commands to try:", pythonCmds)
-          debugLog("[sensor-gate] sensor gate script:", sensorGate)
-          for (const cmd of pythonCmds) {
-            const versionArgs = getPythonArgs(cmd)
-            const args = [cmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
-            debugLog("[sensor-gate] trying:", cmd, "args:", args)
-            try {
-              proc = Bun.spawn(args, {
-                cwd: projectRoot,
-                stdout: "pipe",
-                stderr: "pipe",
+      const output = yield* Effect.tryPromise(async (_signal: AbortSignal) => {
+        let lastError: unknown
+        debugLog("[sensor-gate] Python commands to try:", pythonCmds)
+        debugLog("[sensor-gate] sensor gate script:", sensorGate)
+        for (const cmd of pythonCmds) {
+          const versionArgs = getPythonArgs(cmd)
+          const args = [cmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
+          debugLog("[sensor-gate] trying:", cmd, "args:", args)
+          try {
+            proc = Bun.spawn(args, {
+              cwd: projectRoot,
+              stdout: "pipe",
+              stderr: "pipe",
                 env: {
                   ...BASE_SUBPROCESS_ENV,
                   PROJECT_ROOT: projectRoot,
                 },
               })
-              const text = await new Response(proc.stdout).text()
+              const text = await new Response(proc.stdout as ReadableStream<Uint8Array>).text()
               // Wait for process to fully exit before checking output
               // Without this, Windows may close pipes before the process flushes
               await proc.exited
-              const stderrText = await new Response(proc.stderr).text().catch(() => "")
+              const stderrText = await new Response(proc.stderr as ReadableStream<Uint8Array>).text().catch(() => "")
               if (stderrText.trim()) {
                 debugLog("[sensor-gate] python subprocess stderr:", stderrText.slice(0, 2000))
               }
@@ -648,8 +647,8 @@ function runSensorGateEffect(
           }
           debugLog("[sensor-gate] ALL Python commands failed:", lastError)
           return "" as string
-        },
-      }).pipe(
+        }
+      ).pipe(
         Effect.timeout(Duration.millis(timeoutMs)),
         Effect.catch((e) => {
           debugLog("[sensor-gate] subprocess timeout or error:", String(e), "timeoutMs:", timeoutMs)

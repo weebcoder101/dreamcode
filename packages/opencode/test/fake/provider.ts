@@ -74,6 +74,15 @@ export namespace ProviderTest {
           defaultModel: Effect.fn("TestProvider.defaultModel")(() =>
             Effect.succeed({ providerID: row.id, modelID: mdl.id }),
           ),
+          resolveModelRef: Effect.fn("TestProvider.resolveModelRef")(function* (ref: string) {
+            const parts = ref.split("/")
+            if (parts.length === 2) {
+              const [pID, mID] = parts
+              if (pID === row.id && mID === mdl.id) return mdl
+            }
+            if (ref === mdl.id) return mdl
+            return yield* Effect.fail(new Provider.ModelNotFoundError({ providerID: row.id, modelID: ref as unknown as ModelV2.ID }))
+          }),
           ...override,
         }),
       ),

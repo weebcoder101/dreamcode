@@ -158,9 +158,8 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
 // Plugin Factory
 // ---------------------------------------------------------------------------
 
-export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
-  return async () => {
-    const hooks: Hooks = {
+export async function SensorGateEnforcerPlugin(_input: PluginInput): Promise<Hooks> {
+  const hooks: Hooks = {
       // --- chat.message: 45s periodic timer check ---
       "chat.message": async (input, output) => {
         // Extract text from parts
@@ -171,7 +170,8 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
         if (!prompt.trim()) return
 
         // Check if 45s have elapsed (per-session)
-        const sessionKey = `${input.client?.directory ?? "__default__"}:${input.sessionID ?? "global"}`
+        const chatInput = input as { client?: { directory?: string }; sessionID?: string }
+        const sessionKey = `${chatInput.client?.directory ?? "__default__"}:${chatInput.sessionID ?? "global"}`
         let state = sessionStates.get(sessionKey)
         if (state) {
           const now = Date.now()
@@ -190,7 +190,7 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
         state.lastRunTimestamp = Date.now()
 
         // Run predictor — store the pending promise so transform can await it
-        state.pendingPromise = runPredictorScript(prompt, input.client?.directory)
+        state.pendingPromise = runPredictorScript(prompt, chatInput.client?.directory)
           .then((result) => {
             if (result && result.questions.length > 0) {
               const questions = result.questions.map((q) => ({
@@ -215,7 +215,8 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
 
       // --- experimental.chat.system.transform: inject questions ---
       "experimental.chat.system.transform": async (_input, output) => {
-        const sessionKey = `${_input.client?.directory ?? "__default__"}:${_input.sessionID ?? "global"}`
+        type InputWithClient = { client?: { directory?: string }; sessionID?: string }
+        const sessionKey = `${(_input as InputWithClient).client?.directory ?? "__default__"}:${(_input as InputWithClient).sessionID ?? "global"}`
         const state = sessionStates.get(sessionKey)
         if (!state) return
 
@@ -266,5 +267,4 @@ export function SensorGateEnforcerPlugin(_input: PluginInput): PluginInstance {
     }
 
     return hooks
-  }
 }

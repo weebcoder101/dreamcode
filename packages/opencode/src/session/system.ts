@@ -19,6 +19,7 @@ import { Skill } from "@/skill"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { dieSyncError } from "@opencode-ai/core/event"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 
@@ -52,12 +53,12 @@ export const layer = Layer.effect(
     const locations = yield* LocationServiceMap
 
     return Service.of({
-      environment: Effect.fn("SystemPrompt.environment")(function* (model: Provider.Model) {
+      environment: (Effect.fn("SystemPrompt.environment")(function* (model: any) {
         const ctx = yield* InstanceState.context
-        const references = yield* Effect.gen(function* () {
-          yield* (yield* PluginBoot.Service).wait()
-          return (yield* (yield* Reference.Service).list()).filter((reference) => reference.description !== undefined)
-        }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
+        const references: any[] = yield* (Effect.gen(function* () {
+          yield* dieSyncError((yield* PluginBoot.Service).wait())
+          return (yield* (yield* Reference.Service).list()).filter((reference: any) => reference.description !== undefined)
+        }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) })))) as any)
         return [
           [
             `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
@@ -76,8 +77,8 @@ export const layer = Layer.effect(
                 "Project references provide additional directories that can be accessed when relevant.",
                 "<available_references>",
                 ...references
-                  .toSorted((a, b) => a.name.localeCompare(b.name))
-                  .flatMap((reference) => [
+                  .toSorted((a: any, b: any) => a.name.localeCompare(b.name))
+                  .flatMap((reference: any) => [
                     "  <reference>",
                     `    <name>${reference.name}</name>`,
                     `    <path>${reference.path}</path>`,
@@ -89,7 +90,7 @@ export const layer = Layer.effect(
                 "</available_references>",
               ].join("\n"),
         ].filter((part): part is string => part !== undefined)
-      }),
+      }) as any),
 
       skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {
         if (Permission.disabled(["skill"], agent.permission).has("skill")) return

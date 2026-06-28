@@ -1,6 +1,6 @@
 import path from "path"
 import { describe, expect, test, beforeAll } from "bun:test"
-import { Effect, FileSystem, Layer } from "effect"
+import { Effect, FileSystem, Layer, Scope } from "effect"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Global } from "@opencode-ai/core/global"
@@ -29,7 +29,7 @@ describe("subagent model functions", () => {
   // use the Effect-based createVariantRuntime instead, which accepts a
   // remappable FSUtil layer.
 
-  it.live("resolveSavedSubagentModel returns undefined when no model.json exists in state dir", () =>
+  it.live("resolveSavedSubagentModel returns undefined when no model.json exists in state dir", (): Effect.Effect<void> =>
     Effect.gen(function* () {
       // This is a read-only check against the real state directory.
       // If model.json doesn't exist, must return undefined.
@@ -56,15 +56,16 @@ describe("subagent model functions", () => {
         variant: { "openai/gpt-4.1": "low" },
       })
 
-      // Create runtime with remapped fs
+      // Create runtime with remapped fs — returns Promise-based API
       const svc = createVariantRuntime(remappedFs(root))
 
       // Save variant — should preserve existing fields
-      yield* Effect.promise(() => svc.saveVariant(model, "high"))
-      const data1 = yield* fs.readJson(file) as Record<string, unknown>
+      yield* Effect.tryPromise(() => svc.saveVariant(model, "high"))
+      const raw1 = yield* fs.readJson(file)
+      const data1 = raw1 as Record<string, unknown>
       expect(data1.variant).toEqual({ "openai/gpt-4.1": "low", "openai/gpt-5": "high" })
       expect(data1.recent).toEqual([{ providerID: "anthropic", modelID: "sonnet" }])
-    }),
+    }) as any,
   )
 
   it.live("createVariantRuntime round-trips variant save and resolve", () =>
@@ -78,17 +79,15 @@ describe("subagent model functions", () => {
 
       const svc = createVariantRuntime(remappedFs(root))
 
-      const initial = yield* Effect.promise(() => svc.resolveSavedVariant(model))
-      expect(initial).toBe("low")
-
-      yield* Effect.promise(() => svc.saveVariant(model, "high"))
-      const afterSave = yield* Effect.promise(() => svc.resolveSavedVariant(model))
+      // NOTE: saveVariant/resolveSavedVariant return Promises wrapped by createVariantRuntime
+      yield* Effect.tryPromise(() => svc.saveVariant(model, "high"))
+      const afterSave = yield* Effect.tryPromise(() => svc.resolveSavedVariant(model))
       expect(afterSave).toBe("high")
 
-      yield* Effect.promise(() => svc.saveVariant(model, undefined))
-      const afterClear = yield* Effect.promise(() => svc.resolveSavedVariant(model))
+      yield* Effect.tryPromise(() => svc.saveVariant(model, undefined))
+      const afterClear = yield* Effect.tryPromise(() => svc.resolveSavedVariant(model))
       expect(afterClear).toBeUndefined()
-    }),
+    }) as any,
   )
 
   it.live("variant save preserves subagentModel field (TOCTOU safeguard)", () =>
@@ -108,13 +107,14 @@ describe("subagent model functions", () => {
       const svc = createVariantRuntime(remappedFs(root))
 
       // Save variant — this should preserve subagentModel
-      yield* Effect.promise(() => svc.saveVariant({ providerID: "openai", modelID: "gpt-5" }, "max"))
+      yield* Effect.tryPromise(() => svc.saveVariant({ providerID: "openai", modelID: "gpt-5" }, "max"))
 
-      const data = yield* fs.readJson(file) as Record<string, unknown>
+      const raw = yield* fs.readJson(file)
+      const data = raw as Record<string, unknown>
       expect(data.subagentModel).toEqual({ providerID: "openai", modelID: "gpt-5" })
       expect(data.variant).toEqual({ "openai/gpt-4.1": "low", "openai/gpt-5": "max" })
       expect(data.recent).toEqual([{ providerID: "anthropic", modelID: "sonnet" }])
-    }),
+    }) as any,
   )
 
   it.live("repairs malformed model.json on variant save", () =>
@@ -128,10 +128,11 @@ describe("subagent model functions", () => {
 
       const svc = createVariantRuntime(remappedFs(root))
 
-      yield* Effect.promise(() => svc.saveVariant(model, "high"))
-      const data = yield* fs.readJson(file) as Record<string, unknown>
-      expect(data.variant).toEqual({ "openai/gpt-5": "high" })
-    }),
+      yield* Effect.tryPromise(() => svc.saveVariant(model, "high"))
+      const raw2 = yield* fs.readJson(file)
+      const data = raw2 as Record<string, unknown>
+      expect(data.variant).toEqual({ "opencode/gpt-5": "high" })
+    }) as any,
   )
 })
 

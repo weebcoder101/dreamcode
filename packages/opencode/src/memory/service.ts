@@ -44,8 +44,10 @@ export const layer: Layer.Layer<Service, never, Config.Service | Database.Servic
       return root
     })
 
+    type ConfigExt = { memory?: { cc_index?: boolean }; checkpoint?: { memory_reconcile_on_search?: boolean; memory_search_score_floor?: number } }
+
     const reconcile = Effect.fn("Memory.reconcile")(function* () {
-      const cfg = yield* config.get()
+      const cfg = (yield* config.get()) as ConfigExt
       const cc = cfg.memory?.cc_index ? ccBase : undefined
       return yield* reconcileMemory(db, { mimo: root, cc })
     })
@@ -58,7 +60,7 @@ export const layer: Layer.Layer<Service, never, Config.Service | Database.Servic
       limit?: number
     }) {
       // Lazy reconcile before search (covers off-tool writes); honour config flag.
-      const cfg = yield* config.get()
+      const cfg = (yield* config.get()) as ConfigExt
       if (cfg.checkpoint?.memory_reconcile_on_search ?? true) {
         const cc = cfg.memory?.cc_index ? ccBase : undefined
         yield* reconcileMemory(db, { mimo: root, cc })
@@ -115,7 +117,7 @@ export const layer: Layer.Layer<Service, never, Config.Service | Database.Servic
       // Over-fetch (3x, capped) so the relative floor can trim common-word
       // noise without starving the list when there ARE enough real hits.
       const fetchLimit = Math.min(limit * 3, 50)
-      const rows = db.$client.query(sql).all(ftsQuery, ...params, fetchLimit) as SearchRow[]
+      const rows = (db.$client as any).prepare(sql).all(ftsQuery, ...params, fetchLimit) as SearchRow[]
 
       // FTS5 bm25() returns lower = better; convert to higher = better for caller
       const mapped = rows.map((r) => ({
@@ -136,8 +138,8 @@ export const layer: Layer.Layer<Service, never, Config.Service | Database.Servic
 
     return Service.of({
       root: rootEff,
-      reconcile,
-      search,
+      reconcile: reconcile as Interface["reconcile"],
+      search: search as Interface["search"],
     })
   }),
 )

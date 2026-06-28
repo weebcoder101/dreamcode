@@ -2435,12 +2435,12 @@ describe("run stream transport", () => {
     const transport = await createSessionTransport({
       sdk: sdk({
         stream: src.stream,
-        promptAsync: async () => ({
+        promptAsync: (async () => ({
           data: undefined,
           error: { name: "TimeoutError", message: "request timed out" },
           request: new Request("https://opencode.test"),
           response: new Response(null, { status: 504 }),
-        }),
+        })) as any,
       }),
       sessionID: "session-1",
       thinking: true,

@@ -67,29 +67,31 @@ export function indexFromDisk(
     const finalType =
       bodyType === "cc" ? (parseCcFrontmatterType(body) ?? "free") : loc.type
 
-    yield* db
-      .insert(MemoryFtsTable)
-      .values({
-        path: absPath,
-        scope: loc.scope,
-        scope_id: loc.scope_id,
-        type: finalType,
-        body,
-        fingerprint,
-        last_indexed_at: Date.now(),
-      })
-      .onConflictDoUpdate({
-        target: MemoryFtsTable.path,
-        set: {
+    yield* Effect.orDie(
+      db
+        .insert(MemoryFtsTable)
+        .values({
+          path: absPath,
           scope: loc.scope,
           scope_id: loc.scope_id,
           type: finalType,
           body,
           fingerprint,
           last_indexed_at: Date.now(),
-        },
-      })
-      .run()
+        })
+        .onConflictDoUpdate({
+          target: MemoryFtsTable.path,
+          set: {
+            scope: loc.scope,
+            scope_id: loc.scope_id,
+            type: finalType,
+            body,
+            fingerprint,
+            last_indexed_at: Date.now(),
+          },
+        })
+        .run(),
+    )
     return "updated" as const
   })
 }
@@ -110,10 +112,12 @@ export function reconcileMemory(
     const ccFiles = new Set(ccArr)
     const diskPaths = new Set<string>([...mimoFiles, ...ccFiles])
 
-    const rows = yield* db
-      .select({ path: MemoryFtsTable.path, fingerprint: MemoryFtsTable.fingerprint })
-      .from(MemoryFtsTable)
-      .all()
+    const rows = yield* Effect.orDie(
+      db
+        .select({ path: MemoryFtsTable.path, fingerprint: MemoryFtsTable.fingerprint })
+        .from(MemoryFtsTable)
+        .all(),
+    )
     const indexed = new Map<string, string>(
       rows.map((r: { path: string; fingerprint: string }) => [r.path, r.fingerprint]),
     )

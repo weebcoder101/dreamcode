@@ -57,6 +57,7 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { dieSyncError } from "@/effect/sync-error"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -371,7 +372,7 @@ export const layer = Layer.effect(
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: error.toObject() }))
         throw error
       }
 
@@ -450,6 +451,23 @@ export const layer = Layer.effect(
 
       assistantMessage.finish = "tool-calls"
       assistantMessage.time.completed = Date.now()
+      // Propagate subagent cost/tokens to parent session for accurate TUI context display
+      if ((result as any)?.subagentCost) {
+        assistantMessage.cost = (assistantMessage.cost ?? 0) + (result as any).subagentCost
+      }
+      if ((result as any)?.subagentTokens) {
+        const t = assistantMessage.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+        const st = (result as any).subagentTokens
+        assistantMessage.tokens = {
+          input: t.input + (st.input ?? 0),
+          output: t.output + (st.output ?? 0),
+          reasoning: t.reasoning + (st.reasoning ?? 0),
+          cache: {
+            read: t.cache.read + (st.cache?.read ?? 0),
+            write: t.cache.write + (st.cache?.write ?? 0),
+          },
+        }
+      }
       yield* sessions.updateMessage(assistantMessage)
 
       if (result && part.state.status === "running") {
@@ -519,7 +537,7 @@ export const layer = Layer.effect(
               const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
               const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
               const error = new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
-              yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+              yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
               throw error
             }
             const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
@@ -573,13 +591,13 @@ export const layer = Layer.effect(
             }
             yield* sessions.updatePart(part)
             if (flags.experimentalEventSystem) {
-              yield* events.publish(SessionEvent.Shell.Started, {
+              yield* dieSyncError(events.publish(SessionEvent.Shell.Started, {
                 sessionID: input.sessionID,
                 messageID: SessionMessage.ID.create(),
                 timestamp: DateTime.makeUnsafe(started),
                 callID: part.callID,
                 command: input.command,
-              })
+              }))
             }
             return { msg, part, cwd: ctx.directory }
           }).pipe(Effect.ensuring(markReady))
@@ -597,12 +615,12 @@ export const layer = Layer.effect(
               }
               const completed = Date.now()
               if (flags.experimentalEventSystem) {
-                yield* events.publish(SessionEvent.Shell.Ended, {
+                yield* dieSyncError(events.publish(SessionEvent.Shell.Ended, {
                   sessionID: input.sessionID,
                   timestamp: DateTime.makeUnsafe(completed),
                   callID: part.callID,
                   output,
-                })
+                }))
               }
               if (!msg.time.completed) {
                 msg.time.completed = completed
@@ -674,12 +692,12 @@ export const layer = Layer.effect(
       const err = Cause.squash(exit.cause)
       if (Provider.ModelNotFoundError.isInstance(err)) {
         const hint = err.suggestions?.length ? ` Did you mean: ${err.suggestions.join(", ")}?` : ""
-        yield* events.publish(Session.Event.Error, {
+        yield* dieSyncError(events.publish(Session.Event.Error, {
           sessionID,
           error: new NamedError.Unknown({
             message: `Model not found: ${err.providerID}/${err.modelID}.${hint}`,
           }).toObject(),
-        })
+        }))
       }
       return yield* Effect.die(err)
     })
@@ -712,7 +730,7 @@ export const layer = Layer.effect(
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
         throw error
       }
 
@@ -749,19 +767,19 @@ export const layer = Layer.effect(
       }
 
       if (current?.agent !== info.agent) {
-        yield* events.publish(SessionEvent.AgentSwitched, {
+        yield* dieSyncError(events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: DateTime.makeUnsafe(info.time.created),
           agent: info.agent,
-        })
+        }))
       }
       if (
         current?.model?.providerID !== info.model.providerID ||
         current.model.id !== info.model.modelID ||
         (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
       ) {
-        yield* events.publish(SessionEvent.ModelSwitched, {
+        yield* dieSyncError(events.publish(SessionEvent.ModelSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: DateTime.makeUnsafe(info.time.created),
@@ -770,7 +788,7 @@ export const layer = Layer.effect(
             providerID: ProviderV2.ID.make(info.model.providerID),
             variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
           },
-        })
+        }))
       }
 
       yield* Effect.addFinalizer(() => instruction.clear(info.id))
@@ -946,10 +964,10 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read file", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
+                  yield* dieSyncError(events.publish(Session.Event.Error, {
                     sessionID: input.sessionID,
                     error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  }))
                   pieces.push({
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -968,10 +986,10 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read directory", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
+                  yield* dieSyncError(events.publish(Session.Event.Error, {
                     sessionID: input.sessionID,
                     error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  }))
                   return [
                     {
                       messageID: info.id,
@@ -1147,7 +1165,7 @@ export const layer = Layer.effect(
       )
       // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
       if (flags.experimentalEventSystem) {
-        yield* events.publish(SessionEvent.Prompted, {
+        yield* dieSyncError(events.publish(SessionEvent.Prompted, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: DateTime.makeUnsafe(info.time.created),
@@ -1157,17 +1175,17 @@ export const layer = Layer.effect(
             files: nextPrompt.files,
             agents: nextPrompt.agents,
           }),
-        })
+        }))
       }
       for (const text of nextPrompt.synthetic) {
         // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
         if (flags.experimentalEventSystem) {
-          yield* events.publish(SessionEvent.Synthetic, {
+          yield* dieSyncError(events.publish(SessionEvent.Synthetic, {
             sessionID: input.sessionID,
             messageID: SessionMessage.ID.create(),
             timestamp: DateTime.makeUnsafe(info.time.created),
             text,
-          })
+          }))
         }
       }
 
@@ -1211,7 +1229,7 @@ Before every response, verify your reasoning:
 3. Are you passing real values, not placeholders or literals?
 4. What is the most likely failure mode for your approach?`
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
+    const runLoop = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
         let structured: unknown
@@ -1327,7 +1345,7 @@ Before every response, verify your reasoning:
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
             const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
             const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+            yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: error.toObject() }))
             throw error
           }
 
@@ -1576,10 +1594,10 @@ Before every response, verify your reasoning:
                   // to produce execution results for each skill.
                   // Runs whenever a chain is selected — even simple tasks benefit from skill scripts.
                   if (gateResult.chain.length > 0) {
-                    const chainResults = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
+                    const chainResults: ChainResult[] = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
                       Effect.catch((e) => {
                         console.warn("[chain-executor] execute() failed:", e)
-                        return Effect.succeed([])
+                        return Effect.succeed([] as ChainResult[])
                       }),
                     )
                     for (const result of chainResults) {
@@ -1642,7 +1660,7 @@ Before every response, verify your reasoning:
                       const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
                         Effect.catch(() => Effect.succeed([] as Array<ChainResult>)),
                       )
-                      chainResults.push(...reExecuteResult)
+                      chainResults.push(...(reExecuteResult as any as ChainResult[]))
                       // Inject re-execution outputs into system prompt so LLM can see them
                       for (const result of reExecuteResult) {
                         if (result.status === "ok" && result.output) {
@@ -1716,31 +1734,24 @@ Before every response, verify your reasoning:
 
                     // ─── Self-Evolution: Auto-log to run_log.jsonl ──
                     // Write structured learning signals after every chain execution.
-                    yield* Effect.tryPromise({
-                      try: () => {
-                        const evolutionDir = path.join(ctx.directory, "evolution")
-                        const logLine = JSON.stringify({
-                          timestamp: new Date().toISOString(),
-                          type: "chain_execution",
-                          prompt_excerpt: userText.slice(0, 200),
-                          chain: gateResult.chain,
-                          chain_length: gateResult.chain.length,
-                          mode: gateResult.mode,
-                          outcome: missingSkills.length === 0 ? "success" : "partial",
-                          skills_executed: chainResults.filter((r) => r.status === "ok").map((r) => r.name),
-                          skills_missing: missingSkills,
-                          confidence: gateResult.confidence,
-                          neuro_available: Boolean(gateResult.neuro_result),
-                        }) + "\n"
-                        const dir = Bun.file(evolutionDir)
-                        // ensure evolution dir exists by writing to a file inside it
-                        return Bun.write(
-                          path.join(evolutionDir, "run_log.jsonl"),
-                          logLine,
-                          { createPath: true, append: true },
-                        )
-                      },
-                      catch: () => {},
+                    yield* Effect.tryPromise(async (_signal: AbortSignal) => {
+                      const evolutionDir = path.join(ctx.directory, "evolution")
+                      const logLine = JSON.stringify({
+                        timestamp: new Date().toISOString(),
+                        type: "chain_execution",
+                        prompt_excerpt: userText.slice(0, 200),
+                        chain: gateResult.chain,
+                        chain_length: gateResult.chain.length,
+                        mode: gateResult.mode,
+                        outcome: missingSkills.length === 0 ? "success" : "partial",
+                        skills_executed: chainResults.filter((r) => r.status === "ok").map((r) => r.name),
+                        skills_missing: missingSkills,
+                        confidence: gateResult.confidence,
+                        neuro_available: Boolean(gateResult.neuro_result),
+                      }) + "\n"
+                      const { appendFile, mkdir } = await import("fs/promises")
+                      await mkdir(evolutionDir, { recursive: true })
+                      await appendFile(path.join(evolutionDir, "run_log.jsonl"), logLine)
                     })
                   }
 
@@ -2321,7 +2332,7 @@ Before every response, verify your reasoning:
                   message: "The response was blocked by the provider's content filter",
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
-                yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+                yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: handle.message.error }))
                 return "break" as const
               }
               if (format.type === "json_schema") {
@@ -2358,17 +2369,17 @@ Before every response, verify your reasoning:
       },
     )
 
-    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
+    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = (Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
-    })
+      return yield* (state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID) as any) as any)
+    }) as any)
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
-      return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
+      return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
     })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
@@ -2382,7 +2393,7 @@ Before every response, verify your reasoning:
         const available = (yield* commands.list()).map((c) => c.name)
         const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
         throw error
       }
       const agentName = cmd.agent ?? input.agent
@@ -2443,7 +2454,7 @@ Before every response, verify your reasoning:
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
         throw error
       }
 
@@ -2489,12 +2500,12 @@ Before every response, verify your reasoning:
         parts,
         variant: input.variant,
       })
-      yield* events.publish(Command.Event.Executed, {
+      yield* dieSyncError(events.publish(Command.Event.Executed, {
         name: input.command,
         sessionID: input.sessionID,
         arguments: input.arguments,
         messageID: result.info.id,
-      })
+      }))
       return result
     })
 
@@ -2655,7 +2666,7 @@ const quoteTrimRegex = /^["']|["']$/g
 const sensorGateNode = LayerNode.make(SensorGate.defaultLayer, [])
 const chainExecutorNode = LayerNode.make(ChainExecutor.defaultLayer, [])
 
-export const node = LayerNode.make(layer, [
+export const node = (LayerNode.make as any)(layer, [
   SessionStatus.node,
   Session.node,
   Agent.node,

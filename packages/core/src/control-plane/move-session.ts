@@ -1,7 +1,7 @@
 export * as MoveSession from "./move-session"
 
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
-import { EventV2 } from "../event"
+import { EventV2, dieSyncError } from "../event"
 import { Git } from "../git"
 import { Location } from "../location"
 import { ProjectV2 } from "../project"
@@ -60,7 +60,7 @@ export type Error =
   | ResetSourceChangesError
 
 export interface Interface {
-  readonly moveSession: (input: Input) => Effect.Effect<void, Error | EventV2.InvalidSyncEventError>
+  readonly moveSession: (input: Input) => Effect.Effect<void, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ControlPlaneMoveSession") {}
@@ -96,12 +96,12 @@ export const layer = Layer.effect(
           .pipe(Effect.mapError((error) => new ApplyChangesError({ message: error.message })))
       }
 
-      yield* events.publish(SessionEvent.Moved, {
+      yield* dieSyncError(events.publish(SessionEvent.Moved, {
         sessionID: input.sessionID,
         location: Location.Ref.make({ directory }),
         subdirectory: RelativePath.make(path.relative(destination.directory, directory).replaceAll("\\", "/")),
         timestamp: yield* DateTime.now,
-      })
+      }))
 
       if (patch) {
         yield* git.softResetChanges(current.location.directory).pipe(

@@ -78,6 +78,19 @@ export class InvalidSyncEventError extends Schema.TaggedErrorClass<InvalidSyncEv
   },
 ) {}
 
+/**
+ * Wraps an Effect to convert `InvalidSyncEventError` into a defect.
+ * Used at boundaries where the caller's declared error type should not
+ * include `InvalidSyncEventError`.
+ *
+ * Defined here (in core) alongside `InvalidSyncEventError` so both
+ * packages/core and packages/opencode can import it without circular deps.
+ */
+export const dieSyncError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.catchTag("EventV2.InvalidSyncEvent" as any, (e: any) => Effect.die(e)),
+  ) as Effect.Effect<A, Exclude<E, { _tag: "EventV2.InvalidSyncEvent" }>, R>
+
 export function versionedType(type: string, version: number) {
   return `${type}.${version}`
 }

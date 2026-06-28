@@ -337,6 +337,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const message = yield* promptSvc
         .prompt({
           ...payload,
+          parts: payload.parts ?? [],
           sessionID: ctx.params.sessionID,
         })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))

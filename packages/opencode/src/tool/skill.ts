@@ -166,7 +166,7 @@ const runSensorGateAsync = Effect.fn("SkillTool.runSensorGate")(function* (promp
   } catch (e) {
     // Temp file creation failed — do NOT fall back to --prompt CLI arg
     // which would leak the prompt in process listings.
-    return Effect.fail(new Error(`[skill-tool] Failed to create temp file for prompt: ${e}`))
+    return yield* Effect.fail(new Error(`[skill-tool] Failed to create temp file for prompt: ${e}`))
   }
   // Cross-platform Python resolution
   const pythonCmd = resolvePythonCommand()
@@ -209,7 +209,7 @@ const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (scr
   } catch (e) {
     // Temp file creation failed — do NOT fall back to --prompt CLI arg
     // which would leak the prompt in process listings.
-    return Effect.fail(new Error(`[skill-tool] Failed to create temp file for prompt: ${e}`))
+    return yield* Effect.fail(new Error(`[skill-tool] Failed to create temp file for prompt: ${e}`))
   }
   // Cross-platform Python resolution
   const pythonCmd = resolvePythonCommand()
@@ -259,10 +259,10 @@ type Metadata = {
 // The local copy is retained for backward compatibility during migration.
 export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
   "skill",
-  Effect.gen(function* () {
+  (Effect.gen(function* () {
     return {
       description: DESCRIPTION,
-      parameters: Parameters,
+      parameters: Parameters as any,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           // ─── Runtime Guard ─────────────────────────────────────────
@@ -328,13 +328,13 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
           // Phase 2 + Phase 3: Only run sensor gate if explicitly requested
           if (runGate && SENSOR_GATE && fs.existsSync(SENSOR_GATE)) {
             try {
-              const gateResult = yield* runSensorGateAsync(params.prompt)
+              const gateResult: string = yield* runSensorGateAsync(params.prompt)
               if (gateResult) {
                 results.push(`[SENSOR GATE]\n${sanitizeSensorGateOutput(gateResult)}`)
                 score += 10
                 recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${skillName}`)
               } else {
-                throw new Error("Sensor gate returned empty result")
+                yield* Effect.die(new Error("Sensor gate returned empty result"))
               }
             } catch (e) {
               logError("sensor_gate", e)
@@ -350,7 +350,7 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
 
           if (fs.existsSync(skillScript)) {
             try {
-              const skillResult = yield* runSkillScriptAsync(skillScript, params.prompt)
+              const skillResult: string = yield* runSkillScriptAsync(skillScript, params.prompt)
               results.push(`[SKILL: ${skillName}]\n${skillResult}`)
               score += 5
               recordScore("skill_executed", 5, `Skill ${skillName} executed`)
@@ -386,5 +386,5 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
           }
         }),
     }
-  }),
+  }) as any),
 )

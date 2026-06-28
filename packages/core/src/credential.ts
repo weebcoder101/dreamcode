@@ -139,9 +139,9 @@ export const layer = Layer.effect(
                 .insert(CredentialTable)
                 .values({
                   id: credential.id,
-                  integration_id: credential.integrationID,
-                  label: credential.label,
-                  value: encryptedValue,
+                  integration_id: credential.integrationID!,
+                  label: credential.label!,
+                  value: encryptedValue as unknown as Info,
                 })
                 .run()
             }),
@@ -155,7 +155,7 @@ export const layer = Layer.effect(
         const encryptedValue = updates.value ? encryptCredential(JSON.stringify(updates.value)) : undefined
         yield* db
           .update(CredentialTable)
-          .set({ label: updates.label, value: encryptedValue })
+          .set({ label: updates.label!, value: encryptedValue as Info | undefined })
           .where(eq(CredentialTable.id, id))
           .run()
           .pipe(Effect.orDie)

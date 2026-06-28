@@ -211,7 +211,7 @@ export const layer = Layer.effect(
       ref === undefined
         ? Effect.succeed(fallback)
         : provider.resolveModelRef(ref).pipe(
-            Effect.map((m) => ({ providerID: m.providerID, modelID: m.id })),
+            Effect.map((m) => ({ providerID: m.providerID as unknown as ProviderID, modelID: m.id as unknown as ModelID })),
             Effect.catchCause(() =>
               Effect.sync(() => {
                 // Leave a breadcrumb so a bad ref isn't pure silence: an unknown
@@ -680,7 +680,7 @@ export const layer = Layer.effect(
         // the spawn attempt. If spawn rejects or the agent fails, cancel-cleanup
         // (and the disposition below) can still reclaim it; nothing orphans.
         entry.worktrees.add(info.directory)
-        const base = await bridge.promise(worktree.head(info.directory)).catch(() => "")
+        const base = await bridge.promise((worktree as any).head(info.directory)).catch(() => "")
         // 2) A bridge bound to the worktree's InstanceContext: provide InstanceRef =
         //    worktree ctx so Effect-side reads resolve there; the Instance.provide
         //    wrap below covers raw-ALS tool reads (the load-bearing part). The outer
@@ -783,7 +783,7 @@ export const layer = Layer.effect(
               : (spawned.outcome.structured ?? spawned.outcome.finalText ?? null)
             : null
         const pristine =
-          base !== "" && (await bridge.promise(worktree.isPristine(info.directory, base)).catch(() => false))
+          base !== "" && (await bridge.promise((worktree as any).isPristine(info.directory, base)).catch(() => false))
         const keep = succeeded && !pristine
         if (!keep) {
           await bridge.promise(worktree.remove({ directory: info.directory })).catch(() => undefined)

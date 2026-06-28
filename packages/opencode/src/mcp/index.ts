@@ -324,8 +324,8 @@ export const layer = Layer.effect(
         args,
         cwd,
         env: {
-          PATH: process.env.PATH,
-          HOME: process.env.HOME,
+          PATH: process.env.PATH ?? "/usr/bin",
+          HOME: process.env.HOME ?? "/root",
           ...(cmd === "opencode" && process.env.OPENCODE_MCP_INJECT_BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}),
           ...mcp.environment,
         },

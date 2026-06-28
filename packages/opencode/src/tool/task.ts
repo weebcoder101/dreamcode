@@ -129,7 +129,7 @@ export const TaskTool = Tool.define(
         let depth = 0
         let current: SessionID | undefined = id
         while (current) {
-          const s = yield* sessions.get(current).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          const s: { parentID?: SessionID | undefined } | undefined = yield* sessions.get(current).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
           if (!s?.parentID) break
           depth++
           current = s.parentID
@@ -144,7 +144,7 @@ export const TaskTool = Tool.define(
         const jobs = yield* background.list()
         const runningIds = new Set<string>()
         for (const job of jobs) {
-          if (job.status === "running" || job.status === "pending") runningIds.add(job.id)
+          if (job.status === "running") runningIds.add(job.id)
         }
         const foregroundActive = yield* Ref.get(activeSubagentSessions)
         return children.filter((c) => runningIds.has(c.id) || foregroundActive.has(c.id)).length
@@ -302,6 +302,10 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
+      // Tracks subagent session cost from DB so we can propagate it to the parent session
+      let subagentCost = 0
+      let subagentTokens: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined
+
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         let parts = yield* ops.resolvePromptParts(params.prompt)
 
@@ -323,6 +327,10 @@ export const TaskTool = Tool.define(
           agent: next.name,
           parts,
         })
+        // Fetch subagent session cost/tokens from DB so they can be propagated to parent session
+        const childSession = yield* sessions.get(nextSession.id).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        subagentCost = childSession?.cost ?? 0
+        subagentTokens = childSession?.tokens
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 
@@ -380,6 +388,8 @@ export const TaskTool = Tool.define(
             summary: "Background task updated",
             text: BACKGROUND_UPDATED,
           }),
+          subagentCost,
+          subagentTokens,
         }
       }
 
@@ -417,6 +427,8 @@ export const TaskTool = Tool.define(
             summary: "Background task started",
             text: BACKGROUND_STARTED,
           }),
+          subagentCost,
+          subagentTokens,
         }
       }
 
@@ -445,10 +457,14 @@ export const TaskTool = Tool.define(
             if (result?.metadata?.background === true) return backgroundResult()
             if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
             if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
+            // Also fetch latest cost/tokens from DB in case runTask's capture ran before session was fully updated
+            const finalSession = yield* sessions.get(nextSession.id).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
             return {
               title: params.description,
               metadata,
               output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
+              subagentCost: finalSession?.cost ?? subagentCost,
+              subagentTokens: finalSession?.tokens ?? subagentTokens,
             }
           }),
         (_, exit) =>

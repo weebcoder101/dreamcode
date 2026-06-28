@@ -12,7 +12,20 @@ import "@opencode-ai/core/catalog"
 import "@opencode-ai/core/session/event"
 import { Context, Effect, Layer } from "effect"
 
-export class Service extends Context.Service<Service, EventV2.Interface>()("@dreamcode/EventV2Bridge") {}
+/**
+ * Narrowed bridge interface that strips `InvalidSyncEventError` from `publish`.
+ * The bridge catches this error at runtime via `catchTag` and converts to `die`,
+ * so consumers should never see it in the typed error channel.
+ */
+export interface BridgeInterface extends Omit<EventV2.Interface, "publish"> {
+  readonly publish: <D extends EventV2.Definition>(
+    definition: D,
+    data: EventV2.Data<D>,
+    options?: EventV2.PublishOptions,
+  ) => Effect.Effect<EventV2.Payload<D>>
+}
+
+export class Service extends Context.Service<Service, BridgeInterface>()("@dreamcode/EventV2Bridge") {}
 
 export const layer = Layer.effect(
   Service,
@@ -38,7 +51,7 @@ export const layer = Layer.effect(
                 })
               })
         return yield* inner.pipe(
-          Effect.catchTag("InvalidSyncEventError", (e) =>
+          Effect.catchTag("EventV2.InvalidSyncEvent" as any, (e: unknown) =>
             Effect.die(e as unknown),
           ),
         )
@@ -77,7 +90,7 @@ export const layer = Layer.effect(
     )
     yield* Effect.addFinalizer(() => unsubscribe)
 
-    return Service.of({ ...events, publish })
+    return Service.of({ ...events, publish } as BridgeInterface)
   }),
 )
 

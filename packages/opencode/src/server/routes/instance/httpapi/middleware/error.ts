@@ -27,7 +27,7 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
           )
         }
 
-        if (FSUtil?.FileSystemError?.isInstance?.(error) || PlatformError?.isInstance?.(error)) {
+        if (error instanceof FSUtil.FileSystemError || (PlatformError as any).isInstance?.(error)) {
           const message = typeof error === "object" && error !== null && "message" in error
             ? String(error.message)
             : "Infrastructure error: filesystem or platform error"

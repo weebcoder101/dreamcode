@@ -140,7 +140,7 @@ const generateImpl = (params: {
 
     // Execute script using Bun.spawn (same pattern as chain-executor)
     // Use Effect.ensuring to guarantee temp file cleanup on all paths (success, error, early return)
-    return yield* Effect.tryPromise({
+    const result = yield* Effect.tryPromise({
       try: async () => {
         const proc = Bun.spawn([pythonCmd, ...args], {
           stdout: "pipe",

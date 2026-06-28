@@ -4,7 +4,7 @@ import { FileSystem } from "@opencode-ai/core/filesystem"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath, RelativePath } from "@opencode-ai/core/schema"
-import { dieSyncError } from "../../server/routes/instance/httpapi/handlers/sync-util"
+import { dieSyncError } from "@/effect/sync-error"
 import { effectCmd } from "../../effect-cmd"
 import { cmd } from "../cmd"
 

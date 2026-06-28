@@ -50,6 +50,9 @@ export interface ExecuteResult<M extends Metadata = Metadata> {
   metadata: M
   output: string
   attachments?: Omit<SessionV1.FilePart, "id" | "sessionID" | "messageID">[]
+  /** Optional cost and token usage of subagent sessions, propagated to the parent session for accurate TUI context display. */
+  subagentCost?: number
+  subagentTokens?: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } }
 }
 
 export interface Def<
