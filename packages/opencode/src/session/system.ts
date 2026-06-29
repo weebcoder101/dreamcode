@@ -156,6 +156,6 @@ export const defaultLayer = layer.pipe(
 
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 
-export const node = LayerNode.make(layer, [Skill.node, locationServiceMapNode])
+export const node = LayerNode.make(defaultLayer, [])
 
 export * as SystemPrompt from "./system"

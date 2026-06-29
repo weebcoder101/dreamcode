@@ -34,6 +34,8 @@ import { Vcs } from "@/project/vcs"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
+import { PiecesLTM } from "@/pieces-ltm"
+import { SelfEvolve } from "@/skill/self-evolve"
 
 const originalEnv = {
   OPENCODE_AUTH_CONTENT: process.env.OPENCODE_AUTH_CONTENT,
@@ -56,6 +58,8 @@ const workspaceLayer = (experimentalWorkspaces: boolean) =>
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces })),
     Layer.provide(Ripgrep.defaultLayer),
+    Layer.provide(PiecesLTM.defaultLayer),
+    Layer.provide(SelfEvolve.defaultLayer),
     Layer.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))),
   )
 

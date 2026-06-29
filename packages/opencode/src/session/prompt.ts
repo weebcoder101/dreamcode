@@ -1804,48 +1804,61 @@ Before every response, verify your reasoning:
                         skills_count: chainResults.length,
                       }) + "\n"
                       await appendFile(path.join(evolutionDir, "pieces_writes.jsonl"), writesLine)
-                    })
-                  }
 
-                  // ─── SelfEvolve.capture: Persist learning signals ─────
-                  const selfEvolveSignals: LearningSignal[] = []
+                      // ─── SelfEvolve.capture: Persist learning signals ─────
+                      const selfEvolveSignals: LearningSignal[] = []
 
-                  // Always capture at least one signal — learn from successes too
-                  selfEvolveSignals.push({
-                    whatWorked: `Chain ${gateResult.chain.join(" → ")} completed (${chainResults.filter(r => r.status === "ok").length}/${chainResults.length} skills ok)`,
-                    whatFailed: missingSkills.length > 0 ? `Missing skills: ${missingSkills.join(", ")}` : "none",
-                    whatToChange: missingSkills.length > 0
-                      ? `Add missing skill definitions: ${missingSkills.join(", ")}`
-                      : `Reinforce: ${gateResult.chain.join(", ")} effective for ${gateResult.intent.slice(0, 80)}`,
-                  })
+                      // Always capture at least one signal — learn from successes too
+                      const okCount = chainResults.filter(r => r.status === "ok").length
+                      const totalCount = chainResults.length
+                      selfEvolveSignals.push({
+                        whatWorked: `Chain ${gateResult.chain.join(" → ")} completed (${okCount}/${totalCount} skills ok)`,
+                        whatFailed: missingSkills.length > 0 ? `Missing skills: ${missingSkills.join(", ")}` : "none",
+                        whatToChange: missingSkills.length > 0
+                          ? `Add missing skill definitions: ${missingSkills.join(", ")}`
+                          : `Reinforce: ${gateResult.chain.join(", ")} effective for ${gateResult.intent.slice(0, 80)}`,
+                      })
 
-                  if (missingSkills.length > 0) {
-                    selfEvolveSignals.push({
-                      whatWorked: `Chain ${gateResult.chain.join(", ")} (${chainResults.filter(r => r.status === "ok").length}/${chainResults.length} skills)`,
-                      whatFailed: `Missing skills: ${missingSkills.join(", ")}`,
-                      whatToChange: `Add missing skill definitions: ${missingSkills.join(", ")}`,
-                    })
-                  }
-                  if (gateResult.neuro_result) {
-                    selfEvolveSignals.push({
-                      whatWorked: "NEURO enrichment provided additional context for persona analysis",
-                      whatFailed: "NEURO result may contain redundant or noisy signals",
-                      whatToChange: "Continuously tune NEURO prompt templates to reduce noise and improve signal quality",
-                    })
-                  }
-                  yield* selfEvolve.capture({
-                    chain: gateResult.chain,
-                    intent: gateResult.intent,
-                    outcome: missingSkills.length === 0 ? "success" : "partial",
-                    signals: selfEvolveSignals,
-                    filesChanged: [],
-                    metrics: {
-                      mode: gateResult.mode,
-                      confidence: gateResult.confidence,
-                      skillsExecuted: chainResults.length,
-                      neuroAvailable: Boolean(gateResult.neuro_result),
-                    },
-                  }).pipe(Effect.catch(() => Effect.void))
+                      if (missingSkills.length > 0) {
+                        selfEvolveSignals.push({
+                          whatWorked: `Chain ${gateResult.chain.join(", ")} (${okCount}/${totalCount} skills)`,
+                          whatFailed: `Missing skills: ${missingSkills.join(", ")}`,
+                          whatToChange: `Add missing skill definitions: ${missingSkills.join(", ")}`,
+                        })
+                      }
+                      if (gateResult.neuro_result) {
+                        selfEvolveSignals.push({
+                          whatWorked: "NEURO enrichment provided additional context for persona analysis",
+                          whatFailed: "NEURO result may contain redundant or noisy signals",
+                          whatToChange: "Continuously tune NEURO prompt templates to reduce noise and improve signal quality",
+                        })
+                      }
+
+                      // File-based fallback when Pieces LTM is unavailable
+                      const fallbackFile = path.join(evolutionDir, "learned_rules.jsonl")
+                      const fallbackLine = JSON.stringify({
+                        timestamp: new Date().toISOString(),
+                        chain: gateResult.chain,
+                        intent: gateResult.intent.slice(0, 200),
+                        signals: selfEvolveSignals,
+                      }) + "\n"
+                      await appendFile(fallbackFile, fallbackLine).catch(() => {})
+                    }).pipe(Effect.void)
+
+                    // SelfEvolve.capture via Pieces LTM (runs after file fallback)
+                    yield* selfEvolve.capture({
+                      chain: gateResult.chain,
+                      intent: gateResult.intent,
+                      outcome: missingSkills.length === 0 ? "success" : "partial",
+                      signals: selfEvolveSignals,
+                      filesChanged: [],
+                      metrics: {
+                        mode: gateResult.mode,
+                        confidence: gateResult.confidence,
+                        skillsExecuted: totalCount,
+                        neuroAvailable: Boolean(gateResult.neuro_result),
+                      },
+                    }).pipe(Effect.catch(() => Effect.void))
 
                   // ─── Persona System Injection ─────────────────────────
                   // Also enter when user explicitly requests N agents, or when spawn

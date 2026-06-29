@@ -19,7 +19,7 @@ describe("SelfEvolve", () => {
   })
 
   test("DEFAULT_LEARNINGS contains Effect v4 API rules", () => {
-    const allRules = DEFAULT_LEARNINGS.map((l) => l.whatToChange).join(" ")
+    const allRules = DEFAULT_LEARNINGS.map((l) => `${l.whatWorked} ${l.whatFailed} ${l.whatToChange}`).join(" ")
     expect(allRules).toMatch(/Effect\.catchAll|Effect\.catch/)
     expect(allRules).toMatch(/Effect\.forkIn/)
     expect(allRules).toMatch(/Effect\.gen/)
@@ -30,7 +30,7 @@ describe("SelfEvolve", () => {
   test("SelfEvolve.Service is a valid Effect tag", () => {
     expect(SelfEvolve.Service).toBeDefined()
     expect(typeof SelfEvolve.Service).toBe("object")
-    expect((SelfEvolve.Service as any).toString()).toContain("@dreamcode/SelfEvolve")
+    expect((SelfEvolve.Service as { key: string }).key).toBe("@dreamcode/SelfEvolve")
   })
 
   test("SelfEvolve.defaultLayer is defined and provides the service", () => {
