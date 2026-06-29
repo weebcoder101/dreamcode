@@ -168,22 +168,45 @@ if ($BuildFromSource) {
   # Windows requires --linker hoisted for symlink compatibility (bun#12385)
   $bunInstallArgs = @("install")
   if ($env:OS -eq "Windows_NT") { $bunInstallArgs += "--linker", "hoisted" }
-  & "bun" @bunInstallArgs
 
-  Set-Location packages\opencode
-  bun run build --single --skip-embed-web-ui --skip-install
-
-  # Verify binary
-  $NATIVE_BIN = "dist\dreamcode-windows-x64\bin\dreamcode.exe"
-  if (-not (Test-Path $NATIVE_BIN)) {
-    Write-Color "ERROR: Build did not produce expected binary at $NATIVE_BIN" $RED
-    exit 1
+  $sourceBuildOk = $true
+  try {
+    & "bun" @bunInstallArgs
+  } catch {
+    Write-Color "WARN: bun install failed (likely native dep compilation on Windows): $_" $ORANGE
+    Write-Color "Continuing — the pre-built download path is the primary install method for Windows." $ORANGE
+    $sourceBuildOk = $false
   }
 
-  # Copy binary
-  New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
-  Copy-Item $NATIVE_BIN "$BIN_DIR\$APP.exe" -Force
-  Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
+  if ($sourceBuildOk) {
+    Set-Location packages\opencode
+
+    $buildOk = $true
+    try {
+      bun run build --single --skip-embed-web-ui --skip-install
+    } catch {
+      Write-Color "WARN: bun build failed (likely bun 1.3.x Schema AST bug on Windows): $_" $ORANGE
+      $buildOk = $false
+    }
+
+    if ($buildOk) {
+      # Verify binary
+      $NATIVE_BIN = "dist\dreamcode-windows-x64\bin\dreamcode.exe"
+      if (Test-Path $NATIVE_BIN) {
+        # Copy binary
+        New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
+        Copy-Item $NATIVE_BIN "$BIN_DIR\$APP.exe" -Force
+        Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
+      } else {
+        Write-Color "WARN: Build did not produce expected binary at $NATIVE_BIN" $ORANGE
+      }
+    }
+  }
+
+  if (-not (Test-Path "$BIN_DIR\$APP.exe")) {
+    Write-Color "WARN: Binary was not installed via source build. The pre-built download path is recommended for Windows." $ORANGE
+    Write-Color "Install with: .\install.ps1 (without -BuildFromSource) to download a pre-built binary." $CYAN
+  }
 }
 
 # ─── Phase 1d: Install Python scripts to skills directory ─────────────

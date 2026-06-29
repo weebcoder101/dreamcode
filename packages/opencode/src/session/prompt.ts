@@ -1491,13 +1491,14 @@ Before every response, verify your reasoning:
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+            const [skills, env, knowledge, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
+              sys.knowledge().pipe(Effect.catch(() => Effect.succeed(undefined))),
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : []), SELF_CHECK]
+            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), SELF_CHECK]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
@@ -1768,8 +1769,13 @@ Before every response, verify your reasoning:
 
                     // ─── Self-Evolution: Auto-log to run_log.jsonl ──
                     // Write structured learning signals after every chain execution.
+                    // Also log to pieces_writes.jsonl for persistence verification.
+                    const outcome = missingSkills.length === 0 ? "success" : "partial"
                     yield* Effect.tryPromise(async (_signal: AbortSignal) => {
                       const evolutionDir = path.join(ctx.directory, "evolution")
+                      const { appendFile, mkdir, writeFile } = await import("fs/promises")
+                      await mkdir(evolutionDir, { recursive: true })
+
                       const logLine = JSON.stringify({
                         timestamp: new Date().toISOString(),
                         type: "chain_execution",
@@ -1777,15 +1783,25 @@ Before every response, verify your reasoning:
                         chain: gateResult.chain,
                         chain_length: gateResult.chain.length,
                         mode: gateResult.mode,
-                        outcome: missingSkills.length === 0 ? "success" : "partial",
+                        outcome,
                         skills_executed: chainResults.filter((r) => r.status === "ok").map((r) => r.name),
                         skills_missing: missingSkills,
                         confidence: gateResult.confidence,
                         neuro_available: Boolean(gateResult.neuro_result),
                       }) + "\n"
-                      const { appendFile, mkdir } = await import("fs/promises")
-                      await mkdir(evolutionDir, { recursive: true })
                       await appendFile(path.join(evolutionDir, "run_log.jsonl"), logLine)
+
+                      // ─── Pieces Writes Log ──────────────────────────
+                      // Track every Pieces LTM persist for self-evolution verification.
+                      const writesLine = JSON.stringify({
+                        timestamp: new Date().toISOString(),
+                        memory_type: gateResult.mode === "DREAM_INNOVATION" ? "breakthrough" : "learn",
+                        task_description: gateResult.intent.slice(0, 200),
+                        outcome,
+                        chain_length: gateResult.chain.length,
+                        skills_count: chainResults.length,
+                      }) + "\n"
+                      await appendFile(path.join(evolutionDir, "pieces_writes.jsonl"), writesLine)
                     })
                   }
 

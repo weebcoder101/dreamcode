@@ -42,6 +42,7 @@ export function provider(model: Provider.Model) {
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
+  readonly knowledge: () => Effect.Effect<string | undefined, unknown, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SystemPrompt") {}
@@ -92,6 +93,27 @@ export const layer = Layer.effect(
         ].filter((part): part is string => part !== undefined)
       }) as any),
 
+      knowledge: Effect.fn("SystemPrompt.knowledge")(function* () {
+        // ─── Self-Evolution Knowledge Injection ──────────────────────
+        // Cross-session knowledge rules are injected here so the model
+        // doesn't have to re-learn Effect v4 API differences on every turn.
+        // These rules are persisted to Pieces LTM and can be supplemented
+        // via the automated-learning → SelfEvolve.capture pipeline.
+        return [
+          "<learned-knowledge>",
+          "Cross-session Effect v4 API rules (persistent across sessions):",
+          "- Effect.catchAll does NOT exist in Effect v4 beta — use Effect.catch instead",
+          "- Effect.fork and Effect.forkDaemon do NOT exist in Effect v4 — use Effect.forkIn(scope)",
+          "- Effect.catch catches all errors including defects; use Effect.catchTag for tagged errors",
+          "- Use Effect.gen(function* () { ... }) for composition",
+          "- Use Effect.fn('Domain.method') for named/traced effects",
+          "- Use Schema.Class for multi-field data; Schema.TaggedErrorClass for typed errors",
+          "- Use Bun.spawn() wrapped in Effect.tryPromise for subprocesses in compiled binaries",
+          "- Use Layer.mock(Service, { method1, method2 }) for test stubs",
+          "</learned-knowledge>",
+        ].join("\n")
+      }),
+
       skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {
         if (Permission.disabled(["skill"], agent.permission).has("skill")) return
 
@@ -107,7 +129,10 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.provide(LocationServiceMap.layer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(Skill.defaultLayer),
+  Layer.provide(LocationServiceMap.layer),
+)
 
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 

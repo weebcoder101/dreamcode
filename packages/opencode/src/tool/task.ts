@@ -4,7 +4,7 @@ import { ToolJsonSchema } from "./json-schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
-import { SessionID, MessageID } from "../session/schema"
+import { SessionID, MessageID, PartID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
@@ -434,7 +434,7 @@ export const TaskTool = Tool.define(
           onPromote: ctx.metadata({
             title: params.description,
             metadata: { ...metadata, background: true, jobId: nextSession.id },
-          }).pipe(Effect.zipRight(notify(nextSession.id))),
+          }).pipe(Effect.andThen(notify(nextSession.id))),
           run: runTask().pipe(
             Effect.onInterrupt(() => ops.cancel(nextSession.id)),
             Effect.ensuring(

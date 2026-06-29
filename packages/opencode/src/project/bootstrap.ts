@@ -7,7 +7,7 @@ import * as Project from "./project"
 import * as Vcs from "./vcs"
 import { InstanceState } from "@/effect/instance-state"
 import { ShareNext } from "@/share/share-next"
-import { Effect, Layer } from "effect"
+import { Duration, Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 
@@ -38,11 +38,23 @@ export const layer = Layer.effect(
       yield* plugin.init()
       // Each service self-manages its own slow work via Effect.forkScoped against
       // its per-instance state scope. We just await materialization here.
+      // Timebox each service init to 15s. Individual services that fail to
+      // init within the window won't block the rest of the bootstrap chain.
+      // Unhealthy services will be logged and handled by their own retry/reconnect
+      // logic on first actual use. This prevents any single service hang from
+      // blocking the entire bootstrap (which previously caused 30s test timeouts).
+      const services: Array<{ init: () => Effect.Effect<void, unknown, never> }> = [
+        lsp, shareNext, format, vcs, snapshot, project,
+      ]
       yield* Effect.forEach(
-        [lsp, shareNext, format, vcs, snapshot, project],
-        (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
+        services,
+        (s) =>
+          s.init().pipe(
+            Effect.timeout(Duration.seconds(15)),
+            Effect.catchCause((cause) => Effect.logWarning("init timed out or failed", { cause })),
+          ),
         { concurrency: "unbounded", discard: true },
-      ).pipe(Effect.withSpan("InstanceBootstrap.init"))
+      )
     }).pipe(Effect.withSpan("InstanceBootstrap"))
 
     return Service.of({ run })
