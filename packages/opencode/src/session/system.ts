@@ -18,6 +18,7 @@ import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
+import { SelfEvolve, type LearningSignal } from "@/skill/self-evolve"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { dieSyncError } from "@opencode-ai/core/event"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
@@ -52,6 +53,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const skill = yield* Skill.Service
     const locations = yield* LocationServiceMap
+    const selfEvolve = yield* SelfEvolve.Service
 
     return Service.of({
       environment: (Effect.fn("SystemPrompt.environment")(function* (model: any) {
@@ -99,8 +101,7 @@ export const layer = Layer.effect(
         // doesn't have to re-learn Effect v4 API differences on every turn.
         // These rules are persisted to Pieces LTM and can be supplemented
         // via the automated-learning → SelfEvolve.capture pipeline.
-        return [
-          "<learned-knowledge>",
+        const baseLearnings = [
           "Cross-session Effect v4 API rules (persistent across sessions):",
           "- Effect.catchAll does NOT exist in Effect v4 beta — use Effect.catch instead",
           "- Effect.fork and Effect.forkDaemon do NOT exist in Effect v4 — use Effect.forkIn(scope)",
@@ -110,6 +111,24 @@ export const layer = Layer.effect(
           "- Use Schema.Class for multi-field data; Schema.TaggedErrorClass for typed errors",
           "- Use Bun.spawn() wrapped in Effect.tryPromise for subprocesses in compiled binaries",
           "- Use Layer.mock(Service, { method1, method2 }) for test stubs",
+        ]
+
+        // Supplement with dynamically learned rules from SelfEvolve LTM
+        const dynLearnings = yield* selfEvolve.learnings().pipe(
+          Effect.catch(() => Effect.succeed([] as LearningSignal[])),
+        )
+        const dynRules = dynLearnings
+          .filter((l) => {
+            // De-duplication: skip if the rule text overlaps with baseline
+            const rule = l.whatToChange.toLowerCase()
+            return !baseLearnings.some((b) => rule.includes(b.toLowerCase().slice(0, 40)))
+          })
+          .map((l) => `- ${l.whatToChange}`)
+
+        return [
+          "<learned-knowledge>",
+          ...baseLearnings,
+          ...(dynRules.length > 0 ? ["", "Dynamically learned rules:", ...dynRules] : []),
           "</learned-knowledge>",
         ].join("\n")
       }),
@@ -131,6 +150,7 @@ export const layer = Layer.effect(
 
 export const defaultLayer = layer.pipe(
   Layer.provide(Skill.defaultLayer),
+  Layer.provide(SelfEvolve.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
 )
 

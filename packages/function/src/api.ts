@@ -36,9 +36,9 @@ export class SyncServer extends DurableObject<Env> {
     })
   }
 
-  async webSocketMessage(_ws, _message) {}
+  async webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer) {}
 
-  async webSocketClose(ws, code, _reason, _wasClean) {
+  async webSocketClose(ws: WebSocket, code: number, _reason: string, _wasClean: boolean) {
     ws.close(code, "Durable Object is closing WebSocket")
   }
 
@@ -76,7 +76,7 @@ export class SyncServer extends DurableObject<Env> {
     return secret
   }
 
-  public async getData() {
+  public async getData(): Promise<{ key: string; content: any }[]> {
     const data = (await this.ctx.storage.list()) as Map<string, any>
     return Array.from(data.entries())
       .filter(([key, _]) => key.startsWith("session/"))
@@ -179,7 +179,7 @@ export default new Hono<{ Bindings: Env }>()
     const stub = c.env.SYNC_SERVER.get(c.env.SYNC_SERVER.idFromName(id))
     const data = await stub.getData()
 
-    let info
+    let info: any
     const messages: Record<string, any> = {}
     data.forEach((d) => {
       const [root, type] = d.key.split("/")
@@ -276,7 +276,9 @@ export default new Hono<{ Bindings: Env }>()
         audience: EXPECTED_AUDIENCE,
       })
       const sub = payload.sub // e.g. 'repo:my-org/my-repo:ref:refs/heads/main'
-      const parts = sub.split(":")[1].split("/")
+      if (!sub) throw new Error("Token payload missing 'sub' claim")
+      const parts = sub.split(":")[1]?.split("/")
+      if (!parts || parts.length < 2) throw new Error("Invalid 'sub' claim format")
       owner = parts[0]
       repo = parts[1]
     } catch (err) {
@@ -293,7 +295,7 @@ export default new Hono<{ Bindings: Env }>()
 
     // Lookup installation
     const octokit = new Octokit({ auth: appAuth.token })
-    const { data: installation } = await octokit.apps.getRepoInstallation({
+    const { data: installation }: { data: any } = await octokit.apps.getRepoInstallation({
       owner,
       repo,
     })
@@ -323,7 +325,7 @@ export default new Hono<{ Bindings: Env }>()
       // Verify permissions
       const userClient = new Octokit({ auth: token })
       const { data: repoData } = await userClient.repos.get({ owner, repo })
-      if (!repoData.permissions.admin && !repoData.permissions.push && !repoData.permissions.maintain)
+      if (!repoData.permissions?.admin && !repoData.permissions?.push && !repoData.permissions?.maintain)
         throw new Error("User does not have write permissions")
 
       // Get installation token
@@ -335,7 +337,7 @@ export default new Hono<{ Bindings: Env }>()
 
       // Lookup installation
       const appClient = new Octokit({ auth: appAuth.token })
-      const { data: installation } = await appClient.apps.getRepoInstallation({
+      const { data: installation }: { data: any } = await appClient.apps.getRepoInstallation({
         owner,
         repo,
       })
@@ -371,7 +373,7 @@ export default new Hono<{ Bindings: Env }>()
 
     // Lookup installation
     const octokit = new Octokit({ auth: appAuth.token })
-    let installation
+    let installation: any
     try {
       const ret = await octokit.apps.getRepoInstallation({ owner, repo })
       installation = ret.data

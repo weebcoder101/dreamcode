@@ -10,7 +10,10 @@
     "moduleResolution": "bundler",
     "noEmit": true,
     "strict": true,
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "node"],
+    "paths": {
+      "@/*": ["../app/src/*"]
+    }
   },
   "include": [".storybook/**/*.ts", ".storybook/**/*.tsx"]
 }

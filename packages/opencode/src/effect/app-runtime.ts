@@ -53,6 +53,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SensorGate } from "@/skill/sensor-gate"
 import { ChainExecutor } from "@/skill/chain-executor"
+import { SelfEvolve } from "@/skill/self-evolve"
 import { ContextCompressor } from "@/session/context-compressor"
 import { PiecesLTM } from "@/pieces-ltm"
 import { Actor } from "@/actor/spawn"
@@ -107,6 +108,7 @@ export const AppLayer = Layer.mergeAll(
   SessionShare.defaultLayer,
   SensorGate.defaultLayer,
   ChainExecutor.defaultLayer,
+  SelfEvolve.defaultLayer,
   ContextCompressor.defaultLayer,
   PiecesLTM.defaultLayer,
   Layer.succeed(PluginBoot.Service, { wait: () => Effect.void }),

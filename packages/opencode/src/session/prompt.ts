@@ -37,6 +37,7 @@ import { Skill } from "@/skill"
 import { SensorGate, evaluateSpawnNecessity, type Persona, type SensorGateResult } from "@/skill/sensor-gate"
 import { SOCIAL_GREETING_RE } from "@/skill/question-complexity-schema"
 import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
+import { SelfEvolve, type LearningSignal } from "@/skill/self-evolve"
 import { debugLog } from "@/skill/python-resolver"
 import * as PersonaTracker from "./persona-tracker"
 import { ContextCompressor } from "./context-compressor"
@@ -155,6 +156,7 @@ export const layer = Layer.effect(
     const { db } = database
     const skillService = yield* Skill.Service
     const chainExecutor = yield* ChainExecutor.Service
+    const selfEvolve = yield* SelfEvolve.Service
     const piecesLTM = yield* PiecesLTM.PiecesLTM
 
     const ops = Effect.fn("SessionPrompt.ops")(function* (opts?: { disableTaskTool?: boolean }) {
@@ -1804,6 +1806,36 @@ Before every response, verify your reasoning:
                       await appendFile(path.join(evolutionDir, "pieces_writes.jsonl"), writesLine)
                     })
                   }
+
+                  // ─── SelfEvolve.capture: Persist learning signals ─────
+                  const selfEvolveSignals: LearningSignal[] = []
+                  if (missingSkills.length > 0) {
+                    selfEvolveSignals.push({
+                      whatWorked: `Chain ${gateResult.chain.join(", ")} (${chainResults.filter(r => r.status === "ok").length}/${chainResults.length} skills)`,
+                      whatFailed: `Missing skills: ${missingSkills.join(", ")}`,
+                      whatToChange: `Add missing skill definitions: ${missingSkills.join(", ")}`,
+                    })
+                  }
+                  if (gateResult.neuro_result) {
+                    selfEvolveSignals.push({
+                      whatWorked: "NEURO enrichment provided additional context for persona analysis",
+                      whatFailed: "NEURO result may contain redundant or noisy signals",
+                      whatToChange: "Continuously tune NEURO prompt templates to reduce noise and improve signal quality",
+                    })
+                  }
+                  yield* selfEvolve.capture({
+                    chain: gateResult.chain,
+                    intent: gateResult.intent,
+                    outcome: missingSkills.length === 0 ? "success" : "partial",
+                    signals: selfEvolveSignals,
+                    filesChanged: [],
+                    metrics: {
+                      mode: gateResult.mode,
+                      confidence: gateResult.confidence,
+                      skillsExecuted: chainResults.length,
+                      neuroAvailable: Boolean(gateResult.neuro_result),
+                    },
+                  }).pipe(Effect.catch(() => Effect.void))
 
                   // ─── Persona System Injection ─────────────────────────
                   // Also enter when user explicitly requests N agents, or when spawn

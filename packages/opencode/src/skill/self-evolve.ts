@@ -52,7 +52,7 @@ export class SelfEvolve extends Context.Service<SelfEvolve, Interface>()("@dream
  * These are hardcoded as the initial knowledge base and supplemented
  * by Pieces LTM persistence.
  */
-const DEFAULT_LEARNINGS: LearningSignal[] = [
+export const DEFAULT_LEARNINGS: LearningSignal[] = [
   {
     whatWorked: "Using Effect.gen(function* () { ... }) for composition",
     whatFailed: "Using Effect.catchAll — it does NOT exist in Effect v4 beta",
@@ -158,3 +158,5 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+export * as SelfEvolve from "./self-evolve"

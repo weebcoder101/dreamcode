@@ -40,4 +40,21 @@ describe("SensorGateEnforcerPlugin", () => {
       ),
     ).resolves.toBeUndefined()
   })
+
+  test("dispose handler clears session state", async () => {
+    const hooks = await SensorGateEnforcerPlugin({} as any)
+    expect(typeof hooks.dispose).toBe("function")
+    await expect(hooks.dispose!()).resolves.toBeUndefined()
+  })
+
+  test("chat.message creates session state on first call with text", async () => {
+    const hooks = await SensorGateEnforcerPlugin({} as any)
+    const chatMessage = hooks["chat.message"]!
+    await expect(
+      chatMessage(
+        { client: { directory: "/tmp/test" }, sessionID: "test-session" } as any,
+        { parts: [{ type: "text", text: "check my code" }] } as any,
+      ),
+    ).resolves.toBeUndefined()
+  })
 })

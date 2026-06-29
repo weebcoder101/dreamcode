@@ -12,6 +12,19 @@ const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagen
 
 const RATE_MAX_SPAWNS = 5
 
+// ─── NEURO Result Cache ─────────────────────────────────────────────
+// Caches NEURO results per project root to avoid redundant re-runs
+// within the same session. The cache is cleared on session disposal.
+const neuroResultCache = new Map<string, string>()
+
+export function getCachedNeuroResult(projectRoot: string): string | undefined {
+  return neuroResultCache.get(projectRoot)
+}
+
+export function setCachedNeuroResult(projectRoot: string, result: string): void {
+  neuroResultCache.set(projectRoot, result)
+}
+
 export interface Persona {
   name: string
   role: string
@@ -895,7 +908,10 @@ export const layer = Layer.effect(
               debugLog("[sensor-gate] NEURO analysis skipped — NEURO_API_KEY not set")
             } else {
               const validated = validateNeuroOutput(neuroResult)
-              if (validated) result.neuro_result = validated
+              if (validated) {
+                result.neuro_result = validated
+                setCachedNeuroResult(directory, validated)
+              }
             }
           }
         }
