@@ -1367,7 +1367,8 @@ Before every response, verify your reasoning:
 
           // Subagents should NOT trigger auto-compaction — they do focused work
           // and compaction during their execution is costly and disruptive.
-          // Also skip if compaction is locked (parent agent is mid-synthesis).
+          // Synthesis lock prevents auto-compact while parent agent is mid-response,
+          // avoiding context-epoch truncation during an active provider turn.
           if (
             agent.mode !== "subagent" &&
             lastFinished &&
@@ -2396,7 +2397,7 @@ Before every response, verify your reasoning:
             // Lock compaction during synthetic phase — prevents mid-response
             // auto-compact from truncating the context epoch. Unlocked after
             // process completes (ensuring block below).
-            yield* compaction.lockCompaction
+            yield* compaction.lockCompaction;
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -2408,7 +2409,9 @@ Before every response, verify your reasoning:
               tools: finalTools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
-            }).pipe(Effect.ensuring(compaction.unlockCompaction))
+            }).pipe(
+              Effect.ensuring(compaction.unlockCompaction)
+            )
 
             if (structured !== undefined) {
               handle.message.structured = structured
