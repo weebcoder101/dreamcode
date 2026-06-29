@@ -8,12 +8,12 @@
       "dependsOn": [],
       "outputs": ["dist/**"]
     },
-    "opencode#test": {
+    "dreamcode#test": {
       "dependsOn": ["^build"],
       "outputs": [],
       "passThroughEnv": ["*"]
     },
-    "opencode#test:integration": {
+    "dreamcode#test:integration": {
       "dependsOn": ["^build"],
       "outputs": [],
       "passThroughEnv": ["*"]

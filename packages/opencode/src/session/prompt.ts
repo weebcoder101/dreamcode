@@ -452,8 +452,8 @@ export const layer = Layer.effect(
       assistantMessage.finish = "tool-calls"
       assistantMessage.time.completed = Date.now()
       // Propagate subagent cost/tokens to parent session for accurate TUI context display
-      const sc = (result as any)?.subagentCost
-      if (sc != null && sc > 0) {
+      const sc = Number((result as any)?.subagentCost)
+      if (Number.isFinite(sc) && sc > 0) {
         assistantMessage.cost = (assistantMessage.cost ?? 0) + sc
       }
       const st = (result as any)?.subagentTokens
@@ -490,9 +490,9 @@ export const layer = Layer.effect(
       // propagates subagent cost/tokens to the session's DB cost row.
       // This mirrors the main LLM flow (processor.ts) where step-finish parts
       // carry cost/tokens and trigger applyUsage in the projector.
-      const subagentCost_ = (result as any)?.subagentCost
+      const subagentCost_ = Number((result as any)?.subagentCost)
       const subagentTokens_ = (result as any)?.subagentTokens
-      if (subagentCost_ != null && subagentCost_ > 0) {
+      if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
         yield* sessions.updatePart({
           id: PartID.ascending(),
           messageID: assistantMessage.id,
