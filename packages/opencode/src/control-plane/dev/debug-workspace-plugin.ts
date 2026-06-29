@@ -16,7 +16,9 @@ async function waitForHealth(port: number) {
       if (response.ok) {
         return
       }
-    } catch {}
+    } catch (e) {
+      console.debug("[debug-workspace] health check attempt failed:", String(e))
+    }
 
     await sleep(250)
   }

@@ -113,6 +113,25 @@ export const layer = Layer.effect(
     const httpClient = yield* HttpClient.HttpClient
     const cfg = PiecesLTMConfig.default
 
+    // ── Data Retention Notice ────────────────────────────────────────
+    // Pieces LTM captures fine-grained workstream data to power contextual
+    // memory and historical queries. This is an inherent property of the
+    // design, not a code-level vulnerability.
+    //
+    // Captured data includes (at ~2-second intervals):
+    //   • Clipboard content (everything you copy/cut)
+    //   • Screenshots with OCR text extraction (visible screen content)
+    //   • Audio transcriptions (if microphone access is enabled)
+    //   • Browser URLs, window titles, and application focus
+    //
+    // All data stays local on your machine. It is NOT sent to external
+    // servers unless you explicitly configure a remote MCP endpoint.
+    // To disable, go to Settings > Privacy > Pieces LTM.
+    yield* Effect.logInfo(
+      "[PiecesLTM] Active — captures clipboard, screen OCR, audio, and browser focus locally every ~2s. " +
+      "See Settings > Privacy > Pieces LTM to disable.",
+    )
+
     const persist = Effect.fn("PiecesLTM.persist")(function* (input: PersistInput) {
       const memoryType = classifyMemory(input)
       const summary = buildMemorySummary(input)

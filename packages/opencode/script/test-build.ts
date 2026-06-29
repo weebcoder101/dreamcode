@@ -1,4 +1,4 @@
-import { Effect, Layer, Scope, Exit } from "effect"
+import { Effect, Layer, Scope } from "effect"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 
@@ -16,7 +16,7 @@ console.log("Building minimal layer...")
 try {
   const scope = Scope.makeUnsafe()
   const ctx = Effect.runSync(
-    Layer.buildWithMemoMap(testLayer, Layer.makeMemoMapUnsafe(), scope),
+    Layer.buildWithMemoMap(testLayer, Layer.makeMemoMapUnsafe(), scope) as any,
   )
   console.log("OK: minimal layer works")
 } catch (e) {

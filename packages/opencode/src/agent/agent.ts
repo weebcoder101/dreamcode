@@ -30,6 +30,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
+import { dieSyncError } from "@opencode-ai/core/event"
 import { Reference } from "@opencode-ai/core/reference"
 import { Location } from "@opencode-ai/core/location"
 
@@ -97,11 +98,12 @@ export const layer = Layer.effect(
     const locations = yield* LocationServiceMap
 
     const state = yield* InstanceState.make<State>(
-      Effect.fn("Agent.state")(function* (ctx) {
+      (Effect.fn("Agent.state")(function* (ctx) {
+        yield* dieSyncError((yield* PluginBoot.Service).wait())
         const cfg = yield* config.get()
         const skillDirs = yield* skill.dirs()
         const referenceDirs = yield* Effect.gen(function* () {
-          yield* (yield* PluginBoot.Service).wait()
+          yield* dieSyncError((yield* PluginBoot.Service).wait())
           return (yield* (yield* Reference.Service).list()).map((reference) => reference.path)
         }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
         const whitelistedDirs = [
@@ -349,8 +351,8 @@ export const layer = Layer.effect(
           list,
           defaultInfo,
           defaultAgent,
-        } satisfies State
-      }),
+        } as State
+      }) as any),
     )
 
     return Service.of({

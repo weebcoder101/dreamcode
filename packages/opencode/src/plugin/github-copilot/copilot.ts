@@ -152,7 +152,9 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
                     isAgent: !(last?.role === "user" && hasNonToolCalls) || imgMsg(last),
                   }
                 }
-              } catch {}
+              } catch (e) {
+                console.warn("[copilot] vision detection error:", String(e))
+              }
               return { isVision: false, isAgent: false }
             })
 

@@ -53,6 +53,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { Skill } from "@/skill"
 import { ChainExecutor } from "@/skill/chain-executor"
 import { PiecesLTM } from "@/pieces-ltm"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Snapshot } from "@/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
@@ -143,7 +144,6 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
 )
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
-    SensorGate.defaultLayer,
     configHandlers,
     experimentalHandlers,
     fileHandlers,
@@ -203,7 +203,7 @@ export function createRoutes(
   corsOptions?: CorsOptions,
   options?: { serveUI?: boolean },
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  const merged = [
+  const merged: Layer.Layer<never, EffectConfig.ConfigError, unknown>[] = [
     rootApiRoutes,
     eventApiRoutes,
     ptyConnectApiRoutes,
@@ -212,7 +212,7 @@ export function createRoutes(
     docRoute,
   ]
   if (options?.serveUI !== false) merged.push(uiRoute)
-  return Layer.mergeAll(...merged).pipe(
+  return (Layer.mergeAll(...(merged as [any, ...any[]])) as Layer.Layer<any, any, any>).pipe(
     Layer.provide([
       errorLayer,
       compressionLayer,
@@ -269,6 +269,7 @@ export function createRoutes(
       FSUtil.defaultLayer,
       FetchHttpClient.layer,
       HttpServer.layerServices,
+      Layer.succeed(PluginBoot.Service, { wait: () => Effect.void }),
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Ripgrep.defaultLayer),

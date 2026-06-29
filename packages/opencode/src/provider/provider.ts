@@ -296,17 +296,10 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
       const awsAccessKeyId = env["AWS_ACCESS_KEY_ID"]
       const configApiKey = providerConfig?.options?.apiKey
 
-      // TODO: Using process.env directly because Env.set only updates a process.env shallow copy,
-      // until the scope of the Env API is clarified (test only or runtime?)
-      const awsBearerToken = iife(() => {
-        const envToken = process.env.AWS_BEARER_TOKEN_BEDROCK
-        if (envToken) return envToken
-        if (auth?.type === "api") {
-          process.env.AWS_BEARER_TOKEN_BEDROCK = auth.key
-          return auth.key
-        }
-        return undefined
-      })
+      // Scoped bearer token — avoids mutating process.env which leaks to all child processes.
+      // AWS Bedrock SDK reads AWS_BEARER_TOKEN_BEDROCK from env, but we can also
+      // pass it directly in the options. We check env first (user-set), then auth.
+      const awsBearerToken = process.env.AWS_BEARER_TOKEN_BEDROCK ?? (auth?.type === "api" ? auth.key : undefined)
 
       const awsWebIdentityTokenFile = env["AWS_WEB_IDENTITY_TOKEN_FILE"]
 
@@ -556,17 +549,8 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
     }),
     "sap-ai-core": Effect.fnUntraced(function* () {
       const auth = yield* dep.auth("sap-ai-core")
-      // TODO: Using process.env directly because Env.set only updates a shallow copy (not process.env),
-      // until the scope of the Env API is clarified (test only or runtime?)
-      const envServiceKey = iife(() => {
-        const envAICoreServiceKey = process.env.AICORE_SERVICE_KEY
-        if (envAICoreServiceKey) return envAICoreServiceKey
-        if (auth?.type === "api") {
-          process.env.AICORE_SERVICE_KEY = auth.key
-          return auth.key
-        }
-        return undefined
-      })
+      // Scoped service key — avoids mutating process.env which leaks to all child processes.
+      const envServiceKey = process.env.AICORE_SERVICE_KEY ?? (auth?.type === "api" ? auth.key : undefined)
       const deploymentId = process.env.AICORE_DEPLOYMENT_ID
       const resourceGroup = process.env.AICORE_RESOURCE_GROUP
 
@@ -885,7 +869,9 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
                   delete body.max_tokens
                   init = { ...init, body: JSON.stringify(body) }
                 }
-              } catch {}
+              } catch (e) {
+                console.warn("[provider] max_tokens rename failed:", String(e))
+              }
             }
 
             const response = await fetch(url, init)
@@ -903,7 +889,9 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
                     { status: 200, headers: new Headers({ "content-type": "application/json" }) },
                   )
                 }
-              } catch {}
+              } catch (e) {
+                console.warn("[provider] conversation-complete check failed:", String(e))
+              }
             }
 
             // Cortex returns role:"" in streaming deltas; the AI SDK schema requires "assistant"
@@ -1107,6 +1095,10 @@ export interface Interface {
   ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderV2.ID) => Effect.Effect<Model | undefined>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, DefaultModelError>
+  /** Resolve a user-facing model ref — either a "providerID/modelID" literal or a
+   *  configured model group/tier name — to the concrete Model record. An unknown
+   *  group falls back through the configured model_aliases chain before failing. */
+  readonly resolveModelRef: (ref: string) => Effect.Effect<Model, ModelNotFoundError>
 }
 
 interface State {
@@ -1915,7 +1907,31 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    const resolveModelRef = Effect.fn("Provider.resolveModelRef")(function* (ref: string) {
+      // "providerID/modelID" literal → split and resolve via getModel.
+      if (ref.includes("/")) {
+        const parsed = parseModel(ref)
+        return yield* getModel(parsed.providerID, parsed.modelID)
+      }
+      // Single-token ref (e.g. a tier/group name like "lite"): try each
+      // known provider for a model whose id, name, or api.id contains the
+      // token. The caller catches ModelNotFoundError and falls back to the
+      // run default, so a miss is graceful.
+      const s = yield* InstanceState.get(state)
+      for (const provider of Object.values(s.providers)) {
+        for (const model of Object.values(provider.models)) {
+          if (model.id.includes(ref) || model.name.includes(ref) || model.api.id.includes(ref)) {
+            return model
+          }
+        }
+      }
+      return yield* new ModelNotFoundError({
+        providerID: ProviderV2.ID.make("unknown"),
+        modelID: ModelV2.ID.make(ref),
+      })
+    })
+
+    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel, resolveModelRef })
   }),
 )
 

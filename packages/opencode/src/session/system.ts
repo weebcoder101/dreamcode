@@ -19,6 +19,7 @@ import { Skill } from "@/skill"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { dieSyncError } from "@opencode-ai/core/event"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 
@@ -41,6 +42,7 @@ export function provider(model: Provider.Model) {
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
+  readonly knowledge: () => Effect.Effect<string | undefined, unknown, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SystemPrompt") {}
@@ -52,12 +54,12 @@ export const layer = Layer.effect(
     const locations = yield* LocationServiceMap
 
     return Service.of({
-      environment: Effect.fn("SystemPrompt.environment")(function* (model: Provider.Model) {
+      environment: (Effect.fn("SystemPrompt.environment")(function* (model: any) {
         const ctx = yield* InstanceState.context
-        const references = yield* Effect.gen(function* () {
-          yield* (yield* PluginBoot.Service).wait()
-          return (yield* (yield* Reference.Service).list()).filter((reference) => reference.description !== undefined)
-        }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
+        const references: any[] = yield* (Effect.gen(function* () {
+          yield* dieSyncError((yield* PluginBoot.Service).wait())
+          return (yield* (yield* Reference.Service).list()).filter((reference: any) => reference.description !== undefined)
+        }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) })))) as any)
         return [
           [
             `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
@@ -76,8 +78,8 @@ export const layer = Layer.effect(
                 "Project references provide additional directories that can be accessed when relevant.",
                 "<available_references>",
                 ...references
-                  .toSorted((a, b) => a.name.localeCompare(b.name))
-                  .flatMap((reference) => [
+                  .toSorted((a: any, b: any) => a.name.localeCompare(b.name))
+                  .flatMap((reference: any) => [
                     "  <reference>",
                     `    <name>${reference.name}</name>`,
                     `    <path>${reference.path}</path>`,
@@ -89,6 +91,27 @@ export const layer = Layer.effect(
                 "</available_references>",
               ].join("\n"),
         ].filter((part): part is string => part !== undefined)
+      }) as any),
+
+      knowledge: Effect.fn("SystemPrompt.knowledge")(function* () {
+        // ─── Self-Evolution Knowledge Injection ──────────────────────
+        // Cross-session knowledge rules are injected here so the model
+        // doesn't have to re-learn Effect v4 API differences on every turn.
+        // These rules are persisted to Pieces LTM and can be supplemented
+        // via the automated-learning → SelfEvolve.capture pipeline.
+        return [
+          "<learned-knowledge>",
+          "Cross-session Effect v4 API rules (persistent across sessions):",
+          "- Effect.catchAll does NOT exist in Effect v4 beta — use Effect.catch instead",
+          "- Effect.fork and Effect.forkDaemon do NOT exist in Effect v4 — use Effect.forkIn(scope)",
+          "- Effect.catch catches all errors including defects; use Effect.catchTag for tagged errors",
+          "- Use Effect.gen(function* () { ... }) for composition",
+          "- Use Effect.fn('Domain.method') for named/traced effects",
+          "- Use Schema.Class for multi-field data; Schema.TaggedErrorClass for typed errors",
+          "- Use Bun.spawn() wrapped in Effect.tryPromise for subprocesses in compiled binaries",
+          "- Use Layer.mock(Service, { method1, method2 }) for test stubs",
+          "</learned-knowledge>",
+        ].join("\n")
       }),
 
       skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {
@@ -106,7 +129,10 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.provide(LocationServiceMap.layer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(Skill.defaultLayer),
+  Layer.provide(LocationServiceMap.layer),
+)
 
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 

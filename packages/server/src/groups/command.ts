@@ -2,6 +2,7 @@ import { CommandV2 } from "@opencode-ai/core/command"
 import { Location } from "@opencode-ai/core/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { UnknownError } from "../errors"
 import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
 
 export const CommandGroup = HttpApiGroup.make("server.command")
@@ -9,6 +10,7 @@ export const CommandGroup = HttpApiGroup.make("server.command")
     HttpApiEndpoint.get("command.list", "/api/command", {
       query: LocationQuery,
       success: Location.response(Schema.Array(CommandV2.Info)),
+      error: UnknownError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

@@ -11,6 +11,7 @@ Features:
 import argparse
 import json
 import os
+import stat
 import sys
 import time
 import urllib.error
@@ -20,11 +21,31 @@ from pathlib import Path
 
 # Auto-load .env.neuro if NEURO_API_KEY not set
 def _load_env_neuro():
-    """Load .env.neuro file if it exists and NEURO_API_KEY is not set."""
+    """Load .env.neuro file if it exists and NEURO_API_KEY is not set.
+    
+    Security checks:
+    - Refuses world-readable files (mode & 0o004) to prevent credential exposure
+    - Refuses world-writable files (mode & 0o002) to prevent injection attacks
+    - Logs a warning to stderr for unsafe permissions
+    """
     if os.environ.get("NEURO_API_KEY"):
         return
     env_neuro_path = Path(__file__).resolve().parent.parent.parent.parent / ".env.neuro"
     if env_neuro_path.exists():
+        try:
+            file_mode = env_neuro_path.stat().st_mode
+            if file_mode & stat.S_IROTH:
+                print(f"WARNING: {env_neuro_path} is world-readable ({oct(file_mode & 0o777)}). "
+                      "Set permissions to 0600 (chmod 600 .env.neuro). Refusing to load.",
+                      file=sys.stderr)
+                return
+            if file_mode & stat.S_IWOTH:
+                print(f"WARNING: {env_neuro_path} is world-writable ({oct(file_mode & 0o777)}). "
+                      "Set permissions to 0600 (chmod 600 .env.neuro). Refusing to load.",
+                      file=sys.stderr)
+                return
+        except OSError:
+            return
         for line in env_neuro_path.read_text().splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
@@ -45,7 +66,8 @@ if str(_opencode_root) not in sys.path:
 
 def main():
     parser = argparse.ArgumentParser(description="NEURO API harness with prompt engine")
-    parser.add_argument("--task", default="", help="Task description (alternative to --stdin)")
+    parser.add_argument("--task", default="", help="Task description (alternative to --stdin; use --task-file to avoid CLI arg leaks)")
+    parser.add_argument("--task-file", default="", help="Path to file containing task description (replaces --task, avoids prompt leak in process listings)")
     parser.add_argument("--stdin", action="store_true", help="Read task+context as JSON from stdin: {\"task\": \"...\", \"automationContext\": \"...\"}")
     parser.add_argument("--scan-type", default="full_audit",
                         choices=["security", "bug_hunt", "full_audit", "test_gap"])
@@ -57,6 +79,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-tokens", type=int, default=8192)
     args = parser.parse_args()
+    # --task-file takes priority: read task content from file instead of CLI arg
+    if args.task_file:
+        try:
+            with open(args.task_file) as f:
+                args.task = f.read().strip()
+        except Exception as e:
+            print(f"Warning: Could not read --task-file '{args.task_file}': {e}", file=sys.stderr)
+
     if args.stdin and not args.task:
         stdin_data = json.loads(sys.stdin.read().strip())
         args.task = stdin_data.get("task", "")

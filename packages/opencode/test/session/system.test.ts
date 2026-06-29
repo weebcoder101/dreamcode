@@ -10,24 +10,28 @@ import { testEffect } from "../lib/effect"
 
 const skills: Skill.Info[] = [
   {
+    id: "zeta-skill",
     name: "zeta-skill",
     description: "Zeta skill.",
     location: "/tmp/zeta-skill/SKILL.md",
     content: "# zeta-skill",
   },
   {
+    id: "alpha-skill",
     name: "alpha-skill",
     description: "Alpha skill.",
     location: "/tmp/alpha-skill/SKILL.md",
     content: "# alpha-skill",
   },
   {
+    id: "middle-skill",
     name: "middle-skill",
     description: "Middle skill.",
     location: "/tmp/middle-skill/SKILL.md",
     content: "# middle-skill",
   },
   {
+    id: "manual-skill",
     name: "manual-skill",
     location: "/tmp/manual-skill/SKILL.md",
     content: "# manual-skill",

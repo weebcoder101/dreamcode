@@ -1,5 +1,5 @@
 {
-  "total": 60,
+  "total": 70,
   "history": [
     {
       "timestamp": "2026-06-15T10:58:29.837002+05:30",
@@ -42,12 +42,19 @@
       "points": 10,
       "total_after": 60,
       "details": "Sensor gate executed"
+    },
+    {
+      "timestamp": "2026-06-28T08:00:53.228026+05:30",
+      "event": "sensor_gate_run",
+      "points": 10,
+      "total_after": 70,
+      "details": "Sensor gate executed"
     }
   ],
-  "current_streak": 6,
-  "best_streak": 6,
-  "total_runs": 6,
-  "successful_runs": 6,
+  "current_streak": 7,
+  "best_streak": 7,
+  "total_runs": 7,
+  "successful_runs": 7,
   "sensor_gate_violations": 0,
   "dream_violations": 0
 }

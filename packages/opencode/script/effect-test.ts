@@ -1,8 +1,6 @@
-import { Effect, Layer, Scope, Context } from "effect"
+import { Context, Effect, Layer, Scope } from "effect"
 
-const MyService = Context.GenericService("@test/My", Effect.succeed({
-  run() { return "hello" }
-}))
+const MyService = Context.Service<{ run(): string }, { run(): string }>()("@test/My")
 
 const layer = Layer.effect(MyService, Effect.succeed({
   run() { return "hello" }

@@ -2,7 +2,7 @@ import { Integration } from "@opencode-ai/core/integration"
 import { Location } from "@opencode-ai/core/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { InvalidRequestError } from "../errors"
+import { InvalidRequestError, UnknownError } from "../errors"
 import { LocationMiddleware, LocationQuery, locationQueryOpenApi } from "./location"
 
 const Inputs = Schema.Record(Schema.String, Schema.String)
@@ -12,6 +12,7 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
     HttpApiEndpoint.get("integration.list", "/api/integration", {
       query: LocationQuery,
       success: Location.response(Schema.Array(Integration.Info)),
+      error: [InvalidRequestError, UnknownError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -27,6 +28,7 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
       params: { integrationID: Integration.ID },
       query: LocationQuery,
       success: Location.response(Schema.UndefinedOr(Integration.Info)),
+      error: [InvalidRequestError, UnknownError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -83,6 +85,7 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
       params: { attemptID: Integration.AttemptID },
       query: LocationQuery,
       success: Location.response(Integration.AttemptStatus),
+      error: UnknownError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -115,6 +118,7 @@ export const IntegrationGroup = HttpApiGroup.make("server.integration")
       params: { attemptID: Integration.AttemptID },
       query: LocationQuery,
       success: HttpApiSchema.NoContent,
+      error: UnknownError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

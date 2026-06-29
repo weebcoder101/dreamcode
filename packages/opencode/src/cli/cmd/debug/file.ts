@@ -4,13 +4,16 @@ import { FileSystem } from "@opencode-ai/core/filesystem"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath, RelativePath } from "@opencode-ai/core/schema"
+import { dieSyncError } from "@/effect/sync-error"
 import { effectCmd } from "../../effect-cmd"
 import { cmd } from "../cmd"
 
 const filesystem = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(
-    Effect.provide(LocationServiceMap.get(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
-    Effect.provide(LocationServiceMap.layer),
+  dieSyncError(
+    effect.pipe(
+      Effect.provide(LocationServiceMap.get(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
+      Effect.provide(LocationServiceMap.layer),
+    ),
   )
 
 const FileSearchCommand = effectCmd({

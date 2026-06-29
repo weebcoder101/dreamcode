@@ -2,7 +2,7 @@ import { Effect, Layer, Context, Schedule, Logger } from "effect"
 import { Database } from "@/storage/storage"
 import { inArray, eq, and, lte, sql } from "drizzle-orm"
 import { GlobalBus } from "@/bus/global"
-import { Bus } from "@/bus/bus"
+import * as Bus from "@/bus/bus"
 import type { SessionID, MessageID } from "@/session/schema"
 import { ActorRegistryTable, ActorForkContextTable } from "./actor.sql"
 import type { Actor, ActorStatus, ActorOutcome, ContextMode, Lifecycle, SpawnMode, ToolWhitelist } from "./schema"
@@ -85,10 +85,11 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/ActorRegistry") {}
 
-export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
+export const layer: Layer.Layer<Service, never, Bus.Service | Database.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
+    const { db } = yield* Database.Service
 
     // --- CRUD methods ---
 
@@ -122,12 +123,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
         tools: input.tools ?? null,
         last_turn_time: now,
         turn_count: 0,
+        gate_react_count: 0,
         last_error: null,
         time_completed: null,
         time_created: now,
         time_updated: now,
       }
-      yield* Effect.sync(() => Database.use((db) => db.insert(ActorRegistryTable).values(row).run()))
+      yield* Effect.orDie(db.insert(ActorRegistryTable).values(row).run())
       yield* bus.publish(Events.ActorRegistered, {
         sessionID: input.sessionID,
         actorID: input.actorID,
@@ -159,31 +161,23 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
       if (patch.lastOutcome !== undefined) set.last_outcome = patch.lastOutcome
       if (patch.lastError !== undefined) set.last_error = patch.lastError
       else if (patch.lastOutcome !== undefined && patch.lastOutcome !== "failure") set.last_error = null
-      yield* Effect.sync(() =>
-        Database.use((db) =>
-          db
-            .update(ActorRegistryTable)
-            .set(set)
-            .where(
-              and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
-            )
-            .run(),
-        ),
-      )
+      yield* Effect.orDie(db
+        .update(ActorRegistryTable)
+        .set(set)
+        .where(
+          and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
+        )
+        .run())
       // Re-read so the event payload reflects committed row values (not the
       // sparse patch). Skip publish if the row vanished between UPDATE and
       // SELECT — a dropped event beats a misleading one.
-      const row = yield* Effect.sync(() =>
-        Database.use((db) =>
-          db
-            .select()
-            .from(ActorRegistryTable)
-            .where(
-              and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
-            )
-            .get(),
-        ),
-      )
+      const row = yield* Effect.orDie(db
+        .select()
+        .from(ActorRegistryTable)
+        .where(
+          and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
+        )
+        .get())
       if (!row) return
       yield* bus.publish(Events.ActorStatusChanged, {
         sessionID,
@@ -198,62 +192,46 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
 
     const updateTurn = Effect.fn("ActorRegistry.updateTurn")(function* (sessionID: SessionID, actorID: string) {
       const now = Date.now()
-      yield* Effect.sync(() =>
-        Database.use((db) =>
-          db
-            .update(ActorRegistryTable)
-            .set({
-              last_turn_time: now,
-              turn_count: sql`${ActorRegistryTable.turn_count} + 1`,
-              time_updated: now,
-            })
-            .where(
-              and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
-            )
-            .run(),
-        ),
-      )
+      yield* Effect.orDie(db
+        .update(ActorRegistryTable)
+        .set({
+          last_turn_time: now,
+          turn_count: sql`${ActorRegistryTable.turn_count} + 1`,
+          time_updated: now,
+        })
+        .where(
+          and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
+        )
+        .run())
     })
 
     const get = Effect.fn("ActorRegistry.get")(function* (sessionID: SessionID, actorID: string) {
-      const row = yield* Effect.sync(() =>
-        Database.use((db) =>
-          db
-            .select()
-            .from(ActorRegistryTable)
-            .where(
-              and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
-            )
-            .get(),
-        ),
-      )
+      const row = yield* Effect.orDie(db
+        .select()
+        .from(ActorRegistryTable)
+        .where(
+          and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
+        )
+        .get())
       return row ? fromRow(row) : undefined
     })
 
     const listBySession = Effect.fn("ActorRegistry.listBySession")(function* (sessionID: SessionID) {
-      const rows = yield* Effect.sync(() =>
-        Database.use((db) =>
-          db.select().from(ActorRegistryTable).where(eq(ActorRegistryTable.session_id, sessionID)).all(),
-        ),
-      )
+      const rows = yield* Effect.orDie(db.select().from(ActorRegistryTable).where(eq(ActorRegistryTable.session_id, sessionID)).all())
       return rows.map(fromRow)
     })
 
     const listActive = Effect.fn("ActorRegistry.listActive")(function* () {
-      const rows = yield* Effect.sync(() =>
-        Database.use((db) =>
-          db
-            .select()
-            .from(ActorRegistryTable)
-            .where(
-              and(
-                inArray(ActorRegistryTable.status, ["pending", "running"]),
-                eq(ActorRegistryTable.background, true),
-              ),
-            )
-            .all(),
-        ),
-      )
+      const rows = yield* Effect.orDie(db
+        .select()
+        .from(ActorRegistryTable)
+        .where(
+          and(
+            inArray(ActorRegistryTable.status, ["pending", "running"]),
+            eq(ActorRegistryTable.background, true),
+          ),
+        )
+        .all())
       return rows.map(fromRow)
     })
 
@@ -261,20 +239,16 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
       sessionID: SessionID,
       parentActorID: string,
     ) {
-      const rows = yield* Effect.sync(() =>
-        Database.use((db) =>
-          db
-            .select()
-            .from(ActorRegistryTable)
-            .where(
-              and(
-                eq(ActorRegistryTable.session_id, sessionID),
-                eq(ActorRegistryTable.parent_actor_id, parentActorID),
-              ),
-            )
-            .all(),
-        ),
-      )
+      const rows = yield* Effect.orDie(db
+        .select()
+        .from(ActorRegistryTable)
+        .where(
+          and(
+            eq(ActorRegistryTable.session_id, sessionID),
+            eq(ActorRegistryTable.parent_actor_id, parentActorID),
+          ),
+        )
+        .all())
       return rows.map(fromRow)
     })
 
@@ -323,34 +297,28 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
       actorID: string,
       count: number,
     ) {
-      yield* Effect.sync(() =>
-        Database.use((db) =>
+      yield* Effect.orDie(
           db
             .update(ActorRegistryTable)
             .set({ gate_react_count: count, time_updated: Date.now() })
             .where(
               and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
             )
-            .run(),
-        ),
-      )
+            .run())
     })
 
     const getGateReactCount = Effect.fn("ActorRegistry.getGateReactCount")(function* (
       sessionID: SessionID,
       actorID: string,
     ) {
-      const row = yield* Effect.sync(() =>
-        Database.use((db) =>
+      const row = yield* Effect.orDie(
           db
             .select({ gate_react_count: ActorRegistryTable.gate_react_count })
             .from(ActorRegistryTable)
             .where(
               and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.actor_id, actorID)),
             )
-            .get(),
-        ),
-      )
+            .get())
       return row?.gate_react_count ?? 0
     })
 
@@ -360,8 +328,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
       context: unknown,
     ) {
       const now = Date.now()
-      yield* Effect.sync(() =>
-        Database.use((db) =>
+      yield* Effect.orDie(
           db
             .insert(ActorForkContextTable)
             .values({
@@ -375,26 +342,21 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
               target: [ActorForkContextTable.session_id, ActorForkContextTable.actor_id],
               set: { context, time_updated: now },
             })
-            .run(),
-        ),
-      )
+            .run())
     })
 
     const loadForkContext = Effect.fn("ActorRegistry.loadForkContext")(function* (
       sessionID: SessionID,
       actorID: string,
     ) {
-      const row = yield* Effect.sync(() =>
-        Database.use((db) =>
+      const row = yield* Effect.orDie(
           db
             .select({ context: ActorForkContextTable.context })
             .from(ActorForkContextTable)
             .where(
               and(eq(ActorForkContextTable.session_id, sessionID), eq(ActorForkContextTable.actor_id, actorID)),
             )
-            .get(),
-        ),
-      )
+            .get())
       return row?.context as unknown | undefined
     })
 
@@ -402,31 +364,25 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
       sessionID: SessionID,
       actorID: string,
     ) {
-      yield* Effect.sync(() =>
-        Database.use((db) =>
+      yield* Effect.orDie(
           db
             .delete(ActorForkContextTable)
             .where(
               and(eq(ActorForkContextTable.session_id, sessionID), eq(ActorForkContextTable.actor_id, actorID)),
             )
-            .run(),
-        ),
-      )
+            .run())
     })
 
     const allocateActorID = Effect.fn("ActorRegistry.allocateActorID")(function* (
       sessionID: SessionID,
       agentType: string,
     ) {
-      const existing = yield* Effect.sync(() =>
-        Database.use((db) =>
+      const existing = yield* Effect.orDie(
           db
             .select({ actor_id: ActorRegistryTable.actor_id })
             .from(ActorRegistryTable)
             .where(and(eq(ActorRegistryTable.session_id, sessionID), eq(ActorRegistryTable.agent, agentType)))
-            .all(),
-        ),
-      )
+            .all())
       const prefix = `${agentType}-`
       let max = 0
       for (const row of existing) {
@@ -441,40 +397,33 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
     // --- Orphan Recovery ---
     // On init, mark all pending/running actors as idle with failure outcome.
     // Per spec B6: don't auto-revive — they wake on next sender's send.
-    yield* Effect.sync(() =>
-      Database.use((db) => {
-        const now = Date.now()
-        db.update(ActorRegistryTable)
-          .set({
-            status: "idle",
-            last_outcome: "failure",
-            last_error: "orphaned: process restarted",
-            time_updated: now,
-            time_completed: now,
-          })
-          .where(inArray(ActorRegistryTable.status, ["pending", "running"]))
-          .run()
-      }),
-    )
-    log.info("orphan recovery complete")
+    const now = Date.now()
+    yield* Effect.orDie(db
+      .update(ActorRegistryTable)
+      .set({
+        status: "idle",
+        last_outcome: "failure",
+        last_error: "orphaned: process restarted",
+        time_updated: now,
+        time_completed: now,
+      })
+      .where(inArray(ActorRegistryTable.status, ["pending", "running"]))
+      .run())
+    yield* Effect.log("orphan recovery complete")
 
     // --- Stuck Detection ---
     const scanStuck = Effect.gen(function* () {
       const cutoff = Date.now() - STUCK_THRESHOLD_MS
-      const stuck = yield* Effect.sync(() =>
-        Database.use((db) =>
-          db
-            .select()
-            .from(ActorRegistryTable)
+      const stuck = yield* Effect.orDie(db
+        .select()
+        .from(ActorRegistryTable)
             .where(
               and(
                 eq(ActorRegistryTable.status, "running"),
                 lte(ActorRegistryTable.last_turn_time, cutoff),
               ),
             )
-            .all(),
-        ),
-      )
+            .all())
       for (const row of stuck) {
         const entry = fromRow(row)
         yield* bus.publish(Events.ActorStuck, {
@@ -515,6 +464,6 @@ export const layer: Layer.Layer<Service, never, Bus.Service> = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Bus.layer))
+export const defaultLayer = layer.pipe(Layer.provide(Bus.layer), Layer.provide(Database.defaultLayer))
 
 export * as ActorRegistry from "./registry"

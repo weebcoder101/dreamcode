@@ -88,7 +88,7 @@ describe("HttpApi Security Headers", () => {
 
   it.live("security headers are applied to error responses", () =>
     Effect.gen(function* () {
-      const handler = HttpRouter.toWebHandler(
+      const { handler } = HttpRouter.toWebHandler(
         HttpApiApp.createRoutes().pipe(
           Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ OPENCODE_SERVER_PASSWORD: "secret" }))),
         ),

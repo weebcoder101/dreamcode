@@ -2,6 +2,7 @@ import { AgentV2 } from "@opencode-ai/core/agent"
 import { Location } from "@opencode-ai/core/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { UnknownError } from "../errors"
 import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
 
 export const AgentGroup = HttpApiGroup.make("server.agent")
@@ -9,6 +10,7 @@ export const AgentGroup = HttpApiGroup.make("server.agent")
     HttpApiEndpoint.get("agent.list", "/api/agent", {
       query: LocationQuery,
       success: Location.response(Schema.Array(AgentV2.Info)),
+      error: UnknownError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

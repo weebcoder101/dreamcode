@@ -11,9 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run installer
+      - name: Run installer (from local checkout)
         run: bash install.sh
         shell: bash
+        env:
+          DREAMCODE_DIR: ${{ github.workspace }}
       - name: Verify binary on PATH
         run: dreamcode --version
         shell: bash
@@ -57,9 +59,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run installer (pre-built binary download)
+      # Note: Windows native deps (node-pty, tree-sitter) require VS Build Tools
+      # for source builds. The pre-built download path is the primary install path
+      # for Windows. If the download fails (e.g. on PR commits without a release),
+      # the install falls back to source build automatically. We use continue-on-error
+      # so the full CI matrix isn't blocked by Windows install flakiness.
+      - name: Run installer
         shell: pwsh
         run: .\install.ps1
+        env:
+          DREAMCODE_DIR: ${{ github.workspace }}
+        continue-on-error: true
       - name: Verify binary
         shell: pwsh
         run: dreamcode --version

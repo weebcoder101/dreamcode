@@ -106,8 +106,11 @@ export const make = Effect.gen(function* () {
     return path.resolve(opts.cwd)
   })
 
-  const env = (opts: ChildProcess.CommandOptions) =>
-    opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env
+  const env = (opts: ChildProcess.CommandOptions) => {
+    if (opts.env === undefined) return undefined // inherit all (default Bun/Node behavior)
+    if (opts.env === null) return {} // explicit empty env
+    return opts.env // use provided env as-is (no process.env spread)
+  }
 
   const input = (x: ChildProcess.CommandInput | undefined): NodeChildProcess.IOType | undefined =>
     Stream.isStream(x) ? "pipe" : x

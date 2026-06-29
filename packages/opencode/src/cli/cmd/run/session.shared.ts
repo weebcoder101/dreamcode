@@ -37,7 +37,9 @@ function fileName(url: string, filename?: string) {
     if (name) {
       return decodeURIComponent(name)
     }
-  } catch {}
+  } catch (e) {
+    console.warn("[session.shared] extractTabSourceName error:", String(e))
+  }
 
   return url
 }

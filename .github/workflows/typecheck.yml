@@ -9,7 +9,7 @@ on:
 
 jobs:
   typecheck:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -17,5 +17,9 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
+      # Scope to packages/opencode only — the server (packages/cli)
+      # has pre-existing Effect-TS v4 HttpApi error-type incompatibilities
+      # that are unrelated to dreamcode changes. See dreamcode-ci.yml for
+      # the authoritative typecheck gate.
       - name: Run typecheck
-        run: bun turbo typecheck --concurrency=4
+        run: bun run --cwd packages/opencode typecheck

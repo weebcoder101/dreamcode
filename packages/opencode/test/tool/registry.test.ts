@@ -10,7 +10,7 @@ import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestConfig } from "../fixture/config"
 import { Config } from "@/config/config"
-import { Plugin } from "@/plugin"
+import { Plugin, type Interface as PluginInterface } from "@/plugin"
 import { Agent } from "@/agent/agent"
 import { InstanceState } from "@/effect/instance-state"
 
@@ -32,7 +32,7 @@ const brokenPluginLayer = Layer.succeed(
   Plugin.Service.of({
     init: () => Effect.void,
     trigger: ((_name: unknown, _input: unknown, output: unknown) =>
-      Effect.succeed(output)) as Plugin.Interface["trigger"],
+      Effect.succeed(output)) as PluginInterface["trigger"],
     list: () =>
       Effect.succeed([
         {

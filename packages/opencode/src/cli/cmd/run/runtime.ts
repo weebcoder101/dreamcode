@@ -20,7 +20,7 @@ import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./run
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { trace } from "./trace"
 import { clearSubagentModel, cycleVariant, formatModelLabel, resolveSavedSubagentModel, resolveSavedVariant, resolveVariant, saveSubagentModel, saveVariant } from "./variant.shared"
-import type { LocalReplayAnchor, LocalReplayRow, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
+import type { LocalReplayAnchor, LocalReplayRow, RunCommand, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
 
 /** @internal Exported for testing */
 export { pickVariant, resolveVariant } from "./variant.shared"

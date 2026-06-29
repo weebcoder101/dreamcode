@@ -10,7 +10,11 @@ on:
 concurrency:
   # Keep every run on dev so cancelled checks do not pollute the default branch
   # commit history. PRs and other branches still share a group and cancel stale runs.
-  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
+  # NOTE: `case()` is not a valid GitHub Actions expression function.
+  # We use &&/|| as a ternary-like alternative:
+  #   dev branch → unique per-run ID (never cancelled)
+  #   PRs/other → shared group key (stale runs cancelled)
+  group: ${{ github.ref == 'refs/heads/dev' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
   cancel-in-progress: true
 
 permissions:
@@ -28,9 +32,9 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-latest
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-latest
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -65,7 +69,10 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 20
-        run: bun turbo test --output-logs=errors-only --log-order=grouped --log-prefix=task
+        # Scope to opencode#test only — `bun turbo test` runs ALL workspace
+        # test tasks including sub-packages that require native compilation
+        # (node-gyp, VS Build Tools) and fail on Windows.
+        run: bun turbo opencode#test --output-logs=errors-only --log-order=grouped --log-prefix=task
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
@@ -81,9 +88,9 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-latest
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-latest
     runs-on: ${{ matrix.settings.host }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
@@ -131,6 +138,7 @@ jobs:
         run: bun --cwd packages/app test:e2e:local
         env:
           CI: true
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
         timeout-minutes: 30
 
       - name: Upload Playwright artifacts

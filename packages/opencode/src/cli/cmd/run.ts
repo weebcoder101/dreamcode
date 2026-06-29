@@ -820,6 +820,7 @@ export const RunCommand = effectCmd({
             replayLimit: args["replay-limit"],
             agent,
             model,
+            subagentModel: undefined,
             variant: args.variant,
             files,
             initialInput,

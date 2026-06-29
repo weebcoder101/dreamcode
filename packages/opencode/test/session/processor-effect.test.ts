@@ -366,7 +366,7 @@ it.live("session.processor effect tests preserve text start time", () =>
         expect(text?.text).toBe("hello")
         expect(text?.time?.start).toBeDefined()
         expect(text?.time?.end).toBeDefined()
-        expect(text!.time!.start).toBeLessThan(text!.time!.end)
+        expect(text!.time!.start as number).toBeLessThan(text!.time!.end as number)
       }),
     { config: (url) => providerCfg(url) },
   ),
@@ -755,12 +755,12 @@ it.live("session.processor effect tests complete AI SDK tool calls when native f
         expect(call?.callID).toBe("call_1")
         expect(call?.tool).toBe("lookup")
         expect(call?.state.status).toBe("completed")
-        expect(call!.state.input).toEqual({ query: "weather" })
-        expect(call.state.output).toBe("result:weather")
-        expect(call.state.title).toBe("Weather lookup")
-        expect(call.state.metadata).toEqual({ source: "test" })
-        expect(call.state.time.start).toBeDefined()
-        expect(call.state.time.end).toBeDefined()
+        expect((call?.state as any).input).toEqual({ query: "weather" })
+        expect((call?.state as any).output).toBe("result:weather")
+        expect((call?.state as any).title).toBe("Weather lookup")
+        expect((call?.state as any).metadata).toEqual({ source: "test" })
+        expect((call?.state as any).time.start).toBeDefined()
+        expect((call?.state as any).time.end).toBeDefined()
       }),
     { config: (url) => providerCfg(url) },
   ),
@@ -803,8 +803,8 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
             tools: {
               bash: tool({
                 description: "Run a bash command",
-                inputSchema: z.object({ cmd: z.string() }),
-                execute: async () => new Promise<never>(() => {}),
+                inputSchema: z.object({ cmd: z.string() }) as any,
+                execute: undefined,
               }),
             },
           })

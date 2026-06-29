@@ -11,11 +11,12 @@ import {
   ContextOverflowError,
   Info,
   OutputLengthError,
-  Part,
   StructuredOutputError,
   SubtaskPart,
   User,
-  WithParts,
+  type OutputFormat,
+  type Part,
+  type WithParts,
   type ToolPart,
 } from "@opencode-ai/core/v1/session"
 
@@ -44,6 +45,10 @@ interface FetchDecompressionError extends Error {
   errno: number
   path: string
 }
+
+export type { OutputFormat, Part, WithParts } from "@opencode-ai/core/v1/session"
+
+export type Provenance = string
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
 export { isMedia }
@@ -736,7 +741,9 @@ export function fromError(
             },
           ).toObject()
         }
-      } catch {}
+      } catch (convErr) {
+        console.warn("[message-v2] failed to assemble conversation error:", String(convErr))
+      }
       return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e }).toObject()
   }
 }

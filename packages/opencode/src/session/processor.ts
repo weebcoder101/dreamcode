@@ -428,7 +428,7 @@ export const layer = Layer.effect(
 
           case "tool-input-start":
             if (ctx.assistantMessage.summary) {
-              throw new Error(`Tool call not allowed while generating summary: ${value.name}`)
+              return yield* Effect.die(new Error(`Tool call not allowed while generating summary: ${value.name}`))
             }
             yield* ensureToolCall(value)
             return
@@ -469,7 +469,7 @@ export const layer = Layer.effect(
 
           case "tool-call": {
             if (ctx.assistantMessage.summary) {
-              throw new Error(`Tool call not allowed while generating summary: ${value.name}`)
+              return yield* Effect.die(new Error(`Tool call not allowed while generating summary: ${value.name}`))
             }
             const toolCall = yield* ensureToolCall(value)
             const input = isRecord(value.input) ? value.input : { value: value.input }
@@ -673,7 +673,7 @@ export const layer = Layer.effect(
           }
 
           case "provider-error":
-            throw new Error(value.message)
+            return yield* Effect.die(new Error(value.message))
 
           case "step-start":
             if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
@@ -1002,7 +1002,7 @@ export const layer = Layer.effect(
 
           // Lazy effect — each evaluation creates a fresh LLM stream.
           // Avoids Effect.retry which has uninterruptible sleep in Effect v4 beta.74.
-          const attempt = Effect.suspend((): Effect.Effect<void, never, any> =>
+          const attempt = Effect.suspend((): Effect.Effect<void, unknown, any> =>
             Effect.gen(function* () {
               ctx.currentText = undefined
               ctx.currentTextID = undefined
@@ -1084,7 +1084,7 @@ export const layer = Layer.effect(
         },
         updateToolCall,
         completeToolCall,
-        process,
+        process: process as Handle["process"],
       } satisfies Handle
     })
 

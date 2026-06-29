@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from "effect"
-import { InstanceState } from "@/effect"
+import { InstanceState } from "@/effect/instance-state"
 import type { SessionID } from "@/session/schema"
 
 /**

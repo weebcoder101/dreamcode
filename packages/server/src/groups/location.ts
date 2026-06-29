@@ -6,6 +6,7 @@ import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Effect, Layer, Schema } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
+import { UnknownError } from "../errors"
 
 export const LocationQuery = Schema.Struct({
   location: Schema.optional(
@@ -52,13 +53,14 @@ export class LocationMiddleware extends HttpApiMiddleware.Service<
   {
     provides: LocationServices
   }
->()("@opencode/HttpApiLocation") {}
+>()("@opencode/HttpApiLocation", { error: UnknownError }) {}
 
 export const LocationGroup = HttpApiGroup.make("server.location")
   .add(
     HttpApiEndpoint.get("location.get", "/api/location", {
       query: LocationQuery,
       success: Location.Info,
+      error: UnknownError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -89,7 +91,18 @@ export const layer = Layer.effect(
     return LocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* effect.pipe(Effect.provide(locations.get(ref(request))))
+        return yield* effect.pipe(
+          Effect.provide(locations.get(ref(request))),
+          Effect.catchTag("EventV2.InvalidSyncEvent", (error) => {
+            const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+            return Effect.logError("invalid sync event in location middleware").pipe(
+              Effect.annotateLogs({ ref }),
+              Effect.andThen(
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref })),
+              ),
+            )
+          }),
+        )
       }),
     )
   }),

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test"
-import { mkdirSync, writeFileSync, rmSync } from "fs"
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { randomBytes } from "crypto"
@@ -10,6 +10,9 @@ import {
   getPythonArgs,
   resolveSkillsDir,
   resolveScript,
+  validateScriptPath,
+  cleanupTmpFile,
+  writePromptToTmpFile,
   HOME,
 } from "../../src/skill/python-resolver"
 
@@ -145,5 +148,76 @@ describe("resolveScript", () => {
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// validateScriptPath — moved from chain-executor.test.ts
+// ---------------------------------------------------------------------------
+
+describe("validateScriptPath", () => {
+  const cwd = "/tmp/test-project"
+
+  it("rejects empty string", () => {
+    expect(validateScriptPath("", cwd)).toBe(false)
+  })
+
+  it("rejects path traversal escape", () => {
+    const malicious = "/tmp/test-project/.dreamcode/skills/../../etc/passwd"
+    expect(validateScriptPath(malicious, cwd)).toBe(false)
+  })
+
+  it("rejects path pointing outside allowed dirs", () => {
+    expect(validateScriptPath("/bin/sh", cwd)).toBe(false)
+  })
+
+  it("rejects absolute path outside project", () => {
+    expect(validateScriptPath("/usr/local/bin/malware", cwd)).toBe(false)
+  })
+
+  it("rejects relative path that escapes cwd", () => {
+    const resolved = "/tmp/test-project/../../../etc/passwd"
+    expect(validateScriptPath(resolved, cwd)).toBe(false)
+  })
+
+  it("rejects non-absolute path", () => {
+    expect(validateScriptPath("relative/path/script.py", cwd)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// writePromptToTmpFile / cleanupTmpFile
+// ---------------------------------------------------------------------------
+
+describe("writePromptToTmpFile / cleanupTmpFile", () => {
+  const sandbox = join(tmpdir(), `dreamcode-tmpfile-test-${randomBytes(4).toString("hex")}`)
+  beforeEach(() => mkdirSync(sandbox, { recursive: true }))
+  afterEach(() => rmSync(sandbox, { recursive: true, force: true }))
+
+  it("writes and cleans up a temp file", () => {
+    const p = writePromptToTmpFile("hello world", sandbox, "test-")
+    expect(p).toBeTruthy()
+    expect(join("")).toBe(".") // sanity: path.join("") returns "." on POSIX
+    // File exists before cleanup
+    expect(existsSync(p)).toBe(true)
+    cleanupTmpFile(p)
+    // File is gone after cleanup
+    expect(existsSync(p)).toBe(false)
+  })
+
+  it("cleanupTmpFile does not throw on non-existent file", () => {
+    expect(() => cleanupTmpFile("/nonexistent/path")).not.toThrow()
+  })
+
+  it("cleanupTmpFile does not throw on empty string", () => {
+    expect(() => cleanupTmpFile("")).not.toThrow()
+  })
+
+  it("writes content that can be read back", () => {
+    const content = "test content 123"
+    const p = writePromptToTmpFile(content, sandbox, "verify-")
+    const actual = readFileSync(p, "utf-8")
+    expect(actual).toBe(content)
+    cleanupTmpFile(p)
   })
 })

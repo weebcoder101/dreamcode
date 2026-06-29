@@ -28,10 +28,10 @@ const plugin = createSolidTransformPlugin()
 // bun 1.3.x corrupts rest parameters at the JSC engine level, breaking
 // Schema.Union, Schema.check, etc. These patches run during Bun.build and
 // are included in the compiled binary.
-const effectPlugin: Bun.Plugin = {
+const effectPlugin: any = {
   name: "effect-bun-patches",
-  setup(build) {
-    build.onLoad({ filter: /\/effect\/dist\//, namespace: "file" }, async (args) => {
+  setup(build: any) {
+    build.onLoad({ filter: /\/effect\/dist\//, namespace: "file" }, async (args: any) => {
       let source = await Bun.file(args.path).text()
       source = source.replace(/\/\*[#@]\s*__PURE__\s*\*\//g, "")
       source = source.replace(/\bencoder\.(encode|encodeInto)\(/g, "new TextEncoder().$1(")
@@ -264,7 +264,7 @@ for (const item of targets) {
   const skillsDest = path.resolve(`dist/${name}/bin/skills`)
   if (fs.existsSync(skillsSrc)) {
     fs.cpSync(skillsSrc, skillsDest, { recursive: true, force: true })
-    const pyCount = fs.readdirSync(skillsDest, { recursive: true }).filter((f) => f.endsWith(".py")).length
+    const pyCount = (fs.readdirSync(skillsDest, { recursive: true }) as string[]).filter((f) => f.endsWith(".py")).length
     console.log(`Bundled ${pyCount} Python skill scripts for ${name}`)
   }
 
@@ -329,25 +329,36 @@ if ((singleFlag || win32Flag) && targets.length > 0) {
     // Path is double-quoted via @ prefix; safe for spaces/special chars
     console.log(`Created Windows shim bin/dreamcode.cmd -> ${relToDist}\\dreamcode.exe`)
   } else {
-    const binSymlink = path.join(binDir, "dreamcode")
+    const binLauncher = path.join(binDir, "dreamcode")
     if (fs.existsSync(distBin)) {
-      fs.rmSync(binSymlink, { force: true })
-      fs.mkdirSync(binDir, { recursive: true })
+      // Update the platform-aware launcher script to point directly at the
+      // just-built binary. The launcher detects the platform at runtime, which
+      // is more robust than a symlink (which breaks when dist/ moves or the
+      // checkout is on a different OS).
       const rel = path.relative(binDir, distBin)
-      fs.symlinkSync(rel, binSymlink)
-      console.log(`Linked bin/dreamcode -> ${rel}`)
+      fs.mkdirSync(binDir, { recursive: true })
+      fs.writeFileSync(
+        binLauncher,
+        [
+          `#!/usr/bin/env bash`,
+          `SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"`,
+          `exec "$SCRIPT_DIR/${rel}" "$@"`,
+        ].join("\n") + "\n",
+      )
+      fs.chmodSync(binLauncher, 0o755)
+      console.log(`Updated bin/dreamcode launcher -> ${rel}`)
     }
   }
 }
 
-// Register globally so `dreamcode` works from anywhere after build
-if (singleFlag || win32Flag) {
-  try {
-    await $`bun link`
-    console.log(`Registered: bun link → dreamcode is now globally available`)
-  } catch {
-    console.warn(`Warning: bun link failed — run "bun link" manually to use dreamcode globally`)
-  }
+// Register globally so `dreamcode` works from anywhere after build.
+// Runs unconditionally so the global symlink always reflects the latest
+// binary, regardless of --single/--win32 flags.
+try {
+  await $`bun link`
+  console.log(`Registered: bun link → dreamcode is now globally available`)
+} catch {
+  console.warn(`Warning: bun link failed — run "bun link" manually to use dreamcode globally`)
 }
 
 if (Script.release || win32Flag) {

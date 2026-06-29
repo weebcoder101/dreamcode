@@ -1,6 +1,7 @@
 import { Credential } from "@opencode-ai/core/credential"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { UnknownError } from "../errors"
 
 export const CredentialGroup = HttpApiGroup.make("server.credential")
   .add(
@@ -8,6 +9,7 @@ export const CredentialGroup = HttpApiGroup.make("server.credential")
       params: { credentialID: Credential.ID },
       payload: Schema.Struct({ label: Schema.String }),
       success: HttpApiSchema.NoContent,
+      error: UnknownError,
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.credential.update",
@@ -20,6 +22,7 @@ export const CredentialGroup = HttpApiGroup.make("server.credential")
     HttpApiEndpoint.delete("credential.remove", "/api/credential/:credentialID", {
       params: { credentialID: Credential.ID },
       success: HttpApiSchema.NoContent,
+      error: UnknownError,
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.credential.remove",

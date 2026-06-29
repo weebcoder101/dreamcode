@@ -1,8 +1,8 @@
 import { Context, Deferred, Effect, Layer } from "effect"
-import { Bus } from "@/bus/bus"
+import * as Bus from "@/bus/bus"
 import { ActorRegistry } from "@/actor/registry"
 import type { Actor } from "@/actor/schema"
-import { Session } from "@/session/session"
+import { Session, type NotFound } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import { ActorStatusChanged } from "@/actor/events"
 import { parseReturnHeader, type ReturnStatus } from "@/actor/return-header"
@@ -63,7 +63,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | ActorRegistry.Serv
     // avoid duplicating the result downstream (spec §5.2).
     const lastAssistantResult = (sessionID: SessionID, actorID: string) =>
       Effect.gen(function* () {
-        const msgs = yield* sessions.messages({ sessionID, agentID: actorID })
+        const msgs = yield* sessions.messages({ sessionID })
         const last = msgs.findLast((m) => m.info.role === "assistant")
         if (!last) return { result: undefined as string | undefined, structured: undefined as unknown }
         const structured = last.info.role === "assistant" ? last.info.structured : undefined
@@ -74,7 +74,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | ActorRegistry.Serv
         return { result: textPart?.text, structured: undefined as unknown }
       })
 
-    const snapshot = (sessionID: SessionID, actorID: string, entry: Actor): Effect.Effect<WaitResult> =>
+    const snapshot = (sessionID: SessionID, actorID: string, entry: Actor): Effect.Effect<WaitResult, NotFound> =>
       Effect.gen(function* () {
         const extracted =
           entry.status === "idle" && entry.lastOutcome === "success"
@@ -107,15 +107,15 @@ export const layer: Layer.Layer<Service, never, Bus.Service | ActorRegistry.Serv
       // Fast path: registry already in a wait-resolving state.
       const entry = yield* reg.get(input.sessionID, input.actor_id)
       if (!entry) return { status: "unknown" as const, actor_id: input.actor_id }
-      if (isWaitResolving(entry)) return yield* snapshot(input.sessionID, input.actor_id, entry)
+      if (isWaitResolving(entry)) return yield* snapshot(input.sessionID, input.actor_id, entry).pipe(Effect.orDie)
 
       const resolved = yield* Deferred.make<WaitResult>()
       const timeoutMs = input.timeout_ms ?? DEFAULT_TIMEOUT_MS
 
       return yield* Effect.acquireUseRelease(
         bus.subscribeCallback(ActorStatusChanged, (evt) => {
-          if (evt.properties.actorID !== input.actor_id) return
-          if (evt.properties.sessionID !== input.sessionID) return
+          if (evt.actorID !== input.actor_id) return
+          if (evt.sessionID !== input.sessionID) return
           // ActorStatusChanged carries status + lastOutcome but not lifecycle.
           // Re-read the row to get lifecycle (the missing predicate input).
           Effect.runFork(
@@ -123,7 +123,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | ActorRegistry.Serv
               const fresh = yield* reg.get(input.sessionID, input.actor_id)
               if (!fresh) return
               if (!isWaitResolving(fresh)) return
-              const snap = yield* snapshot(input.sessionID, input.actor_id, fresh)
+              const snap = yield* snapshot(input.sessionID, input.actor_id, fresh).pipe(Effect.orDie)
               Deferred.doneUnsafe(resolved, Effect.succeed(snap))
             }).pipe(
               Effect.catchCause((cause) =>
@@ -138,7 +138,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | ActorRegistry.Serv
             // the initial get() above and the bus.subscribeCallback bind.
             const recheck = yield* reg.get(input.sessionID, input.actor_id)
             if (recheck && isWaitResolving(recheck)) {
-              return yield* snapshot(input.sessionID, input.actor_id, recheck)
+              return yield* snapshot(input.sessionID, input.actor_id, recheck).pipe(Effect.orDie)
             }
             const raced = yield* Deferred.await(resolved).pipe(
               Effect.timeout(timeoutMs),

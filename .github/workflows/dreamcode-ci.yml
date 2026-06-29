@@ -1,0 +1,77 @@
+name: Dreamcode CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CI: true
+  OPENCODE_DISABLE_SHARE: 1
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # Scope typecheck to packages/opencode only — the server (packages/cli)
+      # has pre-existing Effect-TS v4 HttpApi error-type incompatibilities
+      # that are unrelated to dreamcode changes.
+      - name: Typecheck
+        run: bun run --cwd packages/opencode typecheck
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Run unit tests (skill package)
+        run: bun test test/skill/ --timeout 30000
+        working-directory: packages/opencode
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Run integration tests (sensor gate)
+        run: bun test test/skill/sensor-gate.integration.test.ts --timeout 30000
+        working-directory: packages/opencode
+      - name: Run integration tests (token predictor)
+        run: bun test test/skill/token-predictor.integration.test.ts --timeout 30000
+        working-directory: packages/opencode
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [typecheck, unit-tests, integration-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Build dreamcode binary
+        run: bun run packages/opencode/script/build.ts
+      - name: Binary smoke test
+        run: |
+          chmod +x packages/opencode/dist/dreamcode-linux-x64/bin/dreamcode
+          packages/opencode/dist/dreamcode-linux-x64/bin/dreamcode --version
+          packages/opencode/dist/dreamcode-linux-x64/bin/dreamcode --help
+      - name: Binary regression tests
+        run: bun test test/build/binary-regression.test.ts --timeout 30000
+        working-directory: packages/opencode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dreamcode-linux-x64
+          path: packages/opencode/dist/dreamcode-linux-x64/

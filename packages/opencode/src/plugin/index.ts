@@ -19,7 +19,7 @@ import { CloudflareAIGatewayAuthPlugin, CloudflareWorkersAuthPlugin } from "./cl
 import { AzureAuthPlugin } from "./azure"
 import { DigitalOceanAuthPlugin } from "./digitalocean"
 import { XaiAuthPlugin } from "./xai"
-import { SensorGateEnforcerPlugin } from "@/skill/sensor-gate-enforcer.js"
+import { SensorGateEnforcerPlugin } from "@/skill/sensor-gate-enforcer"
 import { Effect, Layer, Context } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"

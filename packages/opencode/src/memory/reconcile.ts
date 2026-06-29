@@ -1,6 +1,7 @@
 import * as fs from "fs/promises"
 import path from "path"
-import { Database } from "../storage/storage"
+import { Effect } from "effect"
+import type { Database } from "../storage/storage"
 import { eq } from "drizzle-orm"
 import { Log } from "../util"
 import { MemoryFtsTable } from "./fts.sql"
@@ -44,102 +45,113 @@ export async function walkCcRoot(base: string): Promise<string[]> {
   return out
 }
 
-export async function indexFromDisk(
+export function indexFromDisk(
+  db: Database.Interface["db"],
   absPath: string,
   loc: MemoryLocator,
   bodyType: "mimo" | "cc",
   oldFingerprint?: string,
-): Promise<"hit" | "updated" | "skipped"> {
-  const stat = await fs.stat(absPath).catch((e: NodeJS.ErrnoException) => {
-    if (e.code === "ENOENT") return null
-    throw e
-  })
-  if (!stat) return "skipped"
-  const fingerprint = `${stat.size}-${stat.mtimeMs}`
-  if (oldFingerprint === fingerprint) return "hit"
+): Effect.Effect<"hit" | "updated" | "skipped"> {
+  return Effect.gen(function* () {
+    const stat = yield* Effect.promise(() => fs.stat(absPath).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return null
+      throw e
+    }))
+    if (!stat) return "skipped" as const
+    const fingerprint = `${stat.size}-${stat.mtimeMs}`
+    if (oldFingerprint === fingerprint) return "hit" as const
 
-  const body = await Bun.file(absPath).text()
+    const body = yield* Effect.promise(() => Bun.file(absPath).text())
 
-  // For CC files, derive type from frontmatter; mimo files keep loc.type from path.
-  const finalType =
-    bodyType === "cc" ? (parseCcFrontmatterType(body) ?? "free") : loc.type
+    // For CC files, derive type from frontmatter; mimo files keep loc.type from path.
+    const finalType =
+      bodyType === "cc" ? (parseCcFrontmatterType(body) ?? "free") : loc.type
 
-  Database.use((db) =>
-    db
-      .insert(MemoryFtsTable)
-      .values({
-        path: absPath,
-        scope: loc.scope,
-        scope_id: loc.scope_id,
-        type: finalType,
-        body,
-        fingerprint,
-        last_indexed_at: Date.now(),
-      })
-      .onConflictDoUpdate({
-        target: MemoryFtsTable.path,
-        set: {
+    yield* Effect.orDie(
+      db
+        .insert(MemoryFtsTable)
+        .values({
+          path: absPath,
           scope: loc.scope,
           scope_id: loc.scope_id,
           type: finalType,
           body,
           fingerprint,
           last_indexed_at: Date.now(),
-        },
-      })
-      .run(),
-  )
-  return "updated"
+        })
+        .onConflictDoUpdate({
+          target: MemoryFtsTable.path,
+          set: {
+            scope: loc.scope,
+            scope_id: loc.scope_id,
+            type: finalType,
+            body,
+            fingerprint,
+            last_indexed_at: Date.now(),
+          },
+        })
+        .run(),
+    )
+    return "updated" as const
+  })
 }
 
-export async function reconcileMemory(
+export function reconcileMemory(
+  db: Database.Interface["db"],
   roots: { mimo: string; cc?: string },
-): Promise<{ indexed: number; pruned: number }> {
-  // Collect disk paths from BOTH roots before pruning. If we pruned per-root,
-  // enabling CC indexing on a fresh run would prune all mimo rows (and vice
-  // versa) because each walk's set is missing the other root's paths.
-  const mimoFiles = new Set(await walkMemoryDir(roots.mimo))
-  const ccFiles = roots.cc ? new Set(await walkCcRoot(roots.cc)) : new Set<string>()
-  const diskPaths = new Set<string>([...mimoFiles, ...ccFiles])
+): Effect.Effect<{ indexed: number; pruned: number }> {
+  return Effect.gen(function* () {
+    // Collect disk paths from BOTH roots before pruning. If we pruned per-root,
+    // enabling CC indexing on a fresh run would prune all mimo rows (and vice
+    // versa) because each walk's set is missing the other root's paths.
+    const [mimoArr, ccArr] = yield* Effect.all([
+      Effect.promise(() => walkMemoryDir(roots.mimo)),
+      Effect.promise(() => roots.cc ? walkCcRoot(roots.cc) : Promise.resolve([] as string[])),
+    ])
+    const mimoFiles = new Set(mimoArr)
+    const ccFiles = new Set(ccArr)
+    const diskPaths = new Set<string>([...mimoFiles, ...ccFiles])
 
-  const indexed = new Map<string, string>(
-    Database.use((db) =>
+    const rows = yield* Effect.orDie(
       db
         .select({ path: MemoryFtsTable.path, fingerprint: MemoryFtsTable.fingerprint })
         .from(MemoryFtsTable)
         .all(),
-    ).map((r) => [r.path, r.fingerprint]),
-  )
+    )
+    const indexed = new Map<string, string>(
+      rows.map((r: { path: string; fingerprint: string }) => [r.path, r.fingerprint]),
+    )
 
-  // Direction B: prune dead FTS rows (any path not in either walk).
-  let pruned = 0
-  for (const p of indexed.keys()) {
-    if (!diskPaths.has(p)) {
-      Database.use((db) => db.delete(MemoryFtsTable).where(eq(MemoryFtsTable.path, p)).run())
-      pruned++
+    // Direction B: prune dead FTS rows (any path not in either walk).
+    let pruned = 0
+    for (const p of indexed.keys()) {
+      if (!diskPaths.has(p)) {
+        yield* Effect.orDie(db.delete(MemoryFtsTable).where(eq(MemoryFtsTable.path, p)).run())
+        pruned++
+      }
     }
-  }
 
-  // Direction A: index disk files. Pick parser by which walk produced the path.
-  let indexedCount = 0
-  for (const p of mimoFiles) {
-    const loc = parsePath(p)
-    if (!loc) {
-      log.warn("path outside memory layout, skipping", { path: p })
-      continue
+    // Direction A: index disk files. Pick parser by which walk produced the path.
+    let indexedCount = 0
+    for (const p of mimoFiles) {
+      const loc = parsePath(p)
+      if (!loc) {
+        log.warn("path outside memory layout, skipping", { path: p })
+        continue
+      }
+      const result = yield* indexFromDisk(db, p, loc, "mimo", indexed.get(p))
+      if (result === "updated") indexedCount++
     }
-    const result = await indexFromDisk(p, loc, "mimo", indexed.get(p))
-    if (result === "updated") indexedCount++
-  }
-  for (const p of ccFiles) {
-    const loc = parseCcPath(p)
-    if (!loc) {
-      log.warn("CC path failed to parse, skipping", { path: p })
-      continue
+    for (const p of ccFiles) {
+      const loc = parseCcPath(p)
+      if (!loc) {
+        log.warn("CC path failed to parse, skipping", { path: p })
+        continue
+      }
+      const result = yield* indexFromDisk(db, p, loc, "cc", indexed.get(p))
+      if (result === "updated") indexedCount++
     }
-    const result = await indexFromDisk(p, loc, "cc", indexed.get(p))
-    if (result === "updated") indexedCount++
-  }
 
-  return { indexed: indexedCount, pruned }
+    return { indexed: indexedCount, pruned }
+  })
 }

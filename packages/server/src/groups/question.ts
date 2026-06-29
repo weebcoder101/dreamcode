@@ -3,7 +3,7 @@ import { Location } from "@opencode-ai/core/location"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { QuestionNotFoundError, SessionNotFoundError } from "../errors"
+import { QuestionNotFoundError, SessionNotFoundError, UnknownError } from "../errors"
 import { SessionLocationMiddleware } from "../middleware/session-location"
 import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
 
@@ -12,6 +12,7 @@ export const QuestionGroup = HttpApiGroup.make("server.question")
     HttpApiEndpoint.get("question.request.list", "/api/question/request", {
       query: LocationQuery,
       success: Location.response(Schema.Array(QuestionV2.Request)),
+      error: UnknownError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -28,7 +29,7 @@ export const QuestionGroup = HttpApiGroup.make("server.question")
     HttpApiEndpoint.get("session.question.list", "/api/session/:sessionID/question", {
       params: { sessionID: SessionV2.ID },
       success: Schema.Struct({ data: Schema.Array(QuestionV2.Request) }),
-      error: SessionNotFoundError,
+      error: [SessionNotFoundError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -44,7 +45,7 @@ export const QuestionGroup = HttpApiGroup.make("server.question")
       params: { sessionID: SessionV2.ID, requestID: QuestionV2.ID },
       payload: QuestionV2.Reply,
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, QuestionNotFoundError],
+      error: [SessionNotFoundError, QuestionNotFoundError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -59,7 +60,7 @@ export const QuestionGroup = HttpApiGroup.make("server.question")
     HttpApiEndpoint.post("session.question.reject", "/api/session/:sessionID/question/:requestID/reject", {
       params: { sessionID: SessionV2.ID, requestID: QuestionV2.ID },
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, QuestionNotFoundError],
+      error: [SessionNotFoundError, QuestionNotFoundError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

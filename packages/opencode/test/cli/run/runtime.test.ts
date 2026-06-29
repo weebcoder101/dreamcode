@@ -194,6 +194,7 @@ describe("run interactive runtime", () => {
           providerID: "openai",
           modelID: "gpt-5",
         },
+        subagentModel: undefined,
         variant: undefined,
         files: [],
         thinking: true,

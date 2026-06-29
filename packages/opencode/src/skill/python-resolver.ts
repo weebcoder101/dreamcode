@@ -7,8 +7,8 @@
  * This module also resolves the path to Python scripts that are installed
  * alongside the dreamcode binary.
  */
-import { existsSync, statSync, appendFileSync, mkdirSync } from "fs"
-import { join, dirname } from "path"
+import { existsSync, statSync, appendFileSync, mkdirSync, writeFileSync, mkdtempSync, chmodSync, unlinkSync, rmdirSync, realpathSync } from "fs"
+import { join, dirname, sep, resolve, isAbsolute } from "path"
 import { homedir } from "os"
 
 /**
@@ -38,11 +38,54 @@ export function debugLog(...args: unknown[]): void {
     const logPath = join(HOME, ".dreamcode", "logs", "python-resolver.log")
     mkdirSync(dirname(logPath), { recursive: true })
     appendFileSync(logPath, line + "\n")
-  } catch {}
+  } catch (e) {
+    console.warn("[python-resolver] debugLog write failed:", String(e))
+  }
 }
 
 export function isWindows(): boolean {
   return process.platform === "win32"
+}
+
+/**
+ * Write a prompt string to a temporary file and return the file path.
+ * This avoids leaking the prompt via CLI arguments in process listings.
+ *
+ * @param prompt - The prompt text to write
+ * @param cwd - Working directory to use for the temp base path
+ * @param prefix - Directory name prefix (e.g. "sg-", "ce-", "tp-")
+ * @returns The absolute path to the temp file
+ * @throws If temp file creation fails
+ */
+export function writePromptToTmpFile(prompt: string, cwd: string, prefix: string): string {
+  const tmpBase = isWindows()
+    ? join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
+    : join(cwd, ".dreamcode", "tmp")
+  mkdirSync(tmpBase, { recursive: true })
+  const tmpDir = mkdtempSync(join(tmpBase, prefix))
+  if (!isWindows()) chmodSync(tmpDir, 0o700)
+  const tmpFile = join(tmpDir, "prompt.txt")
+  writeFileSync(tmpFile, prompt, "utf-8")
+  if (!isWindows()) chmodSync(tmpFile, 0o600)
+  return tmpFile
+}
+
+/**
+ * Clean up a temporary prompt file and its parent directory.
+ * Safe to call even if the file or directory doesn't exist (errors are swallowed).
+ */
+export function cleanupTmpFile(tmpFile: string): void {
+  if (!tmpFile) return
+  try { unlinkSync(tmpFile) } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      console.warn("[python-resolver] cleanupTmpFile failed to unlink", tmpFile, e)
+    }
+  }
+  try { rmdirSync(dirname(tmpFile)) } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      console.warn("[python-resolver] cleanupTmpFile failed to rmdir", dirname(tmpFile), e)
+    }
+  }
 }
 
 /**
@@ -95,6 +138,40 @@ export function getPythonArgs(cmd?: string): string[] {
     return ["-3"]
   }
   return []
+}
+
+// ---------------------------------------------------------------------------
+// Skill Directory Name Aliases
+// ---------------------------------------------------------------------------
+// The source tree (src/skill/dreamcode/skills/) uses short names (api, data, etc.)
+// while the deployed directory (.dreamcode/skills/) uses descriptive names (api-design, etc.).
+// This mapping bridges the gap without filesystem changes.
+
+const SKILL_DIR_ALIASES: Record<string, string> = {
+  "api-design": "api",
+  "data-science": "data",
+  "git-workflow": "git",
+  "product-thinking": "product",
+  "python-best-practices": "python",
+  "quantum-poc": "quantum",
+}
+
+/**
+ * Resolve a skill name to its actual directory name, checking aliases.
+ * If the canonical name exists as-is, return it. Otherwise check the alias map.
+ */
+export function resolveSkillDirName(canonicalName: string): string {
+  // If the canonical name exists directly, use it
+  const skillsDir = resolveSkillsDir()
+  if (skillsDir) {
+    try {
+      if (existsSync(join(skillsDir, canonicalName)) && statSync(join(skillsDir, canonicalName)).isDirectory()) {
+        return canonicalName
+      }
+    } catch { /* fall through to alias check */ }
+  }
+  // Check alias map (e.g. "api-design" → "api")
+  return SKILL_DIR_ALIASES[canonicalName] ?? canonicalName
 }
 
 /**
@@ -173,6 +250,77 @@ export function resolveScript(relativePath: string): string | undefined {
   }
   debugLog("[python-resolver] script NOT FOUND:", relativePath)
   return undefined
+}
+
+// ---------------------------------------------------------------------------
+// Path Validation (moved from chain-executor.ts to break circular dependency)
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a realpath falls under an allowed prefix.
+ * Normalizes the prefix with a trailing separator to prevent sibling-directory
+ * escape (e.g. prefix "/skills" should NOT match "/skills-evil").
+ */
+export function isUnderPrefix(realpath: string, allowedPrefix: string): boolean {
+  const normalized = allowedPrefix.endsWith(sep) ? allowedPrefix : allowedPrefix + sep
+  return realpath === allowedPrefix || realpath.startsWith(normalized)
+}
+
+/**
+ * Validate that a script path is inside one of the allowed skills directories.
+ * Resolves symlinks before checking to prevent sandbox escape.
+ *
+ * Exported from python-resolver.ts so all skill subprocess modules can share it
+ * without depending on chain-executor.ts.
+ */
+export function validateScriptPath(resolved: string, cwd?: string): boolean {
+  if (!resolved || !isAbsolute(resolved)) return false
+  let realpath: string
+  try {
+    realpath = realpathSync(resolved)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code
+    if (code !== "ENOENT") {
+      console.warn("[python-resolver] Unexpected realpath error", resolved, error)
+    }
+    // Check `..` in resolved BEFORE resolve() which normalizes them away.
+    if (resolved.includes("..")) return false
+    realpath = resolve(resolved)
+  }
+  const skillsDir = resolveSkillsDir()
+  const allowedGlobal = skillsDir ? resolve(skillsDir) : null
+  const allowedHome = resolve(HOME, ".dreamcode", "skills")
+  const allowedProject = resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
+  return (
+    (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
+    isUnderPrefix(realpath, allowedHome) ||
+    isUnderPrefix(realpath, allowedProject)
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Shared Subprocess Environment Allowlist
+// ---------------------------------------------------------------------------
+
+/**
+ * Base environment variables allowed in subprocess spawns.
+ *
+ * Using an allowlist (not a denylist) prevents accidental credential leakage
+ * via inherited environment variables. Add new variables here rather than
+ * duplicating env blocks across spawn sites.
+ *
+ * Each spawn site spreads this and adds site-specific overrides:
+ * ```
+ * env: { ...BASE_SUBPROCESS_ENV, PROJECT_ROOT: cwd }
+ * ```
+ *
+ * NOTE: The NEURO harness in sensor-gate.ts also passes NEURO_API_KEY — that
+ * is intentional and site-specific (NEURO backend auth).
+ */
+export const BASE_SUBPROCESS_ENV: Record<string, string | undefined> = {
+  PATH: process.env.PATH,
+  HOME: process.env.HOME,
+  PYTHONPATH: process.env.PYTHONPATH ?? "",
 }
 
 

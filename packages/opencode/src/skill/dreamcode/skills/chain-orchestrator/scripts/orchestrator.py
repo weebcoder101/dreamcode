@@ -309,6 +309,8 @@ if __name__ == "__main__":
     parser.add_argument("--validate", action="store_true", help="Validate chains")
     parser.add_argument("--order", help="Get execution order for task type")
     parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("--prompt-file", default=None, help="Read prompt from file (reserved for future use)")
+    parser.add_argument("--mode", default=None, help="Pipeline mode (reserved for future use)")
     args = parser.parse_args()
 
     if args.dashboard:

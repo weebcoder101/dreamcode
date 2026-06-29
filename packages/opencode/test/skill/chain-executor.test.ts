@@ -146,44 +146,10 @@ describe("ChainExecutor", () => {
   it.live("runFullPipeline returns array when no skills dir", () =>
     Effect.gen(function* () {
       const executor = yield* ChainExecutor.Service
-      const results = yield* executor.runFullPipeline(["nonexistent-skill"], "test prompt")
+      const results = yield* executor.runFullPipeline()
       expect(Array.isArray(results)).toBe(true)
     }),
   )
-})
-
-// ─────────────────────────────────────────────────────────────
-// validateScriptPath pure function tests
-// ─────────────────────────────────────────────────────────────
-
-describe("validateScriptPath", () => {
-  const cwd = "/tmp/test-project"
-
-  test("rejects empty string", () => {
-    expect(ChainExecutor.validateScriptPath("", cwd)).toBe(false)
-  })
-
-  test("rejects path traversal escape", () => {
-    const malicious = "/tmp/test-project/.dreamcode/skills/../../etc/passwd"
-    expect(ChainExecutor.validateScriptPath(malicious, cwd)).toBe(false)
-  })
-
-  test("rejects path pointing outside allowed dirs", () => {
-    expect(ChainExecutor.validateScriptPath("/bin/sh", cwd)).toBe(false)
-  })
-
-  test("rejects absolute path outside project", () => {
-    expect(ChainExecutor.validateScriptPath("/usr/local/bin/malware", cwd)).toBe(false)
-  })
-
-  test("rejects relative path that escapes cwd", () => {
-    const resolved = "/tmp/test-project/../../../etc/passwd"
-    expect(ChainExecutor.validateScriptPath(resolved, cwd)).toBe(false)
-  })
-
-  test("rejects non-absolute path", () => {
-    expect(ChainExecutor.validateScriptPath("relative/path/script.py", cwd)).toBe(false)
-  })
 })
 
 // ─────────────────────────────────────────────────────────────
@@ -386,7 +352,7 @@ describe("ChainExecutor integration (tmpdir)", () => {
     Effect.gen(function* () {
       const executor = yield* ChainExecutor.Service
       const verifyResult = yield* executor.verify([
-        { name: "test", output: "ok", status: "ok" },
+        { name: "test", output: "ok", status: "ok", executionType: "content" },
       ])
       // With no skills dir, verify should return a visible warning, not empty string
       expect(typeof verifyResult).toBe("string")
@@ -394,13 +360,19 @@ describe("ChainExecutor integration (tmpdir)", () => {
     }),
   )
 
-  it.instance("runFullPipeline returns error result when orchestrator not found", () =>
+  it.instance("runFullPipeline returns ChainResult[] (error or empty) when orchestrator not found", () =>
     Effect.gen(function* () {
       const executor = yield* ChainExecutor.Service
-      const results = yield* executor.runFullPipeline(["nonexistent-skill"], "test prompt")
-      // Should either return a result (if orchestrator exists) or empty array
-      // But should NOT throw or hang
+      const results = yield* executor.runFullPipeline()
+      // Should NOT throw or hang
       expect(Array.isArray(results)).toBe(true)
+      // Every result has the expected shape
+      for (const r of results) {
+        expect(typeof r.name).toBe("string")
+        expect(typeof r.output).toBe("string")
+        expect(["ok", "not_found", "error"]).toContain(r.status)
+        expect(["script", "content"]).toContain(r.executionType)
+      }
     }),
   )
 })

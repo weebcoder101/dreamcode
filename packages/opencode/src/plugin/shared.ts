@@ -16,7 +16,9 @@ export function isDeprecatedPlugin(spec: string) {
 function parse(spec: string) {
   try {
     return npa(spec)
-  } catch {}
+  } catch (e) {
+    console.warn("[plugin/shared] npa parse failed for:", spec, String(e))
+  }
 }
 
 export function parsePluginSpecifier(spec: string) {

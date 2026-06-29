@@ -35,6 +35,7 @@ import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import { SensorGate, evaluateSpawnNecessity, type Persona, type SensorGateResult } from "@/skill/sensor-gate"
+import { SOCIAL_GREETING_RE } from "@/skill/question-complexity-schema"
 import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
 import { debugLog } from "@/skill/python-resolver"
 import * as PersonaTracker from "./persona-tracker"
@@ -56,6 +57,7 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { dieSyncError } from "@/effect/sync-error"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -86,9 +88,16 @@ IMPORTANT:
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
 function sanitizeForSystemPrompt(text: string): string {
-  // Escape HTML/XML metacharacters to prevent prompt injection via tag injection.
-  // Order matters: & first to avoid double-escaping.
+  // Strip ALL closing tags (</tag>) and self-closing tags (<tag/>) before
+  // HTML/XML escaping to prevent prompt injection via fake system tags.
+  // An allowlist approach is used: the system only injects opening tags with
+  // content (e.g. <chain-enforcement>...</chain-enforcement>), so stripping
+  // closing/self-closing tags prevents attackers from closing system blocks
+  // or injecting fake blocks — without needing a blocklist that goes stale.
+  // Order matters: escape HTML/XML metacharacters, & first to avoid double-escaping.
   return text
+    .replace(/<[a-zA-Z][^>]*\/>/g, "")      // self-closing tags: <tag/>
+    .replace(/<\/[a-zA-Z][^>]*>/g, "")       // closing tags: </tag>
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -363,7 +372,7 @@ export const layer = Layer.effect(
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: error.toObject() }))
         throw error
       }
 
@@ -442,7 +451,58 @@ export const layer = Layer.effect(
 
       assistantMessage.finish = "tool-calls"
       assistantMessage.time.completed = Date.now()
+      // Propagate subagent cost/tokens to parent session for accurate TUI context display
+      const sc = Number((result as any)?.subagentCost)
+      if (Number.isFinite(sc) && sc > 0) {
+        assistantMessage.cost = (assistantMessage.cost ?? 0) + sc
+      }
+      const st = (result as any)?.subagentTokens
+      if (st != null) {
+        const t = assistantMessage.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+        assistantMessage.tokens = {
+          input: t.input + (st.input ?? 0),
+          output: t.output + (st.output ?? 0),
+          reasoning: t.reasoning + (st.reasoning ?? 0),
+          cache: {
+            read: t.cache.read + (st.cache?.read ?? 0),
+            write: t.cache.write + (st.cache?.write ?? 0),
+          },
+        }
+      }
       yield* sessions.updateMessage(assistantMessage)
+
+      // Normalize potentially partial subagent tokens to the full shape StepFinishPart schema requires
+      // (all fields non-nullable — missing reasoning/cache would produce NaN in SQLite via applyUsage)
+      const normalizeTokens = (t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] => {
+        const cache = t?.cache as Record<string, unknown> | undefined
+        return {
+          input: (t?.input as number) ?? 0,
+          output: (t?.output as number) ?? 0,
+          reasoning: (t?.reasoning as number) ?? 0,
+          cache: {
+            read: (cache?.read as number) ?? 0,
+            write: (cache?.write as number) ?? 0,
+          },
+        }
+      }
+
+      // Create a step-finish part so the projector's PartUpdated handler
+      // propagates subagent cost/tokens to the session's DB cost row.
+      // This mirrors the main LLM flow (processor.ts) where step-finish parts
+      // carry cost/tokens and trigger applyUsage in the projector.
+      const subagentCost_ = Number((result as any)?.subagentCost)
+      const subagentTokens_ = (result as any)?.subagentTokens
+      if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistantMessage.id,
+          sessionID: assistantMessage.sessionID,
+          type: "step-finish",
+          reason: "completed",
+          cost: subagentCost_,
+          tokens: normalizeTokens(subagentTokens_),
+        } satisfies SessionV1.StepFinishPart)
+      }
 
       if (result && part.state.status === "running") {
         yield* sessions.updatePart({
@@ -511,7 +571,7 @@ export const layer = Layer.effect(
               const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
               const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
               const error = new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
-              yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+              yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
               throw error
             }
             const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
@@ -565,13 +625,13 @@ export const layer = Layer.effect(
             }
             yield* sessions.updatePart(part)
             if (flags.experimentalEventSystem) {
-              yield* events.publish(SessionEvent.Shell.Started, {
+              yield* dieSyncError(events.publish(SessionEvent.Shell.Started, {
                 sessionID: input.sessionID,
                 messageID: SessionMessage.ID.create(),
                 timestamp: DateTime.makeUnsafe(started),
                 callID: part.callID,
                 command: input.command,
-              })
+              }))
             }
             return { msg, part, cwd: ctx.directory }
           }).pipe(Effect.ensuring(markReady))
@@ -589,12 +649,12 @@ export const layer = Layer.effect(
               }
               const completed = Date.now()
               if (flags.experimentalEventSystem) {
-                yield* events.publish(SessionEvent.Shell.Ended, {
+                yield* dieSyncError(events.publish(SessionEvent.Shell.Ended, {
                   sessionID: input.sessionID,
                   timestamp: DateTime.makeUnsafe(completed),
                   callID: part.callID,
                   output,
-                })
+                }))
               }
               if (!msg.time.completed) {
                 msg.time.completed = completed
@@ -666,12 +726,12 @@ export const layer = Layer.effect(
       const err = Cause.squash(exit.cause)
       if (Provider.ModelNotFoundError.isInstance(err)) {
         const hint = err.suggestions?.length ? ` Did you mean: ${err.suggestions.join(", ")}?` : ""
-        yield* events.publish(Session.Event.Error, {
+        yield* dieSyncError(events.publish(Session.Event.Error, {
           sessionID,
           error: new NamedError.Unknown({
             message: `Model not found: ${err.providerID}/${err.modelID}.${hint}`,
           }).toObject(),
-        })
+        }))
       }
       return yield* Effect.die(err)
     })
@@ -704,7 +764,7 @@ export const layer = Layer.effect(
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
         throw error
       }
 
@@ -741,19 +801,19 @@ export const layer = Layer.effect(
       }
 
       if (current?.agent !== info.agent) {
-        yield* events.publish(SessionEvent.AgentSwitched, {
+        yield* dieSyncError(events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: DateTime.makeUnsafe(info.time.created),
           agent: info.agent,
-        })
+        }))
       }
       if (
         current?.model?.providerID !== info.model.providerID ||
         current.model.id !== info.model.modelID ||
         (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
       ) {
-        yield* events.publish(SessionEvent.ModelSwitched, {
+        yield* dieSyncError(events.publish(SessionEvent.ModelSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: DateTime.makeUnsafe(info.time.created),
@@ -762,7 +822,7 @@ export const layer = Layer.effect(
             providerID: ProviderV2.ID.make(info.model.providerID),
             variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
           },
-        })
+        }))
       }
 
       yield* Effect.addFinalizer(() => instruction.clear(info.id))
@@ -938,10 +998,10 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read file", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
+                  yield* dieSyncError(events.publish(Session.Event.Error, {
                     sessionID: input.sessionID,
                     error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  }))
                   pieces.push({
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -960,10 +1020,10 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read directory", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
+                  yield* dieSyncError(events.publish(Session.Event.Error, {
                     sessionID: input.sessionID,
                     error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  }))
                   return [
                     {
                       messageID: info.id,
@@ -1139,7 +1199,7 @@ export const layer = Layer.effect(
       )
       // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
       if (flags.experimentalEventSystem) {
-        yield* events.publish(SessionEvent.Prompted, {
+        yield* dieSyncError(events.publish(SessionEvent.Prompted, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
           timestamp: DateTime.makeUnsafe(info.time.created),
@@ -1149,17 +1209,17 @@ export const layer = Layer.effect(
             files: nextPrompt.files,
             agents: nextPrompt.agents,
           }),
-        })
+        }))
       }
       for (const text of nextPrompt.synthetic) {
         // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
         if (flags.experimentalEventSystem) {
-          yield* events.publish(SessionEvent.Synthetic, {
+          yield* dieSyncError(events.publish(SessionEvent.Synthetic, {
             sessionID: input.sessionID,
             messageID: SessionMessage.ID.create(),
             timestamp: DateTime.makeUnsafe(info.time.created),
             text,
-          })
+          }))
         }
       }
 
@@ -1203,7 +1263,7 @@ Before every response, verify your reasoning:
 3. Are you passing real values, not placeholders or literals?
 4. What is the most likely failure mode for your approach?`
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
+    const runLoop = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
         let structured: unknown
@@ -1319,7 +1379,7 @@ Before every response, verify your reasoning:
             const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
             const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
             const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+            yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: error.toObject() }))
             throw error
           }
 
@@ -1431,13 +1491,14 @@ Before every response, verify your reasoning:
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+            const [skills, env, knowledge, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
+              sys.knowledge().pipe(Effect.catch(() => Effect.succeed(undefined))),
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : []), SELF_CHECK]
+            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), SELF_CHECK]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
@@ -1481,11 +1542,21 @@ Before every response, verify your reasoning:
                   // but the TypeScript fallback generated personas, override the necessity veto.
                   // Without this, evaluateSpawnNecessity scores 0 and persona spawning is skipped,
                   // causing the LLM to spawn generic subagents instead of named personas (Windows).
+                  // However, if the gate result is a social greeting, NEVER override — keep shouldSpawn: false.
+                  const isSocialGreeting = gateResult.is_social_greeting || SOCIAL_GREETING_RE.test(userText.trim())
                   const isFallbackPersonas = gateResult.domain_tags.length === 0 && gateResult.personas.length > 0
                   if (isFallbackPersonas && !spawnEval.shouldSpawn) {
-                    spawnEval.shouldSpawn = true
-                    spawnEval.suggestedCount = Math.max(spawnEval.suggestedCount, gateResult.personas.length)
-                    spawnEval.reason = "Fallback personas generated after sensor gate failure"
+                    // Check rate limit BEFORE overriding spawn decision
+                    const rateCheck = checkRateLimit(sessionID)
+                    if (isSocialGreeting || !rateCheck.allowed) {
+                      spawnEval.reason = isSocialGreeting
+                        ? "Social greeting — fallback personas suppressed"
+                        : "Rate limit reached — fallback personas suppressed"
+                    } else {
+                      spawnEval.shouldSpawn = true
+                      spawnEval.suggestedCount = Math.max(spawnEval.suggestedCount, gateResult.personas.length)
+                      spawnEval.reason = "Fallback personas generated after sensor gate failure"
+                    }
                   }
 
                   const sensorBlock = [
@@ -1512,6 +1583,20 @@ Before every response, verify your reasoning:
                   sensorBlock.push("</sensor-gate>")
                   system.push(sensorBlock.join("\n"))
 
+                  // ─── Pre-Execution Enforcement Guard ────────────────
+                  // Inject BEFORE skill loading to set expectations:
+                  // skills must execute scripts, not just load text.
+                  if (gateResult.chain.length > 0) {
+                    system.push(
+                      `\n<chain-pre-enforcement>` +
+                      `\nIMPORTANT: These skills auto-execute Python scripts when loaded:` +
+                      `\n${gateResult.chain.map((s) => `  - ${s}`).join("\n")}` +
+                      `\nThe script results appear in <script-result> blocks below.` +
+                      `\nDo NOT skip skill loading — the scripts provide analysis, planning, and debugging assistance.` +
+                      `\n</chain-pre-enforcement>`,
+                    )
+                  }
+
                   // Skill manifest: UUIDs + dependency graph, not full content
                   // Agent loads skills via the `skill` tool at runtime using UUIDs
                   const manifestSkills: string[] = []
@@ -1529,11 +1614,14 @@ Before every response, verify your reasoning:
                     `\nChain skills for this task: ${chainSkillNames}` +
                     `\n${manifestSkills.join("\n")}` +
                     `\n</skill-chain>` +
-                    `\n<chain-mandatory>` +
-                    `\nCRITICAL: You MUST load EACH skill from the chain above using the \`skill\` tool BEFORE proceeding with your analysis.` +
-                    `\nYour FIRST action must be: call \`skill\` for each skill in the chain. Only after ALL chain skills are loaded may you begin analysis.` +
-                    `\nFailure to load chain skills will result in incomplete analysis and is forbidden.` +
-                    `\n</chain-mandatory>`,
+                    `\n<chain-enforcement>` +
+                    `\nCRITICAL: You MUST call the \`skill\` tool for EACH skill in the chain above to load its instructions.` +
+                    `\nWhen you call the \`skill\` tool, you will see "Loading skill..." in the sidebar, then "skill loaded ✓" — this confirms it worked.` +
+                    `\nAfter loading ALL chain skills, add "[SKILLS LOADED]" to your response.` +
+                    `\nThe system has already run automated analysis scripts for each skill — those results are in <script-result> blocks below.` +
+                    `\nBut you still MUST load each skill's content via the \`skill\` tool to get the full context.` +
+                    `\nDo NOT begin analysis until ALL skills are loaded and acknowledged.` +
+                    `\n</chain-enforcement>`,
                   )
 
                   // ─── ChainExecutor: Execute skills programmatically ──
@@ -1541,25 +1629,29 @@ Before every response, verify your reasoning:
                   // to produce execution results for each skill.
                   // Runs whenever a chain is selected — even simple tasks benefit from skill scripts.
                   if (gateResult.chain.length > 0) {
-                    const chainResults = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
+                    const chainResults: ChainResult[] = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
                       Effect.catch((e) => {
                         console.warn("[chain-executor] execute() failed:", e)
-                        return Effect.succeed([])
+                        return Effect.succeed([] as ChainResult[])
                       }),
                     )
                     for (const result of chainResults) {
                       if (result.status === "ok" && result.output) {
-                        system.push(`\n<skill-result name="${result.name}">\n${result.output.slice(0, 5000)}\n</skill-result>`)
+                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
                       } else if (result.status === "not_found") {
-                        system.push(`\n<skill-missing name="${result.name}"/>`)
+                        system.push(`\n<skill-missing name="${sanitizeForSystemPrompt(result.name)}"/>`)
                       } else {
-                        system.push(`\n<skill-result name="${result.name}" status="error">\n${result.output.slice(0, 2000)}\n</skill-result>`)
+                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" status="error">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</script-result>`)
                       }
                     }
 
                     // Phase 5: Wire orphaned Python scripts — run for any task with 2+ skills
+                    // Note: runFullPipeline() takes no arguments. It uses --dashboard --json internally,
+                    // reading prompt/chain from the orchestrator's dashboards file. The old signature
+                    // (chain, userPrompt) was removed because the dashboard mode is stateless and
+                    // informational — it prints ecosystem health, not per-prompt results.
                     if (gateResult.complexity === "high" || gateResult.chain.length > 1) {
-                      const pipelineResults = yield* chainExecutor.runFullPipeline(gateResult.chain, userText).pipe(
+                      const pipelineResults = yield* chainExecutor.runFullPipeline().pipe(
                         Effect.catch((e) => {
                           console.warn("[chain-executor] runFullPipeline() failed:", e)
                           return Effect.succeed([])
@@ -1567,9 +1659,9 @@ Before every response, verify your reasoning:
                       )
                       for (const result of pipelineResults) {
                         if (result.status === "ok" && result.output) {
-                          system.push(`\n<chain-executor-result name="${result.name}">\n${result.output.slice(0, 5000)}\n</chain-executor-result>`)
+                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</chain-executor-result>`)
                         } else if (result.status === "error") {
-                          system.push(`\n<chain-executor-result name="${result.name}" status="warning">\n${result.output.slice(0, 2000)}\n</chain-executor-result>`)
+                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}" status="warning">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</chain-executor-result>`)
                         }
                       }
 
@@ -1580,14 +1672,18 @@ Before every response, verify your reasoning:
                         }),
                       )
                       if (verifyResult) {
-                        system.push(`\n<chain-verification>\n${verifyResult.slice(0, 2000)}\n</chain-verification>`)
+                        system.push(`\n<chain-verification>\n${sanitizeForSystemPrompt(verifyResult.slice(0, 2000))}\n</chain-verification>`)
                       }
                     }
 
                     // ─── Chain-Gap Detection ──────────────────────────
-                    // Hard enforcement: warn if any chain skill wasn't executed
+                    // Hard enforcement: warn if any chain skill wasn't executed.
+                    // Accept status === "ok" regardless of executionType — content-only
+                    // skills (no scripts) are valid results and should NOT trigger gaps.
                     const missingSkills = gateResult.chain.filter(
-                      (name) => !chainResults.some((r) => r.name === name && r.status === "ok"),
+                      (name) => !chainResults.some(
+                        (r) => r.name === name && r.status === "ok",
+                      ),
                     )
                     // Mandated skills that MUST execute when in DREAM_INNOVATION mode
                     const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
@@ -1599,20 +1695,22 @@ Before every response, verify your reasoning:
                       const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
                         Effect.catch(() => Effect.succeed([] as Array<ChainResult>)),
                       )
-                      chainResults.push(...reExecuteResult)
+                      chainResults.push(...(reExecuteResult as any as ChainResult[]))
                       // Inject re-execution outputs into system prompt so LLM can see them
                       for (const result of reExecuteResult) {
                         if (result.status === "ok" && result.output) {
-                          system.push(`\n<skill-result name="${result.name}" source="mandated-rerun">\n${result.output.slice(0, 5000)}\n</skill-result>`)
+                          system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" source="mandated-rerun">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
                         }
                       }
                       // Update missing list after re-execution — warn about ALL remaining gaps
                       const stillMissing = gateResult.chain.filter(
-                        (name) => !chainResults.some((r) => r.name === name && r.status === "ok"),
+                        (name) => !chainResults.some(
+                          (r) => r.name === name && r.status === "ok",
+                        ),
                       )
                       if (stillMissing.length > 0) {
                         system.push(
-                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${stillMissing.join(", ")}. ` +
+                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(stillMissing.join(", "))}. ` +
                           `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
                           `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
                         )
@@ -1620,9 +1718,35 @@ Before every response, verify your reasoning:
                     } else if (missingSkills.length > 0) {
                       // Non-mandated gaps — always warn even if no mandated skills were missing
                       system.push(
-                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${missingSkills.join(", ")}. ` +
+                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(missingSkills.join(", "))}. ` +
                         `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
                         `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+                      )
+                    }
+
+                    // ─── Runtime Skill Loading Enforcement ─────────────
+                    // Scan assistant messages for actual `skill` tool calls to verify
+                    // the agent loaded skill content at runtime (not just via script results).
+                    // This provides hard enforcement: if the agent calls the skill tool,
+                    // the TUI shows "Loading skill..." → "skill loaded ✓".
+                    const skillToolCalls = new Set<string>()
+                    for (const msg of msgs) {
+                      if (msg.info.role !== "assistant") continue
+                      for (const part of msg.parts) {
+                        if (part.type !== "tool") continue
+                        if (part.tool !== "skill") continue
+                        if (part.state.status === "completed") {
+                          skillToolCalls.add(part.state.input.name ?? "")
+                        }
+                      }
+                    }
+                    const unloadedChainSkills = gateResult.chain.filter((name) => !skillToolCalls.has(name))
+                    if (unloadedChainSkills.length > 0) {
+                      system.push(
+                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
+                        `Script execution results are available in <script-result> blocks, but you MUST also load the skill content ` +
+                        `via the \`skill\` tool to get the full workflow instructions. ` +
+                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.</skill-loading-gap>`,
                       )
                     }
 
@@ -1645,31 +1769,39 @@ Before every response, verify your reasoning:
 
                     // ─── Self-Evolution: Auto-log to run_log.jsonl ──
                     // Write structured learning signals after every chain execution.
-                    yield* Effect.tryPromise({
-                      try: () => {
-                        const evolutionDir = path.join(ctx.directory, "evolution")
-                        const logLine = JSON.stringify({
-                          timestamp: new Date().toISOString(),
-                          type: "chain_execution",
-                          prompt_excerpt: userText.slice(0, 200),
-                          chain: gateResult.chain,
-                          chain_length: gateResult.chain.length,
-                          mode: gateResult.mode,
-                          outcome: missingSkills.length === 0 ? "success" : "partial",
-                          skills_executed: chainResults.filter((r) => r.status === "ok").map((r) => r.name),
-                          skills_missing: missingSkills,
-                          confidence: gateResult.confidence,
-                          neuro_available: Boolean(gateResult.neuro_result),
-                        }) + "\n"
-                        const dir = Bun.file(evolutionDir)
-                        // ensure evolution dir exists by writing to a file inside it
-                        return Bun.write(
-                          path.join(evolutionDir, "run_log.jsonl"),
-                          logLine,
-                          { createPath: true, append: true },
-                        )
-                      },
-                      catch: () => {},
+                    // Also log to pieces_writes.jsonl for persistence verification.
+                    const outcome = missingSkills.length === 0 ? "success" : "partial"
+                    yield* Effect.tryPromise(async (_signal: AbortSignal) => {
+                      const evolutionDir = path.join(ctx.directory, "evolution")
+                      const { appendFile, mkdir, writeFile } = await import("fs/promises")
+                      await mkdir(evolutionDir, { recursive: true })
+
+                      const logLine = JSON.stringify({
+                        timestamp: new Date().toISOString(),
+                        type: "chain_execution",
+                        prompt_excerpt: userText.slice(0, 200),
+                        chain: gateResult.chain,
+                        chain_length: gateResult.chain.length,
+                        mode: gateResult.mode,
+                        outcome,
+                        skills_executed: chainResults.filter((r) => r.status === "ok").map((r) => r.name),
+                        skills_missing: missingSkills,
+                        confidence: gateResult.confidence,
+                        neuro_available: Boolean(gateResult.neuro_result),
+                      }) + "\n"
+                      await appendFile(path.join(evolutionDir, "run_log.jsonl"), logLine)
+
+                      // ─── Pieces Writes Log ──────────────────────────
+                      // Track every Pieces LTM persist for self-evolution verification.
+                      const writesLine = JSON.stringify({
+                        timestamp: new Date().toISOString(),
+                        memory_type: gateResult.mode === "DREAM_INNOVATION" ? "breakthrough" : "learn",
+                        task_description: gateResult.intent.slice(0, 200),
+                        outcome,
+                        chain_length: gateResult.chain.length,
+                        skills_count: chainResults.length,
+                      }) + "\n"
+                      await appendFile(path.join(evolutionDir, "pieces_writes.jsonl"), writesLine)
                     })
                   }
 
@@ -1752,6 +1884,11 @@ Before every response, verify your reasoning:
                       personaLines.push("EFFICIENCY MODE (high confidence task):")
                       personaLines.push("You should complete analysis in ONE round if possible.")
                       personaLines.push("Only spawn additional specialists if you find CRITICAL gaps in coverage.")
+                      personaLines.push("")
+                      personaLines.push("CPU-AWARE DELEGATION:")
+                      personaLines.push("For CPU-heavy operations (typecheck, tsc, build, compile, compilation),")
+                      personaLines.push("the parent agent MUST delegate to AT MOST 2 specialist personas.")
+                      personaLines.push("Running multiple concurrent compiler processes degrades performance.")
                       personaLines.push("")
                       personaLines.push("SYNTHESIS & DECISION LOOP:")
                       personaLines.push("1. When all specialist results arrive, IMMEDIATELY synthesize findings")
@@ -1872,15 +2009,19 @@ Before every response, verify your reasoning:
                             // === SEMI-STATIC: context block (same for all personas in same turn) ===
                             contextBlock,
                             "",
-                            // Skill chain context — pass gateResult info so subagent knows the skill chain
-                            ...(gateResult ? [
-                              "## Skill Chain Context",
-                              `Mode: ${safeMode}`,
-                              `Complexity: ${safeComplexity}`,
-                              `Chain: ${safeChain}`,
-                              `Use the \`skill\` tool to load any skill by name or UUID from the chain as needed.`,
-                              "",
-                            ] : []),
+                              // Skill chain context — pass gateResult info so subagent knows the skill chain
+                              ...(gateResult ? [
+                                "## Skill Chain Context",
+                                `Mode: ${safeMode}`,
+                                `Complexity: ${safeComplexity}`,
+                                `Chain: ${safeChain}`,
+                                "",
+                                "CRITICAL: You MUST load EACH skill from this chain using the `skill` tool BEFORE providing your analysis.",
+                                "Your FIRST action must be: call `skill` for each skill in the chain.",
+                                "Script execution results are available in <script-result> blocks, but you must also load the skill content.",
+                                "Failure to load chain skills will result in incomplete analysis.",
+                                "",
+                              ] : []),
                             "## User Prompt",
                             sanitizeForSystemPrompt(userText.trim()),
                             "",
@@ -2246,7 +2387,7 @@ Before every response, verify your reasoning:
                   message: "The response was blocked by the provider's content filter",
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
-                yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+                yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: handle.message.error }))
                 return "break" as const
               }
               if (format.type === "json_schema") {
@@ -2283,17 +2424,17 @@ Before every response, verify your reasoning:
       },
     )
 
-    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
+    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = (Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
-    })
+      return yield* (state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID) as any) as any)
+    }) as any)
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
-      return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
+      return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
     })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
@@ -2307,7 +2448,7 @@ Before every response, verify your reasoning:
         const available = (yield* commands.list()).map((c) => c.name)
         const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
         throw error
       }
       const agentName = cmd.agent ?? input.agent
@@ -2368,7 +2509,7 @@ Before every response, verify your reasoning:
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
         throw error
       }
 
@@ -2414,12 +2555,12 @@ Before every response, verify your reasoning:
         parts,
         variant: input.variant,
       })
-      yield* events.publish(Command.Event.Executed, {
+      yield* dieSyncError(events.publish(Command.Event.Executed, {
         name: input.command,
         sessionID: input.sessionID,
         arguments: input.arguments,
         messageID: result.info.id,
-      })
+      }))
       return result
     })
 
@@ -2580,7 +2721,7 @@ const quoteTrimRegex = /^["']|["']$/g
 const sensorGateNode = LayerNode.make(SensorGate.defaultLayer, [])
 const chainExecutorNode = LayerNode.make(ChainExecutor.defaultLayer, [])
 
-export const node = LayerNode.make(layer, [
+export const node = (LayerNode.make as any)(layer, [
   SessionStatus.node,
   Session.node,
   Agent.node,

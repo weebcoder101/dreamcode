@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { Database } from "@/storage/storage"
 import { and, eq, isNull, or, gt, type SQL } from "drizzle-orm"
-import { Bus } from "../bus/bus"
+import * as Bus from "../bus/bus"
 import { Config } from "../config/config"
 import type { SessionID } from "../session/schema"
 import { TaskTable, TaskEventTable } from "./task.sql"
@@ -81,14 +81,15 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/TaskRegistry") {}
 
-export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = Layer.effect(
+export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service | Database.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const config = yield* Config.Service
+    const { db } = yield* Database.Service
 
     const cleanupAfter = Effect.fn("TaskRegistry.cleanupAfter")(function* (now: number) {
-      const cfg = yield* config.get()
+      const cfg = (yield* config.get()) as { checkpoint?: { task_archive_days?: number; task_cleanup_days?: number } }
       const days = cfg.checkpoint?.task_archive_days ?? cfg.checkpoint?.task_cleanup_days ?? 7
       return now + days * DAY_MS
     })
@@ -99,14 +100,11 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
       kind: TaskEvent["kind"],
       summary: string | undefined,
       now: number,
-    ) => {
-      Database.use((db) =>
-        db
-          .insert(TaskEventTable)
-          .values({ session_id, task_id, at: now, kind, summary: summary ?? null })
-          .run(),
-      )
-    }
+    ): Effect.Effect<void> =>
+      Effect.orDie(db
+        .insert(TaskEventTable)
+        .values({ session_id, task_id, at: now, kind, summary: summary ?? null })
+        .run())
 
     const publishCreated = (task: Task) =>
       Effect.runFork(bus.publish(TaskCreated, { sessionID: task.session_id, task }))
@@ -121,18 +119,16 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
       owner?: string
     }) {
       const now = Date.now()
-      const siblings = Database.use((db) =>
-        db
-          .select({ id: TaskTable.id })
-          .from(TaskTable)
-          .where(
-            and(
-              eq(TaskTable.session_id, input.session_id),
-              input.parent_id ? eq(TaskTable.parent_task_id, input.parent_id) : isNull(TaskTable.parent_task_id),
-            ),
-          )
-          .all(),
-      )
+      const siblings = yield* Effect.orDie(db
+        .select({ id: TaskTable.id })
+        .from(TaskTable)
+        .where(
+          and(
+            eq(TaskTable.session_id, input.session_id),
+            input.parent_id ? eq(TaskTable.parent_task_id, input.parent_id) : isNull(TaskTable.parent_task_id),
+          ),
+        )
+        .all())
       const id = nextChildId(
         input.parent_id,
         siblings.map((s) => s.id),
@@ -150,8 +146,8 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
         ended_at: null,
         cleanup_after: null,
       }
-      Database.use((db) => db.insert(TaskTable).values(row).run())
-      insertEvent(input.session_id, id, "created", undefined, now)
+      yield* Effect.orDie(db.insert(TaskTable).values(row).run())
+      yield* insertEvent(input.session_id, id, "created", undefined, now)
       const task = fromTaskRow(row)
       publishCreated(task)
       return task
@@ -182,32 +178,26 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
         if (notArchived) conds.push(notArchived)
       }
       const where = conds.length > 0 ? and(...conds) : undefined
-      const rows = Database.use((db) =>
-        db.select().from(TaskTable).where(where).orderBy(TaskTable.created_at).all(),
-      )
+      const rows = yield* Effect.orDie(db.select().from(TaskTable).where(where).orderBy(TaskTable.created_at).all())
       return rows.map(fromTaskRow)
     })
 
     const get = Effect.fn("TaskRegistry.get")(function* (input: { session_id: SessionID; id: string }) {
-      const row = Database.use((db) =>
-        db
-          .select()
-          .from(TaskTable)
-          .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
-          .get(),
-      )
+      const row = yield* Effect.orDie(db
+        .select()
+        .from(TaskTable)
+        .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
+        .get())
       return row ? fromTaskRow(row) : undefined
     })
 
     const events = Effect.fn("TaskRegistry.events")(function* (input: { session_id: SessionID; task_id: string }) {
-      const rows = Database.use((db) =>
-        db
-          .select()
-          .from(TaskEventTable)
-          .where(and(eq(TaskEventTable.session_id, input.session_id), eq(TaskEventTable.task_id, input.task_id)))
-          .orderBy(TaskEventTable.at)
-          .all(),
-      )
+      const rows = yield* Effect.orDie(db
+        .select()
+        .from(TaskEventTable)
+        .where(and(eq(TaskEventTable.session_id, input.session_id), eq(TaskEventTable.task_id, input.task_id)))
+        .orderBy(TaskEventTable.at)
+        .all())
       return rows.map(fromEventRow)
     })
 
@@ -219,14 +209,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
       event_summary?: string
     }) {
       const now = Date.now()
-      Database.use((db) =>
-        db
-          .update(TaskTable)
-          .set({ status: "blocked", last_event_at: now })
-          .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
-          .run(),
-      )
-      insertEvent(input.session_id, input.id, "blocked", input.event_summary, now)
+      yield* Effect.orDie(db
+        .update(TaskTable)
+        .set({ status: "blocked", last_event_at: now })
+        .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
+        .run())
+
+      yield* insertEvent(input.session_id, input.id, "blocked", input.event_summary, now)
       const updated = yield* get({ session_id: input.session_id, id: input.id })
       if (!updated) return yield* Effect.die(`Task ${input.id} not found in session ${input.session_id}`)
       publishUpdated(updated, "blocked")
@@ -239,14 +228,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
       event_summary?: string
     }) {
       const now = Date.now()
-      Database.use((db) =>
-        db
-          .update(TaskTable)
-          .set({ status: "open", last_event_at: now })
-          .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
-          .run(),
-      )
-      insertEvent(input.session_id, input.id, "unblocked", input.event_summary, now)
+      yield* Effect.orDie(db
+        .update(TaskTable)
+        .set({ status: "open", last_event_at: now })
+        .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
+        .run())
+
+      yield* insertEvent(input.session_id, input.id, "unblocked", input.event_summary, now)
       const updated = yield* get({ session_id: input.session_id, id: input.id })
       if (!updated) return yield* Effect.die(`Task ${input.id} not found in session ${input.session_id}`)
       publishUpdated(updated, "unblocked")
@@ -282,14 +270,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
       const owner = input.owner ?? existing.owner
       if (existing.status === "in_progress" && owner === existing.owner) return existing
 
-      Database.use((db) =>
-        db
-          .update(TaskTable)
-          .set({ status: "in_progress", owner: owner ?? null, last_event_at: now })
-          .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
-          .run(),
-      )
-      insertEvent(input.session_id, input.id, "started", input.event_summary, now)
+      yield* Effect.orDie(db
+        .update(TaskTable)
+        .set({ status: "in_progress", owner: owner ?? null, last_event_at: now })
+        .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
+        .run())
+
+      yield* insertEvent(input.session_id, input.id, "started", input.event_summary, now)
       const updated = yield* get({ session_id: input.session_id, id: input.id })
       if (!updated) return yield* Effect.die(`Task ${input.id} not found in session ${input.session_id}`)
       publishUpdated(updated, "started")
@@ -303,19 +290,18 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
     }) {
       const now = Date.now()
       const cleanup = yield* cleanupAfter(now)
-      Database.use((db) =>
-        db
-          .update(TaskTable)
-          .set({
-            status: "done",
-            ended_at: now,
-            cleanup_after: cleanup,
-            last_event_at: now,
-          })
-          .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
-          .run(),
-      )
-      insertEvent(input.session_id, input.id, "done", input.event_summary, now)
+      yield* Effect.orDie(db
+        .update(TaskTable)
+        .set({
+          status: "done",
+          ended_at: now,
+          cleanup_after: cleanup,
+          last_event_at: now,
+        })
+        .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
+        .run())
+
+      yield* insertEvent(input.session_id, input.id, "done", input.event_summary, now)
       const updated = yield* get({ session_id: input.session_id, id: input.id })
       if (!updated) return yield* Effect.die(`Task ${input.id} not found in session ${input.session_id}`)
       publishUpdated(updated, "done")
@@ -329,19 +315,18 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
     }) {
       const now = Date.now()
       const cleanup = yield* cleanupAfter(now)
-      Database.use((db) =>
-        db
-          .update(TaskTable)
-          .set({
-            status: "abandoned",
-            ended_at: now,
-            cleanup_after: cleanup,
-            last_event_at: now,
-          })
-          .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
-          .run(),
-      )
-      insertEvent(input.session_id, input.id, "abandoned", input.event_summary, now)
+      yield* Effect.orDie(db
+        .update(TaskTable)
+        .set({
+          status: "abandoned",
+          ended_at: now,
+          cleanup_after: cleanup,
+          last_event_at: now,
+        })
+        .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
+        .run())
+
+      yield* insertEvent(input.session_id, input.id, "abandoned", input.event_summary, now)
       const updated = yield* get({ session_id: input.session_id, id: input.id })
       if (!updated) return yield* Effect.die(`Task ${input.id} not found in session ${input.session_id}`)
       publishUpdated(updated, "abandoned")
@@ -354,14 +339,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
       summary: string
     }) {
       const now = Date.now()
-      Database.use((db) =>
-        db
-          .update(TaskTable)
-          .set({ summary: input.summary, last_event_at: now })
-          .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
-          .run(),
-      )
-      insertEvent(input.session_id, input.id, "renamed", input.summary, now)
+      yield* Effect.orDie(db
+        .update(TaskTable)
+        .set({ summary: input.summary, last_event_at: now })
+        .where(and(eq(TaskTable.session_id, input.session_id), eq(TaskTable.id, input.id)))
+        .run())
+
+      yield* insertEvent(input.session_id, input.id, "renamed", input.summary, now)
       const updated = yield* get({ session_id: input.session_id, id: input.id })
       if (!updated) return yield* Effect.die(`Task ${input.id} not found in session ${input.session_id}`)
       publishUpdated(updated, "renamed")
@@ -369,20 +353,20 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = 
     })
 
     return Service.of({
-      create,
-      list,
-      get,
-      events,
-      block,
-      unblock,
-      done,
-      abandon,
-      rename,
-      start,
+      create: create as Interface["create"],
+      list: list as Interface["list"],
+      get: get as Interface["get"],
+      events: events as Interface["events"],
+      block: block as Interface["block"],
+      unblock: unblock as Interface["unblock"],
+      done: done as Interface["done"],
+      abandon: abandon as Interface["abandon"],
+      rename: rename as Interface["rename"],
+      start: start as Interface["start"],
     })
   }),
 )
 
-export const defaultLayer = Layer.suspend(() => layer.pipe(Layer.provide(Bus.layer), Layer.provide(Config.defaultLayer)))
+export const defaultLayer = Layer.suspend(() => layer.pipe(Layer.provide(Bus.layer), Layer.provide(Config.defaultLayer), Layer.provide(Database.defaultLayer)))
 
 export * as TaskRegistry from "./registry"

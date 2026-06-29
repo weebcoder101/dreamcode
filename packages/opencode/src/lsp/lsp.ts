@@ -6,6 +6,7 @@ import * as LSPClient from "./client"
 import path from "path"
 import { pathToFileURL, fileURLToPath } from "url"
 import * as LSPServer from "./server"
+import { lspEnv } from "./server"
 import { Config } from "@/config/config"
 import { Process } from "@/util/process"
 import { spawn as lspspawn } from "./launch"
@@ -154,6 +155,7 @@ export const layer = Layer.effect(
           yield* Effect.logInfo("all LSPs are disabled")
         } else {
           for (const server of Object.values(LSPServer)) {
+            if (!("id" in server)) continue
             servers[server.id] = server
           }
 
@@ -175,7 +177,7 @@ export const layer = Layer.effect(
                 spawn: async (root) => ({
                   process: lspspawn(item.command[0], item.command.slice(1), {
                     cwd: root,
-                    env: { ...process.env, ...item.env },
+                    env: { ...lspEnv(), ...item.env },
                   }),
                   initialization: item.initialization,
                 }),
@@ -292,7 +294,8 @@ export const layer = Layer.effect(
 
         return { result, updated }
       })
-      yield* Effect.forEach(Array.from({ length: clients.updated }), () => events.publish(Event.Updated, {}), {
+      yield* Effect.forEach(Array.from({ length: clients.updated }), () =>
+        events.publish(Event.Updated, {}).pipe(Effect.catch(() => Effect.void)), {
         discard: true,
       })
       return clients.result

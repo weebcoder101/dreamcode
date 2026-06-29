@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
+import { dieSyncError } from "./sync-util"
 import {
   CommandPayload,
   DiffQuery,
@@ -336,6 +337,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const message = yield* promptSvc
         .prompt({
           ...payload,
+          parts: payload.parts ?? [],
           sessionID: ctx.params.sessionID,
         })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))

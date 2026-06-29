@@ -52,7 +52,9 @@ function message(providerID: ProviderV2.ID, e: APICallError) {
       if (errMsg && typeof errMsg === "string") {
         return `${msg}: ${errMsg}`
       }
-    } catch {}
+    } catch (e) {
+      console.warn("[provider/error] failed to parse error response body:", String(e))
+    }
 
     // If responseBody is HTML (e.g. from a gateway or proxy error page),
     // provide a human-readable message instead of dumping raw markup

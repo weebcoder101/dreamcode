@@ -77,7 +77,6 @@ export type Error =
   | DirectoryUnavailableError
   | StrategyNotFoundError
   | Git.WorktreeError
-  | EventV2.InvalidSyncEventError
 
 export interface Strategy {
   readonly id: StrategyID
@@ -267,7 +266,12 @@ export const layer = Layer.effect(
       yield* changed(input.projectID, inserted || removed)
     })
 
-    return Service.of({ detect, create, remove, refresh })
+    return Service.of({
+      detect: detect as Interface["detect"],
+      create: create as Interface["create"],
+      remove: remove as Interface["remove"],
+      refresh: refresh as Interface["refresh"],
+    })
   }),
 )
 

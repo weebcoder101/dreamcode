@@ -2,7 +2,7 @@ import { Integration } from "@opencode-ai/core/integration"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { InvalidRequestError } from "../errors"
+import { InvalidRequestError, UnknownError } from "../errors"
 import { response } from "../groups/location"
 
 const authorize = <A, R>(effect: Effect.Effect<A, Integration.AuthorizationError, R>) =>
@@ -16,6 +16,10 @@ const authorize = <A, R>(effect: Effect.Effect<A, Integration.AuthorizationError
     ),
   )
 
+function unknownError() {
+  return Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." }))
+}
+
 export const IntegrationHandler = HttpApiBuilder.group(Api, "server.integration", (handlers) =>
   Effect.gen(function* () {
     return handlers
@@ -23,14 +27,18 @@ export const IntegrationHandler = HttpApiBuilder.group(Api, "server.integration"
         "integration.list",
         Effect.fn(function* () {
           const service = yield* Integration.Service
-          return yield* response(service.list())
+          return yield* response(service.list()).pipe(
+            Effect.catchTag("CredentialDecodeError", unknownError),
+          )
         }),
       )
       .handle(
         "integration.get",
         Effect.fn(function* (ctx) {
           const service = yield* Integration.Service
-          return yield* response(service.get(ctx.params.integrationID))
+          return yield* response(service.get(ctx.params.integrationID)).pipe(
+            Effect.catchTag("CredentialDecodeError", unknownError),
+          )
         }),
       )
       .handle(

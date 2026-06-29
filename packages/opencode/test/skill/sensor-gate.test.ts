@@ -12,6 +12,7 @@ import {
   evaluateSpawnNecessity,
   selectPersonas,
   validateNeuroOutput,
+  depthScore,
   type SensorGateResult,
   type Persona,
 } from "../../src/skill/sensor-gate"
@@ -165,6 +166,36 @@ describe("parseSensorGateOutput", () => {
     const result = parseSensorGateOutput(output)
     expect(result.raw_output).toBe(output)
   })
+
+  test("invalid risk_level defaults to medium", () => {
+    const output = "- risk_level: critical"
+    const result = parseSensorGateOutput(output)
+    expect(result.risk_level).toBe("medium")
+  })
+
+  test("risk_level low is accepted", () => {
+    const output = "- risk_level: low"
+    const result = parseSensorGateOutput(output)
+    expect(result.risk_level).toBe("low")
+  })
+
+  test("risk_level high is accepted", () => {
+    const output = "- risk_level: high"
+    const result = parseSensorGateOutput(output)
+    expect(result.risk_level).toBe("high")
+  })
+
+  test("confidence above 1 is clamped", () => {
+    const output = "- confidence: 2.5"
+    const result = parseSensorGateOutput(output)
+    expect(result.confidence).toBe(1)
+  })
+
+  test("negative confidence is clamped to 0", () => {
+    const output = "- confidence: -1"
+    const result = parseSensorGateOutput(output)
+    expect(result.confidence).toBe(0)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -299,7 +330,7 @@ describe("selectPersonas", () => {
     })
     const personas = selectPersonas(result)
     // Should select security-related personas due to matching tags
-    expect(personas.length).toBeGreaterThanOrEqual(0)
+    expect(personas.length).toBeGreaterThanOrEqual(1)
   })
 
   test("no matching tags → 0 personas for low complexity", () => {
@@ -402,5 +433,88 @@ describe("validateNeuroOutput", () => {
     ].join("\n")
     const result = validateNeuroOutput(input)
     expect(result).toBe(JSON.stringify({ status: "success", step: 2 }))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// depthScore
+// ---------------------------------------------------------------------------
+
+describe("depthScore", () => {
+  test("empty inputs → minimum score is 1", () => {
+    // Even with empty inputs, the formula (risk + tagDiversity + chainDepth) / 3
+    // with risk=1 (low) gives Math.ceil(1/3) = 1
+    const result = depthScore(makeResult({ domain_tags: [], chain: [], risk_level: "low" }))
+    expect(result).toBe(1)
+  })
+
+  test("single domain, short chain, low risk → 1", () => {
+    const result = depthScore(makeResult({
+      domain_tags: ["typescript"],
+      chain: ["general"],
+      risk_level: "low",
+    }))
+    expect(result).toBe(1)
+  })
+
+  test("medium risk, moderate domains → 3", () => {
+    const result = depthScore(makeResult({
+      domain_tags: ["typescript", "react"],
+      chain: ["general", "frontend"],
+      risk_level: "medium",
+    }))
+    expect(result).toBeGreaterThanOrEqual(2)
+    expect(result).toBeLessThanOrEqual(4)
+  })
+
+  test("high risk, many domains, long chain → 4 (ceiling of (3+5+4)/3 = 4)", () => {
+    // risk=3 (high), tagDiversity=5, chainDepth=4 (capped)
+    // result = ceil((3+5+4)/3) = ceil(12/3) = 4
+    const result = depthScore(makeResult({
+      domain_tags: ["typescript", "react", "security", "database", "api"],
+      chain: ["general", "security", "quality", "testing", "frontend"],
+      risk_level: "high",
+    }))
+    expect(result).toBe(4)
+  })
+
+  test("handles empty domain_tags", () => {
+    const result = depthScore(makeResult({ domain_tags: [], chain: ["general"], risk_level: "low" }))
+    expect(result).toBeGreaterThanOrEqual(0)
+    expect(result).toBeLessThanOrEqual(5)
+  })
+
+  test("handles empty chain", () => {
+    const result = depthScore(makeResult({ domain_tags: ["typescript"], chain: [], risk_level: "low" }))
+    expect(result).toBeGreaterThanOrEqual(0)
+    expect(result).toBeLessThanOrEqual(5)
+  })
+
+  test("clamps to 0-5 range", () => {
+    const low = depthScore(makeResult({ domain_tags: [], chain: [], risk_level: "low" }))
+    const high = depthScore(makeResult({
+      domain_tags: ["a", "b", "c", "d", "e"],
+      chain: ["1", "2", "3", "4", "5", "6", "7"],
+      risk_level: "high",
+    }))
+    expect(low).toBeGreaterThanOrEqual(0)
+    expect(high).toBeLessThanOrEqual(5)
+  })
+
+  test("DREAM_INNOVATION mode does not affect depthScore directly", () => {
+    // depthScore is mode-agnostic — mode bonus is applied in selectPersonas
+    const standard = depthScore(makeResult({
+      mode: "STANDARD",
+      domain_tags: ["typescript"],
+      chain: ["general"],
+      risk_level: "low",
+    }))
+    const dream = depthScore(makeResult({
+      mode: "DREAM_INNOVATION",
+      domain_tags: ["typescript"],
+      chain: ["general"],
+      risk_level: "low",
+    }))
+    expect(standard).toBe(dream)
   })
 })

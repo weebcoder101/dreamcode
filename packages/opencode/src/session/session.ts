@@ -11,6 +11,7 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Database } from "@opencode-ai/core/database/database"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { dieSyncError } from "@/effect/sync-error"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
@@ -574,7 +575,7 @@ export const layer: Layer.Layer<
       }
       yield* Effect.logInfo("created", result)
 
-      yield* events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
+      yield* dieSyncError(events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result }))
 
       return result
     })
@@ -661,7 +662,7 @@ export const layer: Layer.Layer<
           yield* remove(child.id)
         }
 
-        yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
+        yield* dieSyncError(events.publish(SessionV1.Event.Deleted, { sessionID, info: session }))
         yield* events.remove(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })
@@ -670,17 +671,17 @@ export const layer: Layer.Layer<
 
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
       Effect.gen(function* () {
-        yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg })
+        yield* dieSyncError(events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg }))
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
 
     const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
       Effect.gen(function* () {
-        yield* events.publish(SessionV1.Event.PartUpdated, {
+        yield* dieSyncError(events.publish(SessionV1.Event.PartUpdated, {
           sessionID: part.sessionID,
           part: structuredClone(part),
           time: Date.now(),
-        })
+        }))
         return part
       }).pipe(Effect.withSpan("Session.updatePart"))
 
@@ -785,7 +786,7 @@ export const layer: Layer.Layer<
           revert: info.revert === null ? undefined : (info.revert ?? current.revert),
           permission: info.permission === null ? undefined : (info.permission ?? current.permission),
         } as Info
-        yield* events.publish(SessionV1.Event.Updated, { sessionID, info: next })
+        yield* dieSyncError(events.publish(SessionV1.Event.Updated, { sessionID, info: next }))
       })
 
     const touch = Effect.fn("Session.touch")(function* (sessionID: SessionID) {
@@ -883,10 +884,10 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       messageID: MessageID
     }) {
-      yield* events.publish(SessionV1.Event.MessageRemoved, {
+      yield* dieSyncError(events.publish(SessionV1.Event.MessageRemoved, {
         sessionID: input.sessionID,
         messageID: input.messageID,
-      })
+      }))
       return input.messageID
     })
 
@@ -895,11 +896,11 @@ export const layer: Layer.Layer<
       messageID: MessageID
       partID: PartID
     }) {
-      yield* events.publish(SessionV1.Event.PartRemoved, {
+      yield* dieSyncError(events.publish(SessionV1.Event.PartRemoved, {
         sessionID: input.sessionID,
         messageID: input.messageID,
         partID: input.partID,
-      })
+      }))
       return input.partID
     })
 
@@ -910,7 +911,7 @@ export const layer: Layer.Layer<
       field: string
       delta: string
     }) {
-      yield* events.publish(MessageV2.Event.PartDelta, input)
+      yield* dieSyncError(events.publish(MessageV2.Event.PartDelta, input))
     })
 
     /** Finds the first message matching the predicate, searching newest-first. */

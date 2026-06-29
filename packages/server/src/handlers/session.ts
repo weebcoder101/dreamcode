@@ -71,7 +71,34 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               agent: ctx.payload.agent,
               model: ctx.payload.model,
               location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
-            }),
+            }).pipe(
+              Effect.catchTag("EventV2.InvalidSyncEvent", (error) => {
+                const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+                return Effect.logError("invalid sync event in session create").pipe(
+                  Effect.annotateLogs({ ref }),
+                  Effect.andThen(
+                    Effect.fail(
+                      new UnknownError({
+                        message: "Unexpected server error. Check server logs for details.",
+                        ref,
+                      }),
+                    ),
+                  ),
+                )
+              }),
+              Effect.catchTag("Session.NotFoundError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+              Effect.catchTag("Session.MessageDecodeError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+              Effect.catchTag("Session.OperationUnavailableError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+              Effect.catchTag("Session.PromptConflictError", () =>
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details." })),
+              ),
+            ),
           }
         }),
       )
@@ -121,6 +148,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTag("EventV2.InvalidSyncEvent", (error) => {
+                  const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+                  return Effect.logError("invalid sync event in session prompt").pipe(
+                    Effect.annotateLogs({ ref, sessionID: ctx.params.sessionID }),
+                    Effect.andThen(
+                      Effect.fail(
+                        new UnknownError({
+                          message: "Unexpected server error. Check server logs for details.",
+                          ref,
+                        }),
+                      ),
+                    ),
+                  )
+                }),
               ),
           }
         }),

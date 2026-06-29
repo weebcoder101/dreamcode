@@ -50,6 +50,9 @@ export interface ExecuteResult<M extends Metadata = Metadata> {
   metadata: M
   output: string
   attachments?: Omit<SessionV1.FilePart, "id" | "sessionID" | "messageID">[]
+  /** Optional cost and token usage of subagent sessions, propagated to the parent session for accurate TUI context display. */
+  subagentCost?: number
+  subagentTokens?: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } }
 }
 
 export interface Def<
@@ -100,7 +103,7 @@ const SUBAGENT_NAMES = new Set(["general", "explore"])
 
 const BUILD_COMMAND_RE = /^(npm|pip|yarn|pnpm|bun|make|cargo|go\s+build|dotnet\s+build|mvn|gradle|sbt|mix|composer)\s+(install|build|run\s+build|run\s+test|run\s+check|compile|deploy|add|publish)/i
 
-function classifyToolCall(tool: string, args: Record<string, unknown>, ctx: Tool.Context): string | undefined {
+function classifyToolCall(tool: string, args: Record<string, unknown>, ctx: Context): string | undefined {
   if (!SUBAGENT_NAMES.has(ctx.agent)) return undefined
   if (tool !== "bash" && tool !== "shell") return undefined
   const command = (args.command as string | undefined) ?? (args.script as string | undefined) ?? ""

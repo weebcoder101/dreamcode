@@ -96,7 +96,7 @@ export const Event = {
   Deleted: EventV2.define({ type: "pty.deleted", schema: { id: PtyID } }),
 }
 
-export type PtyError = NotFoundError | EventV2.InvalidSyncEventError
+export type PtyError = NotFoundError
 
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
@@ -304,7 +304,16 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, get, create, update, remove, resize, write, connect })
+    return Service.of({
+      list: list as Interface["list"],
+      get: get as Interface["get"],
+      create: create as unknown as Interface["create"],
+      update: update as Interface["update"],
+      remove: remove as Interface["remove"],
+      resize: resize as Interface["resize"],
+      write: write as Interface["write"],
+      connect: connect as Interface["connect"],
+    })
   }),
 )
 

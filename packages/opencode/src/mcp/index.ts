@@ -324,7 +324,8 @@ export const layer = Layer.effect(
         args,
         cwd,
         env: {
-          ...process.env,
+          PATH: process.env.PATH ?? "/usr/bin",
+          HOME: process.env.HOME ?? "/root",
           ...(cmd === "opencode" && process.env.OPENCODE_MCP_INJECT_BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}),
           ...mcp.environment,
         },
@@ -493,7 +494,9 @@ export const layer = Layer.effect(
                     for (const dpid of pids) {
                       try {
                         process.kill(dpid, "SIGTERM")
-                      } catch {}
+                      } catch (e) {
+                        console.warn("[mcp] failed to kill descendant", dpid, String(e))
+                      }
                     }
                   }
                   yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)

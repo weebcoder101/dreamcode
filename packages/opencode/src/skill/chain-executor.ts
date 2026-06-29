@@ -4,49 +4,34 @@ import { InstanceState } from "@/effect/instance-state"
 import { Skill } from "@/skill"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
-import fs from "fs"
-import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME } from "./python-resolver"
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver"
 
-function isUnderPrefix(realpath: string, allowedPrefix: string): boolean {
-  // Normalize: ensure prefix ends with separator to prevent sibling-directory escape
-  // e.g. prefix "/home/user/.dreamcode/skills" should NOT match "/home/user/.dreamcode/skills-evil"
-  const normalized = allowedPrefix.endsWith(path.sep) ? allowedPrefix : allowedPrefix + path.sep
-  return realpath === allowedPrefix || realpath.startsWith(normalized)
+const CHAIN_EXEC_LOG = path.join(HOME, ".dreamcode", "chain-executions.jsonl")
+
+/** Fire-and-forget structured audit log for chain executor executions */
+function logChainExecution(entry: {
+  chain: string[]
+  promptLen: number
+  results: Array<{ name: string; status: string; executionType: string; outputLen: number }>
+  timestamp: string
+  totalDuration: number
+}) {
+  return Effect.tryPromise({
+    try: async () => {
+      const { mkdir } = await import("fs/promises")
+      await mkdir(path.dirname(CHAIN_EXEC_LOG), { recursive: true })
+      const { appendFile } = await import("fs/promises")
+      await appendFile(CHAIN_EXEC_LOG, JSON.stringify(entry) + "\n")
+    },
+    catch: () => {}, // Audit log failure is non-fatal
+  }).pipe(Effect.catch(() => Effect.void))
 }
-
-export function validateScriptPath(resolved: string, cwd?: string): boolean {
-  if (!resolved || !path.isAbsolute(resolved)) return false
-  // Resolve symlinks before checking to prevent sandbox escape
-  let realpath: string
-  try {
-    realpath = fs.realpathSync(resolved)
-  } catch (error) {
-    // Differentiate between ENOENT (normal — file doesn't exist yet) and
-    // other errors (symlink loops, permission denied) which are real problems.
-    const code = (error as NodeJS.ErrnoException)?.code
-    if (code !== "ENOENT") {
-      console.warn("[chain-executor] Unexpected realpath error", resolved, error)
-    }
-    // realpathSync throws when the file doesn't exist or permission denied.
-    // path.resolve does NOT resolve `..` segments — reject traversal patterns.
-    realpath = path.resolve(resolved)
-    if (realpath.includes("..")) return false
-  }
-  const skillsDir = resolveSkillsDir()
-  const allowedGlobal = skillsDir ? path.resolve(skillsDir) : null
-  const allowedHome = path.resolve(HOME, ".dreamcode", "skills")
-  const allowedProject = path.resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
-  return (
-    (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
-    isUnderPrefix(realpath, allowedHome) ||
-    isUnderPrefix(realpath, allowedProject)
-  )
-}
-
 export interface ChainResult {
   name: string
   output: string
   status: "ok" | "not_found" | "error"
+  /** Distinguishes actual Python subprocess execution from passive SKILL.md content injection */
+  executionType: "script" | "content"
 }
 
 export interface Interface {
@@ -54,10 +39,7 @@ export interface Interface {
     chain: string[],
     userPrompt: string,
   ) => Effect.Effect<ChainResult[]>
-  readonly runFullPipeline: (
-    chain: string[],
-    userPrompt: string,
-  ) => Effect.Effect<ChainResult[]>
+  readonly runFullPipeline: () => Effect.Effect<ChainResult[]>
   readonly verify: (
     results: ChainResult[],
   ) => Effect.Effect<string>
@@ -79,31 +61,35 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   if (!validateScriptPath(path.resolve(script), cwd)) {
     return { output: "[SKIPPED] Script path outside allowed skills directory", exitCode: 0 }
   }
-  // Pass prompt as --prompt argument instead of piping via stdin.
+  // Pass prompt via temp file + --prompt-file to avoid leaking it in process listings.
   // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
   // and writer.close() doesn't send EOF through them, causing Python's
-  // sys.stdin.read() to block forever. --prompt arg avoids this entirely.
-  // Most skill scripts already support --prompt (required=True).
+  // sys.stdin.read() to block forever. --prompt-file avoids this entirely.
+  let tmpFile = ""
+  try {
+    tmpFile = writePromptToTmpFile(prompt, cwd, "ce-")
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn("[chain-executor] failed to create tmp file for prompt", msg)
+    return { output: `[ERROR] Failed to create temp file: ${msg}`, exitCode: -1 }
+  }
   // Cross-platform Python resolution
   const pythonCmd = resolvePythonCommand()
   const versionArgs = getPythonArgs()
   return yield* Effect.tryPromise({
     try: async () => {
-      const proc = Bun.spawn([pythonCmd, ...versionArgs, script, "--prompt", prompt], {
+      const proc = Bun.spawn([pythonCmd, ...versionArgs, script, "--prompt-file", tmpFile], {
         cwd,
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
         env: {
-          PATH: process.env.PATH,
-          HOME: process.env.HOME,
-          PYTHONPATH: process.env.PYTHONPATH ?? "",
-          NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
+          ...BASE_SUBPROCESS_ENV,
           PROJECT_ROOT: cwd,
         },
       })
-      const stdoutPromise = proc.stdout.text()
-      const stderrPromise = proc.stderr.text()
+      const stdoutPromise = new Response(proc.stdout).text()
+      const stderrPromise = new Response(proc.stderr).text()
       const exitCode = await proc.exited
       const stdout = await stdoutPromise
       const stderr = await stderrPromise
@@ -121,6 +107,10 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
       const msg = e instanceof Error ? e.message : String(e)
       console.warn("[chain-executor] python script failed", { script, error: msg })
       return Effect.succeed({ output: `[ERROR] ${msg}`, exitCode: -1 })
+    }),
+    Effect.tap(() => {
+      cleanupTmpFile(tmpFile)
+      return Effect.void
     }),
   )
 })
@@ -144,15 +134,12 @@ const runPythonScriptAdvanced = Effect.fn("ChainExecutor.runPythonScriptAdvanced
         stdout: "pipe",
         stderr: "pipe",
         env: {
-          PATH: process.env.PATH,
-          HOME: process.env.HOME,
-          PYTHONPATH: process.env.PYTHONPATH ?? "",
-          NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
+          ...BASE_SUBPROCESS_ENV,
           PROJECT_ROOT: cwd,
         },
       })
-      const stdoutPromise = proc.stdout.text()
-      const stderrPromise = proc.stderr.text()
+      const stdoutPromise = new Response(proc.stdout).text()
+      const stderrPromise = new Response(proc.stderr).text()
       const exitCode = await proc.exited
       const stdout = await stdoutPromise
       const stderr = await stderrPromise
@@ -178,6 +165,7 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
   chain: string[],
   userPrompt: string,
 ) {
+  const startTime = Date.now()
   const skillService = yield* Skill.Service
   const ctx = yield* InstanceState.contextOrNull
   const cwd = ctx?.directory ?? process.cwd()
@@ -186,7 +174,7 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
   for (const skillName of chain) {
     const skillInfo = yield* skillService.require(skillName).pipe(Effect.option)
     if (skillInfo._tag === "None") {
-      results.push({ name: skillName, output: "", status: "not_found" })
+      results.push({ name: skillName, output: "", status: "not_found", executionType: "content" })
       continue
     }
 
@@ -200,6 +188,7 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
         name: skillName,
         output: skill.content,
         status: "ok",
+        executionType: "content",
       })
       continue
     }
@@ -214,23 +203,37 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
         name: skillName,
         output: scriptResult.output || `[ERROR] Script ${script} exited with code ${scriptResult.exitCode}`,
         status: "error",
+        executionType: "script",
       })
     } else {
       results.push({
         name: skillName,
         output: scriptResult.output || "[SKILL EXECUTED: no output]",
         status: scriptResult.output ? "ok" : "error",
+        executionType: "script",
       })
     }
   }
 
+  // ─── Structured audit log ──────────────────────────────────────
+  // Fire-and-forget: log every chain execution for debugging and metrics.
+  yield* logChainExecution({
+    chain,
+    promptLen: userPrompt.length,
+    results: results.map((r) => ({
+      name: r.name,
+      status: r.status,
+      executionType: r.executionType,
+      outputLen: r.output.length,
+    })),
+    timestamp: new Date().toISOString(),
+    totalDuration: Date.now() - startTime,
+  })
+
   return results
 })
 
-export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(function* (
-  chain: string[],
-  userPrompt: string,
-) {
+export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(function* () {
   const ctx = yield* InstanceState.contextOrNull
   const cwd = ctx?.directory ?? process.cwd()
   const skillsDir = resolveSkillsDir()
@@ -255,12 +258,13 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
         name: "chain-executor-pipeline",
         output: `[WARNING] Pipeline orchestrator not found: ${executorScript}`,
         status: "error",
+        executionType: "content",
       })
       return results
     }
     const pipelineResult = yield* runPythonScriptAdvanced(
       executorScript,
-      ["--mode", chain.length > 3 ? "DREAM_INNOVATION" : "STANDARD", "--prompt", userPrompt],
+      ["--dashboard", "--json"],
       cwd,
     )
     if (pipelineResult.exitCode !== 0) {
@@ -268,12 +272,14 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
         name: "chain-executor-pipeline",
         output: pipelineResult.output || `[ERROR] Pipeline script exited with code ${pipelineResult.exitCode}`,
         status: "error",
+        executionType: "script",
       })
     } else if (pipelineResult.output) {
       results.push({
         name: "chain-executor-pipeline",
         output: pipelineResult.output,
         status: "ok",
+        executionType: "script",
       })
     }
   } catch (e) {
@@ -281,6 +287,7 @@ export const runFullPipeline = Effect.fn("ChainExecutor.runFullPipeline")(functi
       name: "chain-executor-pipeline",
       output: `[ERROR] Pipeline execution failed: ${String(e)}`,
       status: "error",
+      executionType: "content",
     })
   }
 
@@ -329,9 +336,9 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     return Service.of({
-      execute: (chain, userPrompt) => execute(chain, userPrompt),
-      runFullPipeline: (chain, userPrompt) => runFullPipeline(chain, userPrompt),
-      verify: (results) => verify(results),
+      execute: ((chain, userPrompt) => execute(chain, userPrompt).pipe(Effect.catch(Effect.die))) as Interface["execute"],
+      runFullPipeline: (() => runFullPipeline().pipe(Effect.catch(Effect.die))) as Interface["runFullPipeline"],
+      verify: ((results) => verify(results).pipe(Effect.catch(Effect.die))) as Interface["verify"],
     })
   }),
 )
@@ -340,4 +347,4 @@ export const defaultLayer = layer
 
 export const node = LayerNode.make(layer, [])
 
-export const ChainExecutor = { Service, layer, defaultLayer, node, validateScriptPath }
+export const ChainExecutor = { Service, layer, defaultLayer, node }

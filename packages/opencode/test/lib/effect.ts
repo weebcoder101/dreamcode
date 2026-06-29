@@ -136,8 +136,11 @@ const liveEnv = TestConsole.layer
 
 export const it = make<never, never>(testEnv, liveEnv)
 
-export const testEffect = <R, E>(layer: Layer.Layer<R, E>) =>
-  make<R, E>(Layer.provideMerge(layer, testEnv), Layer.provideMerge(layer, liveEnv))
+export const testEffect = <R, E>(layer: Layer.Layer<R, E, any>) =>
+  make<R, E>(
+    Layer.provideMerge(layer as Layer.Layer<R, E>, testEnv) as Layer.Layer<R, E>,
+    Layer.provideMerge(layer as Layer.Layer<R, E>, liveEnv) as Layer.Layer<R, E>,
+  )
 
 // Variant of `testEffect` that builds the test layer through the shared
 // process-wide memoMap so services like Bus/Session resolve to the same

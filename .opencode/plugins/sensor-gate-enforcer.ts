@@ -49,7 +49,8 @@ function buildChainExecutionBlock(chain: string[], skillPlan: string): string {
   lines.push("- Execute each skill in order using the skill tool")
   lines.push("- Do NOT skip any skill in the chain")
   lines.push("- The FINAL skill (pieces-ltm) MUST persist results to Pieces LTM")
-  lines.push("- After persistence, log the run to evolution/run_log.jsonl")
+  lines.push("- After persistence, automated-learning MUST capture: what worked, what failed, what to change")
+  lines.push("- Log the run to evolution/run_log.jsonl with learning signals")
 
   if (skillPlan) {
     lines.push("")
@@ -73,9 +74,12 @@ function buildMemoryContextBlock(): string {
     "- Read evolution log: evolution/run_log.jsonl",
     "- Agent score: evolution/agent_score.json",
     "",
-    "POST-RUN REQUIREMENTS (mandatory):",
-    "1. Log the run to evolution/run_log.jsonl with chain metadata",
-    "2. Write learning notes to evolution/pieces_writes.jsonl",
+    "POST-RUN REQUIREMENTS (mandatory — executed by the system automatically):",
+    "1. Automated-learning skill captures 3 signals: what worked, what failed, what to change",
+    "2. Learning Note is persisted to Pieces LTM via create_pieces_memory (keyDecisions field)",
+    "3. Run is logged to evolution/run_log.jsonl with chain metadata, outcome, and fix rules",
+    "4. Learnings are available as <learned-knowledge> in future system prompts",
+    "5. Effect v4 rule: Effect.catchAll does NOT exist — use Effect.catch instead",
     "</memory-context>",
   ].join("\n")
 }

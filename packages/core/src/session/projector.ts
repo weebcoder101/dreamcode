@@ -34,12 +34,31 @@ type Usage = {
   }
 }
 
+/** Validate and normalize a step-finish part's cost and token data. Returns undefined
+ * for missing, non-finite, or negative costs so NaN never reaches the SQL accumulator
+ * (`cost + NaN` corrupts the session row permanently in SQLite's real column). */
 function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] | unknown): Usage | undefined {
   if (typeof part !== "object" || part === null) return undefined
   const value = part as Record<string, unknown>
   if (value.type !== "step-finish") return undefined
   if (!("cost" in value) || !("tokens" in value)) return undefined
-  return { cost: value.cost as Usage["cost"], tokens: value.tokens as Usage["tokens"] }
+  const cost = Number(value.cost)
+  if (!Number.isFinite(cost) || cost < 0) return undefined
+  const tokens = value.tokens
+  if (typeof tokens !== "object" || tokens === null) return undefined
+  const t = tokens as Record<string, unknown>
+  return {
+    cost,
+    tokens: {
+      input: typeof t.input === "number" && Number.isFinite(t.input) && t.input >= 0 ? t.input : 0,
+      output: typeof t.output === "number" && Number.isFinite(t.output) && t.output >= 0 ? t.output : 0,
+      reasoning: typeof t.reasoning === "number" && Number.isFinite(t.reasoning) && t.reasoning >= 0 ? t.reasoning : 0,
+      cache: {
+        read: typeof (t.cache as Record<string, unknown> | undefined)?.read === "number" ? (t.cache as Record<string, unknown>).read as number : 0,
+        write: typeof (t.cache as Record<string, unknown> | undefined)?.write === "number" ? (t.cache as Record<string, unknown>).write as number : 0,
+      },
+    },
+  }
 }
 
 function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {

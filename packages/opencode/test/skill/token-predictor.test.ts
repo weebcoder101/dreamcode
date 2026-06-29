@@ -11,9 +11,9 @@ import { describe, expect, test, beforeEach } from "bun:test"
 import {
   shouldRunPeriodicCheck,
   resetPeriodicTimer,
-  categorizeQuestion,
   predictorBreaker,
 } from "../../src/skill/token-predictor"
+import { categorizeQuestion } from "../../src/skill/question-complexity-schema"
 
 // ---------------------------------------------------------------------------
 // shouldRunPeriodicCheck / resetPeriodicTimer

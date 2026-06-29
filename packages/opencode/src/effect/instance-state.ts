@@ -67,7 +67,6 @@ export const make = <A, E = never, R = never>(
         if (Exit.isSuccess(exit)) return Duration.hours(4)
         return Duration.seconds(30)
       },
-      requireServicesAt: "lookup",
     })
 
     const off = registerDisposer((directory) => Effect.runPromise(ScopedCache.invalidate(cache, directory)))

@@ -9,7 +9,7 @@ export function saveCheckpoint(checkpoint: Omit<Checkpoint, "id" | "timestamp">)
   const full: Checkpoint = { ...checkpoint, id: `cp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, timestamp: new Date().toISOString() }
   const storePath = path.join(CHECKPOINT_DIR, "store.json")
   let store: { checkpoints: Checkpoint[]; last_checkpoint: string | null } = { checkpoints: [], last_checkpoint: null }
-  if (fs.existsSync(storePath)) try { store = JSON.parse(fs.readFileSync(storePath, "utf8")) } catch {}
+  if (fs.existsSync(storePath)) try { store = JSON.parse(fs.readFileSync(storePath, "utf8")) } catch (e) { console.warn("[checkpoint] failed to parse store.json:", String(e)) }
   store.checkpoints.push(full)
   store.last_checkpoint = full.id
   if (store.checkpoints.length > 50) store.checkpoints = store.checkpoints.slice(-50)

@@ -11,6 +11,7 @@ Features:
 import argparse
 import json
 import os
+import stat
 import sys
 import time
 import urllib.error
@@ -20,11 +21,31 @@ from pathlib import Path
 
 # Auto-load .env.neuro if NEURO_API_KEY not set
 def _load_env_neuro():
-    """Load .env.neuro file if it exists and NEURO_API_KEY is not set."""
+    """Load .env.neuro file if it exists and NEURO_API_KEY is not set.
+    
+    Security checks:
+    - Refuses world-readable files (mode & 0o004) to prevent credential exposure
+    - Refuses world-writable files (mode & 0o002) to prevent injection attacks
+    - Logs a warning to stderr for unsafe permissions
+    """
     if os.environ.get("NEURO_API_KEY"):
         return
     env_neuro_path = Path(__file__).resolve().parent.parent.parent.parent / ".env.neuro"
     if env_neuro_path.exists():
+        try:
+            file_mode = env_neuro_path.stat().st_mode
+            if file_mode & stat.S_IROTH:
+                print(f"WARNING: {env_neuro_path} is world-readable ({oct(file_mode & 0o777)}). "
+                      "Set permissions to 0600 (chmod 600 .env.neuro). Refusing to load.",
+                      file=sys.stderr)
+                return
+            if file_mode & stat.S_IWOTH:
+                print(f"WARNING: {env_neuro_path} is world-writable ({oct(file_mode & 0o777)}). "
+                      "Set permissions to 0600 (chmod 600 .env.neuro). Refusing to load.",
+                      file=sys.stderr)
+                return
+        except OSError:
+            return
         for line in env_neuro_path.read_text().splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:

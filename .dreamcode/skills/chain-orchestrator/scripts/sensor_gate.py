@@ -103,6 +103,7 @@ SKILL_GRAPH = {
     # ── META SKILLS ──
     "breakthrough-overdrive-innovation": {"needs": [], "triggers": ["neuro", "research", "deep-research"], "always": True},
     "context-compactor": {"needs": [], "triggers": [], "always": False},
+    "effect": {"needs": [], "triggers": ["architecture", "code-hardener"], "always": False},
     "exhaustive-crosscheck": {"needs": [], "triggers": ["neuro"], "always": False},
     "neuro": {"needs": [], "triggers": ["model-router", "code-hardener"], "always": False},
     "model-router": {"needs": ["neuro"], "triggers": [], "always": False},
@@ -637,15 +638,29 @@ def run_enforcement_checks(config: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def emit_plan(chain_result: dict) -> str:
-    primary = "breakthrough-overdrive-innovation"
     chain = chain_result["chain"]
+    # Determine actual mode from detected tasks
+    task_types = {t["task_type"] for t in chain_result.get("detected_tasks", [])}
+    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
+    has_innovation = bool(task_types & INNOVATION_TASKS) or "breakthrough-overdrive-innovation" in chain
+    is_trivial = not task_types or task_types <= {"communication"}
+
+    primary = "breakthrough-overdrive-innovation" if has_innovation else (chain[0] if chain else "general")
     supports = [s for s in chain if s != primary][:2]
+
+    if is_trivial:
+        mode = "TRIVIAL"
+    elif has_innovation:
+        mode = "DREAM_INNOVATION"
+    else:
+        mode = "STANDARD"
+
     lines = [
         "Skill Plan:",
         f"- primary: {primary}",
         f"- supports: {', '.join(supports)}",
         "- automation: none",
-        "- mode: DREAM_INNOVATION",
+        f"- mode: {mode}",
         f"- chain: {' → '.join(chain)}",
     ]
     return "\n".join(lines)
@@ -834,7 +849,9 @@ def run_gate(prompt: str) -> dict:
 
     # Social greeting bypass
     if _is_social_greeting(prompt):
-        return {"is_social_greeting": True, "response": "Hey! What can I help you with?"}
+        output = f"{intent_block}\n\n{skill_block}"
+        print(output)
+        return {"is_social_greeting": True, "response": "Hey! What can I help you with?", "output": output}
 
     # Stage 2.7: Dynamic Persona Generation
     persona_block = generate_personas(chain_result, prompt)

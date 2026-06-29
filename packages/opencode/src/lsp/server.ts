@@ -14,6 +14,47 @@ import { spawn } from "./launch"
 import { Npm } from "@opencode-ai/core/npm"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
 
+// ─── Sanitized LSP Environment ───────────────────────────────────
+// Prevents credential leakage to LSP subprocesses. Only explicitly
+// allowed env vars are passed through. Fixes CVE-like env leak where
+// API keys, OAuth tokens, and cloud credentials were inherited by all
+// 14+ LSP server child processes.
+const LSP_ALLOWED_ENV_KEYS = new Set([
+  "PATH", "HOME", "USER", "SHELL",
+  "TMPDIR", "TEMP", "TMP",
+  "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TERM_PROGRAM",
+  // Language-specific tool paths
+  "NODE_PATH", "NVM_BIN", "NVM_DIR",
+  "GOBIN", "GOPATH", "GOROOT",
+  "RUSTUP_HOME", "CARGO_HOME",
+  "PYTHONPATH", "VIRTUAL_ENV", "PYENV_ROOT",
+  "DOTNET_CLI_HOME", "DOTNET_ROOT",
+  "JAVA_HOME",
+  // Platform-specific
+  "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
+])
+
+/**
+ * Returns a filtered environment safe for LSP child processes.
+ * Only explicitly allowed variables are passed through, preventing
+ * credential leakage from process.env mutations.
+ *
+ * @param extra - Additional key-value pairs to merge (e.g. { GOBIN: ... })
+ */
+export function lspEnv(extra?: Record<string, string | undefined>): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const key of LSP_ALLOWED_ENV_KEYS) {
+    const val = process.env[key]
+    if (val !== undefined) result[key] = val
+  }
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v !== undefined) result[k] = v
+    }
+  }
+  return result
+}
+
 const pathExists = async (p: string) =>
   fs
     .stat(p)
@@ -126,9 +167,7 @@ export const Typescript: Info = {
     if (!bin) return
     const proc = spawn(bin, ["--stdio"], {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -157,9 +196,7 @@ export const Vue: Info = {
     args.push("--stdio")
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -210,9 +247,7 @@ export const ESLint: Info = {
 
     const proc = spawn("node", [serverPath, "--stdio"], {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
 
     return {
@@ -344,9 +379,7 @@ export const Biome: Info = {
 
     const proc = spawn(bin, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
 
     return {
@@ -370,7 +403,7 @@ export const Gopls: Info = {
       if (flags.disableLspDownload) return
 
       const proc = Process.spawn(["go", "install", "golang.org/x/tools/gopls@latest"], {
-        env: { ...process.env, GOBIN: Global.Path.bin },
+        env: lspEnv({ GOBIN: Global.Path.bin }),
         stdout: "pipe",
         stderr: "pipe",
         stdin: "pipe",
@@ -515,9 +548,7 @@ export const Pyright: Info = {
 
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -567,7 +598,7 @@ export const ElixirLS: Info = {
         })
 
         const cwd = path.join(Global.Path.bin, "elixir-ls-master")
-        const env = { MIX_ENV: "prod", ...process.env }
+        const env = lspEnv({ MIX_ENV: "prod" })
         await Process.run(["mix", "deps.get"], { cwd, env })
         await Process.run(["mix", "compile"], { cwd, env })
         await Process.run(["mix", "elixir_ls.release2", "-o", "release"], { cwd, env })
@@ -1082,9 +1113,7 @@ export const Svelte: Info = {
     args.push("--stdio")
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -1115,9 +1144,7 @@ export const Astro: Info = {
     args.push("--stdio")
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -1374,9 +1401,7 @@ export const YamlLS: Info = {
     args.push("--stdio")
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -1528,9 +1553,7 @@ export const PHPIntelephense: Info = {
     args.push("--stdio")
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -1609,9 +1632,7 @@ export const BashLS: Info = {
     args.push("start")
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -1787,9 +1808,7 @@ export const DockerfileLS: Info = {
     args.push("--stdio")
     const proc = spawn(binary, args, {
       cwd: root,
-      env: {
-        ...process.env,
-      },
+      env: lspEnv(),
     })
     return {
       process: proc,
@@ -1856,9 +1875,7 @@ export const Nixd: Info = {
     return {
       process: spawn(nixd, [], {
         cwd: root,
-        env: {
-          ...process.env,
-        },
+        env: lspEnv(),
       }),
     }
   },

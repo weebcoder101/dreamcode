@@ -5,7 +5,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { PermissionNotFoundError, SessionNotFoundError } from "../errors"
+import { PermissionNotFoundError, SessionNotFoundError, UnknownError } from "../errors"
 import { SessionLocationMiddleware } from "../middleware/session-location"
 import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
 
@@ -14,6 +14,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
     HttpApiEndpoint.get("permission.request.list", "/api/permission/request", {
       query: LocationQuery,
       success: Location.response(Schema.Array(PermissionV2.Request)),
+      error: UnknownError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -28,6 +29,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
     HttpApiEndpoint.get("permission.saved.list", "/api/permission/saved", {
       query: Schema.Struct({ projectID: ProjectV2.ID.pipe(Schema.optional) }),
       success: Schema.Struct({ data: Schema.Array(PermissionSaved.Info) }),
+      error: UnknownError,
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.permission.saved.list",
@@ -40,6 +42,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
     HttpApiEndpoint.delete("permission.saved.remove", "/api/permission/saved/:id", {
       params: { id: PermissionSaved.ID },
       success: HttpApiSchema.NoContent,
+      error: UnknownError,
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.permission.saved.remove",
@@ -53,7 +56,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
     HttpApiEndpoint.get("session.permission.list", "/api/session/:sessionID/permission", {
       params: { sessionID: SessionV2.ID },
       success: Schema.Struct({ data: Schema.Array(PermissionV2.Request) }),
-      error: SessionNotFoundError,
+      error: [SessionNotFoundError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -72,7 +75,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
         message: Schema.String.pipe(Schema.optional),
       }),
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, PermissionNotFoundError],
+      error: [SessionNotFoundError, PermissionNotFoundError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

@@ -38,12 +38,33 @@ GUARDIAN_LOG = EVOLUTION_DIR / "guardian_ai.jsonl"
 
 # Load NEURO API config
 def _load_env():
-    """Load .env files for NEURO_API_KEY."""
+    """Load .env files for NEURO_API_KEY.
+    
+    Security checks:
+    - Refuses world-readable files (mode & 0o004) to prevent credential exposure
+    - Refuses world-writable files (mode & 0o002) to prevent injection attacks
+    - Logs a warning to stderr for unsafe permissions
+    """
     if os.environ.get("NEURO_API_KEY"):
         return
     for env_file in [".env.secret", ".env.neuro", ".env"]:
         path = PROJECT_ROOT / env_file
         if path.exists():
+            try:
+                import stat as _stat
+                file_mode = path.stat().st_mode
+                if file_mode & _stat.S_IROTH:
+                    print(f"WARNING: {path} is world-readable ({oct(file_mode & 0o777)}). "
+                          "Set permissions to 0600 (chmod 600). Refusing to load.",
+                          file=sys.stderr)
+                    continue
+                if file_mode & _stat.S_IWOTH:
+                    print(f"WARNING: {path} is world-writable ({oct(file_mode & 0o777)}). "
+                          "Set permissions to 0600 (chmod 600). Refusing to load.",
+                          file=sys.stderr)
+                    continue
+            except OSError:
+                continue
             for line in path.read_text().splitlines():
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
@@ -299,13 +320,21 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Guardian AI — NEURO-powered safety supervisor")
-    parser.add_argument("--prompt", required=True, help="User prompt to review")
+    parser.add_argument("--prompt", default=None, help="User prompt to review")
+    parser.add_argument("--prompt-file", default=None, help="Read prompt from file")
     parser.add_argument("--context", default="{}", help="JSON context (files, etc.)")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
 
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text().strip()
+    elif args.prompt:
+        prompt = args.prompt
+    else:
+        parser.error("Either --prompt or --prompt-file is required")
+
     context = json.loads(args.context) if args.context else {}
-    result = run_guardian(args.prompt, context)
+    result = run_guardian(prompt, context)
 
     if args.json:
         print(json.dumps(result, indent=2))

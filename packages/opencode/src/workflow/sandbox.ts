@@ -4,6 +4,7 @@ import {
   type QuickJSContext,
   type QuickJSDeferredPromise,
   type QuickJSHandle,
+  // @ts-expect-error - quickjs-emscripten is optional; module may not be installed
 } from "quickjs-emscripten"
 
 /** An injected host function: receives already-marshaled JS args, returns a JS value or Promise. */
@@ -229,7 +230,7 @@ function injectHooks(
   deferreds: QuickJSDeferredPromise[],
 ): void {
   for (const [name, fn] of Object.entries(hooks)) {
-    const fnHandle = vm.newFunction(name, (...argHandles) => {
+    const fnHandle = vm.newFunction(name, (...argHandles: QuickJSHandle[]) => {
       const args = argHandles.map((h) => vm.dump(h))
       const out = fn(...args)
       if (out instanceof Promise) {

@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
-import { InvalidRequestError, SessionNotFoundError } from "../errors"
+import { InvalidRequestError, SessionNotFoundError, UnknownError } from "../errors"
 import type { LocationServices } from "../groups/location"
 
 export class SessionLocationMiddleware extends HttpApiMiddleware.Service<
@@ -18,7 +18,7 @@ export class SessionLocationMiddleware extends HttpApiMiddleware.Service<
     provides: LocationServices
   }
 >()("@opencode/HttpApiSessionLocation", {
-  error: [InvalidRequestError, SessionNotFoundError],
+  error: [InvalidRequestError, SessionNotFoundError, UnknownError],
 }) {}
 
 const decodeSessionID = Schema.decodeUnknownEffect(SessionV2.ID)
@@ -62,6 +62,15 @@ export const sessionLocationLayer = Layer.effect(
               }),
             ),
           ),
+          Effect.catchTag("EventV2.InvalidSyncEvent", (error) => {
+            const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+            return Effect.logError("invalid sync event in session location middleware").pipe(
+              Effect.annotateLogs({ ref, sessionID }),
+              Effect.andThen(
+                Effect.fail(new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref })),
+              ),
+            )
+          }),
         )
       }),
     )

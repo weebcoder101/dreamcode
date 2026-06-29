@@ -4,32 +4,11 @@ import * as fs from "fs"
 import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
-import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, HOME, isWindows, debugLog } from "./python-resolver"
+import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, HOME, isWindows, debugLog, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "./python-resolver"
+import { SOCIAL_GREETING_RE, COMPLEXITY_SPAWN_MAP, COMPLEXITY_SCORES, maxComplexityFromQuestions, spawnCountForComplexity, type RatedQuestion, type ComplexityLevel } from "./question-complexity-schema"
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
-
-/** Resolve a writable temp directory, trying project-local first then fallbacks. */
-function resolveTmpBase(projectRoot: string): string {
-  if (isWindows()) {
-    return path.join(process.env.TEMP || process.env.TMP || HOME, "dreamcode")
-  }
-  const candidates = [
-    path.join(projectRoot, ".dreamcode", "tmp"),
-    ...(process.env.XDG_RUNTIME_DIR ? [path.join(process.env.XDG_RUNTIME_DIR, "dreamcode")] : []),
-    path.join(HOME, ".dreamcode", "tmp"),
-  ]
-  for (const dir of candidates) {
-    try {
-      fs.mkdirSync(dir, { recursive: true })
-      const testFile = path.join(dir, ".write-test")
-      fs.writeFileSync(testFile, "")
-      fs.unlinkSync(testFile)
-      return dir
-    } catch {}
-  }
-  return candidates[0]
-}
 
 const RATE_MAX_SPAWNS = 5
 
@@ -244,6 +223,7 @@ export interface SpawnEvaluation {
 export function evaluateSpawnNecessity(
   result: SensorGateResult,
   prompt: string,
+  activeQuestions?: readonly RatedQuestion[],
 ): SpawnEvaluation {
   const reasons: string[] = []
   let score = 0
@@ -261,7 +241,7 @@ export function evaluateSpawnNecessity(
   }
 
   // 1. Social greetings — never spawn for "hello", "thanks", etc.
-  if (result.is_social_greeting) {
+  if (result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())) {
     return { shouldSpawn: false, reason: "Social greeting — no specialists needed", suggestedCount: 0 }
   }
 
@@ -275,6 +255,19 @@ export function evaluateSpawnNecessity(
   //    The remaining scoring just informs the suggested count.
   const uniqueDomains = new Set(result.domain_tags.filter(Boolean)).size
   const hasCodeBlocks = prompt.includes("```") || prompt.includes("src/") || prompt.includes("import ")
+
+  // CPU-HEAVY TASK DETECTION: cap personas to 2 for compute-bound operations.
+  // Typecheck, build, and compilation tasks are CPU-intensive — running 5+ parallel
+  // tsc/bun processes causes OOM and degrades performance without benefit.
+  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
+  const isCpuHeavy = CPU_HEAVY_RE.test(prompt)
+  if (isCpuHeavy) {
+    return {
+      shouldSpawn: true,
+      reason: "CPU-heavy task detected — limited to at most 2 specialist personas",
+      suggestedCount: Math.min(2, userCount > 0 ? userCount : 2),
+    }
+  }
 
   // HARD RULE: DREAM_INNOVATION always spawns — creative tasks need multiple perspectives
   if (result.mode === "DREAM_INNOVATION") {
@@ -296,6 +289,18 @@ export function evaluateSpawnNecessity(
 
   if (isSimpleTask) {
     return { shouldSpawn: false, reason: "Simple high-confidence task — agent handles directly", suggestedCount: 0 }
+  }
+
+  // NEW: Incorporate question complexity into spawn count
+  // Active questions from the shipping checklist carry complexity ratings
+  // that directly influence how many subagents should be spawned.
+  if (activeQuestions && activeQuestions.length > 0) {
+    const maxQComplexity = maxComplexityFromQuestions(activeQuestions)
+    const qScore = COMPLEXITY_SCORES[maxQComplexity]
+    if (qScore > 0) {
+      score += qScore
+      reasons.push(`Question-derived complexity: ${maxQComplexity} (${activeQuestions.length} active questions)`)
+    }
   }
 
   // Scale up count for multi-faceted tasks
@@ -341,7 +346,7 @@ export function evaluateSpawnNecessity(
   }
 }
 
-function depthScore(result: SensorGateResult): number {
+export function depthScore(result: SensorGateResult): number {
   // Compute task depth from multiple signals on a 1-5 scale
   const tags = result.domain_tags.filter(Boolean).length
   const chainLen = result.chain.filter(Boolean).length
@@ -392,7 +397,12 @@ export function selectPersonas(result: SensorGateResult): Persona[] {
   // Dynamic depth-based count — now supports 0 specialists for simple tasks
   const dd = depthScore(result)
   let count: number
-  if (mode === "DREAM_INNOVATION") {
+  // CPU-heavy task override — max 2 personas for build/typecheck/compile
+  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
+  const isCpuHeavy = CPU_HEAVY_RE.test(result.intent)
+  if (isCpuHeavy) {
+    count = Math.min(2, Math.max(1, Math.ceil(dd / 2)))
+  } else if (mode === "DREAM_INNOVATION") {
     count = Math.min(5, Math.max(1, Math.ceil(dd * 1.2)))
   } else if (mode === "TRIVIAL") {
     count = 0
@@ -550,6 +560,16 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
     }
   }
 
+  // Post-validate critical fields
+  if (!["low", "medium", "high"].includes(result.risk_level)) {
+    console.warn(`[sensor-gate] Invalid risk_level "${result.risk_level}" — defaulting to "medium"`)
+    result.risk_level = "medium"
+  }
+  if (!Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1) {
+    console.warn(`[sensor-gate] Invalid confidence "${result.confidence}" — clamping to [0,1]`)
+    result.confidence = Math.max(0, Math.min(1, result.confidence))
+  }
+
   return result
 }
 
@@ -585,24 +605,20 @@ function runSensorGateEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
-      // Write prompt to temp file instead of piping via stdin.
+      // Write prompt to temp file instead of piping via stdin or CLI --prompt arg.
       // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
       // and writer.close() doesn't send EOF through them, causing Python's
       // sys.stdin.read() to block forever. Temp file avoids this entirely.
-      const tmpBase = resolveTmpBase(projectRoot)
-      let tmpDir = ""
+      // Using --prompt-file also avoids leaking the prompt in process listings.
       let tmpFile = ""
       try {
-        fs.mkdirSync(tmpBase, { recursive: true })
-        tmpDir = fs.mkdtempSync(path.join(tmpBase, "sg-"))
-        // chmod is a no-op on Windows; skip it to avoid potential throw in edge cases
-        if (!isWindows()) fs.chmodSync(tmpDir, 0o700)
-        tmpFile = path.join(tmpDir, "prompt.txt")
-        fs.writeFileSync(tmpFile, clamped, "utf-8")
+        tmpFile = writePromptToTmpFile(clamped, projectRoot, "sg-")
         debugLog("[sensor-gate] temp file created:", tmpFile)
       } catch (e) {
-        debugLog("[sensor-gate] failed to create tmp file, falling back to --prompt arg:", e)
-        tmpFile = ""
+        // Temp file creation failed — do NOT fall back to --prompt CLI arg
+        // which would leak the prompt in process listings.
+        debugLog("[sensor-gate] failed to create tmp file:", e)
+        return yield* Effect.fail(new Error(`[sensor-gate] Failed to create temp file for prompt: ${e}`))
       }
 
       // Cross-platform Python resolution with fallback chain.
@@ -610,34 +626,29 @@ function runSensorGateEffect(
       const pythonCmds = resolvePythonCommands()
 
       let proc: ReturnType<typeof Bun.spawn> | undefined
-      const output = yield* Effect.tryPromise({
-        try: async () => {
-          let lastError: unknown
-          debugLog("[sensor-gate] Python commands to try:", pythonCmds)
-          debugLog("[sensor-gate] sensor gate script:", sensorGate)
-          for (const cmd of pythonCmds) {
-            const versionArgs = getPythonArgs(cmd)
-            const args = tmpFile
-              ? [cmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
-              : [cmd, ...versionArgs, sensorGate, "--prompt", clamped]
-            debugLog("[sensor-gate] trying:", cmd, "args:", args)
-            try {
-              proc = Bun.spawn(args, {
-                cwd: projectRoot,
-                stdout: "pipe",
-                stderr: "pipe",
+      const output = yield* Effect.tryPromise(async (_signal: AbortSignal) => {
+        let lastError: unknown
+        debugLog("[sensor-gate] Python commands to try:", pythonCmds)
+        debugLog("[sensor-gate] sensor gate script:", sensorGate)
+        for (const cmd of pythonCmds) {
+          const versionArgs = getPythonArgs(cmd)
+          const args = [cmd, ...versionArgs, sensorGate, "--prompt-file", tmpFile]
+          debugLog("[sensor-gate] trying:", cmd, "args:", args)
+          try {
+            proc = Bun.spawn(args, {
+              cwd: projectRoot,
+              stdout: "pipe",
+              stderr: "pipe",
                 env: {
-                  PATH: process.env.PATH,
-                  HOME: process.env.HOME,
-                  PYTHONPATH: process.env.PYTHONPATH ?? "",
+                  ...BASE_SUBPROCESS_ENV,
                   PROJECT_ROOT: projectRoot,
                 },
               })
-              const text = await new Response(proc.stdout).text()
+              const text = await new Response(proc.stdout as ReadableStream<Uint8Array>).text()
               // Wait for process to fully exit before checking output
               // Without this, Windows may close pipes before the process flushes
               await proc.exited
-              const stderrText = await new Response(proc.stderr).text().catch(() => "")
+              const stderrText = await new Response(proc.stderr as ReadableStream<Uint8Array>).text().catch(() => "")
               if (stderrText.trim()) {
                 debugLog("[sensor-gate] python subprocess stderr:", stderrText.slice(0, 2000))
               }
@@ -654,8 +665,8 @@ function runSensorGateEffect(
           }
           debugLog("[sensor-gate] ALL Python commands failed:", lastError)
           return "" as string
-        },
-      }).pipe(
+        }
+      ).pipe(
         Effect.timeout(Duration.millis(timeoutMs)),
         Effect.catch((e) => {
           debugLog("[sensor-gate] subprocess timeout or error:", String(e), "timeoutMs:", timeoutMs)
@@ -664,13 +675,10 @@ function runSensorGateEffect(
       )
       // Kill zombie process on timeout — prevent accumulation of hanging subprocesses
       if (proc) {
-        try { proc.kill(9) } catch {}
+        try { proc.kill(9) } catch (e) { console.warn("[sensor-gate] kill zombie proc failed:", String(e)) }
       }
       // Clean up temp file
-      if (tmpFile) {
-        try { fs.unlinkSync(tmpFile) } catch {}
-        try { fs.rmdirSync(tmpDir) } catch {}
-      }
+      cleanupTmpFile(tmpFile)
       if (!output) {
         debugLog("[sensor-gate] empty output from subprocess — returning default result")
         return parseSensorGateOutput("")
@@ -721,26 +729,19 @@ function runNeuroHarnessEffect(
 
   const runWithTimeout = (timeoutMs: number) =>
     Effect.gen(function* () {
-      const tmpBase = resolveTmpBase(projectRoot)
-      try { fs.mkdirSync(tmpBase, { recursive: true }) } catch (e) {
-        debugLog("[sensor-gate] failed to create tmp base dir:", String(e), "tmpBase:", tmpBase)
-      }
-      let tmpDir = ""
-      try {
-        tmpDir = fs.mkdtempSync(path.join(tmpBase, "neuro-"))
-        if (!isWindows()) fs.chmodSync(tmpDir, 0o700)
-      } catch {}
-      const tmpFile = tmpDir ? path.join(tmpDir, "prompt.txt") : ""
+      let tmpFile = ""
+      let taskFile = ""
       try {
         const promptResult = buildPrompt({
           scanType,
           files: [{ path: "user_prompt", content: clamped }],
           context: clamped.slice(0, 8000),
         })
+        tmpFile = writePromptToTmpFile(promptResult.userPrompt, projectRoot, "neuro-")
 
-        if (tmpFile) {
-          fs.writeFileSync(tmpFile, promptResult.userPrompt, { mode: 0o600 })
-        }
+        // Write task content to a separate temp file instead of passing via
+        // --task CLI arg, which would leak the prompt in process listings.
+        taskFile = writePromptToTmpFile(clamped.slice(0, 8000), projectRoot, "neuro-task-")
 
         const automationContext = JSON.stringify({
           task: clamped,
@@ -758,16 +759,14 @@ function runNeuroHarnessEffect(
               ...versionArgs,
               neuroHarness,
               "--scan-type", scanType,
-              ...(tmpFile ? ["--file", tmpFile] : ["--prompt", clamped.slice(0, 8000)]),
-              "--task", clamped.slice(0, 8000),
+              "--file", tmpFile,
+              "--task-file", taskFile,
               "--automation-context", automationContext,
             ], {
               cwd: projectRoot,
               stdio: ["pipe", "pipe", "pipe"],
               env: {
-                PATH: process.env.PATH,
-                HOME: process.env.HOME,
-                PYTHONPATH: process.env.PYTHONPATH ?? "",
+                ...BASE_SUBPROCESS_ENV,
                 NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
                 PROJECT_ROOT: projectRoot,
               },
@@ -786,7 +785,8 @@ function runNeuroHarnessEffect(
         debugLog("[sensor-gate] runNeuroHarness subprocess failed:", String(e), "timeoutMs:", timeoutMs)
         return null
       } finally {
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+        cleanupTmpFile(tmpFile)
+        cleanupTmpFile(taskFile)
       }
     }).pipe(
       Effect.catch(() => Effect.succeed(null) as Effect.Effect<string | null>),
@@ -817,8 +817,20 @@ export const layer = Layer.effect(
           // Fallback: when Python script fails (empty domain_tags = default result),
           // selectPersonas() returns [] because there are no tags to match.
           // Generate fallback personas so natural prompts can still trigger spawning.
-          if (result.personas.length === 0 && result.domain_tags.length === 0 && !result.is_social_greeting) {
-            const fallbackCount = Math.min(3, PERSONA_PROFILES.length)
+          // Defense-in-depth: also check the raw prompt for social greetings, since Python's
+          // social greeting early-return produces empty stdout and is_social_greeting is false.
+          const promptIsSocialGreeting = result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())
+          if (result.personas.length === 0 && result.domain_tags.length === 0 && !promptIsSocialGreeting) {
+            // Use question complexity to determine fallback count instead of hardcoded 3.
+            // If we have active rated questions, use their max complexity; otherwise default to medium.
+            const complexity: ComplexityLevel = result.complexity === "high" ? "high"
+              : result.complexity === "medium" ? "medium"
+              : result.risk_level === "high" ? "high"
+              : result.risk_level === "medium" ? "medium"
+              : "low"
+            const spawnConfig = COMPLEXITY_SPAWN_MAP[complexity]
+            const fallbackCount = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
+            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, count=${fallbackCount}`)
             result.personas = PERSONA_PROFILES.slice(0, fallbackCount).map((p) => ({
               name: p.name,
               role: p.role,

@@ -179,9 +179,10 @@ export const TuiThreadCommand = cmd({
         return
       }
 
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-      }, 1000).unref?.()
+      const check = () => client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+      // Check shortly after startup, then every 30 minutes
+      setTimeout(check, 1000).unref?.()
+      setInterval(check, 30 * 60 * 1000).unref?.()
 
       try {
         const { Effect } = await import("effect")
@@ -216,7 +217,9 @@ export const TuiThreadCommand = cmd({
     } finally {
       try {
         unguard?.()
-      } catch {}
+      } catch (e) {
+        console.warn("[tui] unguard error:", String(e))
+      }
     }
     process.exit(0)
   },

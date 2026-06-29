@@ -319,7 +319,30 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
           stdout: upgradeResult.stdout,
           stderr: upgradeResult.stderr,
         })
-        yield* text([process.execPath, "--version"])
+        // Verify the newly installed binary resolves correctly
+        if (m === "npm" || m === "pnpm" || m === "bun") {
+          const which = yield* text(["which", "dreamcode"]).pipe(Effect.catch(() => Effect.succeed("")))
+          if (!which.trim()) {
+            yield* Effect.logWarning("upgrade: 'which dreamcode' returned nothing — binary may not be on PATH", {
+              method: m,
+              target,
+            })
+          } else {
+            const resolved = yield* text(["readlink", "-f", which.trim()]).pipe(
+              Effect.catch(() => Effect.succeed("")),
+            )
+            yield* Effect.logInfo("post-upgrade binary verification", {
+              which: which.trim(),
+              resolved: resolved.trim(),
+              method: m,
+              target,
+            })
+            const versionOut = yield* text(["dreamcode", "--version"]).pipe(
+              Effect.catch(() => Effect.succeed("")),
+            )
+            yield* Effect.logInfo("post-upgrade version", { version: versionOut.trim(), method: m, target })
+          }
+        }
       }),
     }
 
