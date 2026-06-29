@@ -29,7 +29,8 @@ describe("SelfEvolve", () => {
 
   test("SelfEvolve.Service is a valid Effect tag", () => {
     expect(SelfEvolve.Service).toBeDefined()
-    expect(typeof SelfEvolve.Service).toBe("object")
+    // Effect v4 beta: Context.Service() returns a class constructor (typeof "function"), not an object
+    expect(typeof SelfEvolve.Service === "function" || typeof SelfEvolve.Service === "object").toBe(true)
     expect((SelfEvolve.Service as { key: string }).key).toBe("@dreamcode/SelfEvolve")
   })
 
