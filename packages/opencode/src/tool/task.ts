@@ -332,8 +332,9 @@ export const TaskTool = Tool.define(
           parts,
         })
         // Use cost/tokens from prompt result.info — avoids race with projector DB write
-        const cost = (result as SessionV1.WithParts).info.cost ?? 0
-        const tokens = (result as SessionV1.WithParts).info.tokens
+        const info = result.info
+        const cost = info.role === "assistant" ? info.cost : 0
+        const tokens = info.role === "assistant" ? info.tokens : undefined
         yield* Ref.set(costRef, cost)
         yield* Ref.set(tokensRef, tokens)
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""

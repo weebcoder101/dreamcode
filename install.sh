@@ -82,7 +82,9 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "${CYAN}Updating existing DreamCode install...${NC}"
   CURRENT_BRANCH=$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
   echo -e "${MUTED}Branch: $CURRENT_BRANCH${NC}"
-  if ! git -C "$INSTALL_DIR" pull origin "$CURRENT_BRANCH"; then
+  if [ "$CURRENT_BRANCH" = "HEAD" ]; then
+    echo -e "${MUTED}Detached HEAD — skipping git pull (CI mode)${NC}"
+  elif ! git -C "$INSTALL_DIR" pull origin "$CURRENT_BRANCH"; then
     echo -e "${ORANGE}WARN: git pull failed on '$CURRENT_BRANCH'. Continuing with existing clone.${NC}"
   fi
 else

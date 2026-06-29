@@ -9,9 +9,9 @@ function readSkillDirs(): fs.Dirent[] {
 }
 
 describe("embedded skills integrity", () => {
-  it("contains all 40 expected skill directories", () => {
+  it("contains all 41 expected skill directories", () => {
     const dirs = readSkillDirs()
-    expect(dirs.length).toBe(40)
+    expect(dirs.length).toBe(41)
   })
 
   it("includes chain-orchestrator, effect, research, security, neuro", () => {
