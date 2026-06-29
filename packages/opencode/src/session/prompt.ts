@@ -1809,6 +1809,16 @@ Before every response, verify your reasoning:
 
                   // ─── SelfEvolve.capture: Persist learning signals ─────
                   const selfEvolveSignals: LearningSignal[] = []
+
+                  // Always capture at least one signal — learn from successes too
+                  selfEvolveSignals.push({
+                    whatWorked: `Chain ${gateResult.chain.join(" → ")} completed (${chainResults.filter(r => r.status === "ok").length}/${chainResults.length} skills ok)`,
+                    whatFailed: missingSkills.length > 0 ? `Missing skills: ${missingSkills.join(", ")}` : "none",
+                    whatToChange: missingSkills.length > 0
+                      ? `Add missing skill definitions: ${missingSkills.join(", ")}`
+                      : `Reinforce: ${gateResult.chain.join(", ")} effective for ${gateResult.intent.slice(0, 80)}`,
+                  })
+
                   if (missingSkills.length > 0) {
                     selfEvolveSignals.push({
                       whatWorked: `Chain ${gateResult.chain.join(", ")} (${chainResults.filter(r => r.status === "ok").length}/${chainResults.length} skills)`,

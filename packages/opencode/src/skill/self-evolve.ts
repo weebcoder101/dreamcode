@@ -128,15 +128,13 @@ export const layer = Layer.effect(
       const signals: LearningSignal[] = [...DEFAULT_LEARNINGS]
 
       // Try to supplement with LTM-stored rules
-      const result = yield* (ltm as any).query({
-        query: "learned rules Effect v4 API differences patterns",
-        topics: ["learned rules", "Effect v4", "self-evolution"],
-      }).pipe(
-        Effect.catch(() => Effect.succeed(null)),
-      )
+      const query = (ltm as { query: (input: { query: string; topics: string[] }) => Promise<unknown> }).query.bind(ltm)
+      const raw: unknown = yield* Effect.tryPromise(() =>
+        query({ query: "learned rules Effect v4 API differences patterns", topics: ["learned rules", "Effect v4", "self-evolution"] }),
+      ).pipe(Effect.catch(() => Effect.succeed(null)))
 
-      if (result && typeof result === "object") {
-        const r = result as { candidates?: Array<{ description?: string; metadata?: Record<string, unknown> }> }
+      if (raw && typeof raw === "object") {
+        const r = raw as { candidates?: Array<{ description?: string; metadata?: Record<string, unknown> }> }
         if (r.candidates) {
           for (const c of r.candidates) {
             if (c.description) {
