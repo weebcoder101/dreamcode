@@ -11,7 +11,8 @@
  *
  * Usage:
  *   import { SelfEvolve } from "@/skill/self-evolve"
- *   yield* SelfEvolve.capture({ chain, intent, results, mistakes })
+ *   const svc = yield* SelfEvolve.Service
+ *   yield* svc.capture({ chain, intent, results, mistakes })
  *
  * This is called automatically by prompt.ts after chain execution.
  * It is also available as an explicit skill for manual invocation.
@@ -45,7 +46,7 @@ export interface Interface {
   readonly learnings: () => Effect.Effect<LearningSignal[], unknown, unknown>
 }
 
-export class SelfEvolve extends Context.Service<SelfEvolve, Interface>()("@dreamcode/SelfEvolve") {}
+export class Service extends Context.Service<Service, Interface>()("@dreamcode/SelfEvolve") {}
 
 /**
  * Known Effect v4 API differences that the model frequently gets wrong.
@@ -86,7 +87,7 @@ export const DEFAULT_LEARNINGS: LearningSignal[] = [
 ]
 
 export const layer = Layer.effect(
-  SelfEvolve,
+  Service,
   Effect.gen(function* () {
     const ltm = yield* PiecesLTM.PiecesLTM
 
@@ -153,7 +154,7 @@ export const layer = Layer.effect(
       return signals
     })
 
-    return SelfEvolve.of({ capture, learnings })
+    return Service.of({ capture, learnings })
   }),
 )
 

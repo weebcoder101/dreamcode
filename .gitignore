@@ -66,4 +66,3 @@ evolution/
 .dreamcode/todos/
 .opencode/git_push.lock
 .git-rewrite/
-bun.lock
