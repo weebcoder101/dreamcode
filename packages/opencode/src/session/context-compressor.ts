@@ -15,7 +15,7 @@ export interface CompressionResult {
 
 interface CompressionStage {
   name: string
-  execute: (context: string) => string
+  execute: (context: string, maxTokens?: number) => string
 }
 
 function countTokens(text: string): number {
@@ -26,7 +26,7 @@ function countTokens(text: string): number {
   return Math.floor(proseChars / 4 + codeChars / 3)
 }
 
-function stage1_budgetReduction(context: string, maxTokens: number = 100000): string {
+function stage1_budgetReduction(context: string, maxTokens: number = 150000): string {
   const tokens = countTokens(context)
   if (tokens <= maxTokens) return context
 
@@ -138,9 +138,9 @@ function stage6_ritEnrichment(context: string): string {
   return ritSummary + context
 }
 
-function createPipeline(): CompressionStage[] {
+function createPipeline(currentMaxTokens: number = 150000): CompressionStage[] {
   return [
-    { name: "budget_reduction", execute: (ctx) => stage1_budgetReduction(ctx) },
+    { name: "budget_reduction", execute: (ctx) => stage1_budgetReduction(ctx, currentMaxTokens) },
     { name: "snip", execute: stage2_snip },
     { name: "microcompact", execute: stage3_microcompact },
     { name: "context_collapse", execute: stage4_contextCollapse },
@@ -157,21 +157,42 @@ export class Service extends Context.Service<Service, Interface>()("@dreamcode/C
 
 export const layer = Layer.succeed(Service, Service.of({
   compress: Effect.fn("ContextCompressor.compress")(function* (context: string, maxTokens?: number) {
-    const pipeline = createPipeline()
+    const TARGET_RATIO = 0.6
+    const MAX_ITERATIONS = 3
     let current = context
+    let bestResult = current
+    let bestRatio = 1
     const stages: string[] = []
     const originalTokens = countTokens(current)
+    let effectiveMaxTokens = maxTokens ?? Math.floor(originalTokens * TARGET_RATIO)
 
-    for (const stage of pipeline) {
-      const before = current
-      current = stage.execute(current)
-      if (current !== before) {
-        stages.push(stage.name)
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      const pipeline = createPipeline(effectiveMaxTokens)
+      const prePassState = current
+      for (const stage of pipeline) {
+        const before = current
+        current = stage.execute(current)
+        if (current !== before && !stages.includes(stage.name)) {
+          stages.push(stage.name)
+        }
       }
+      const ratio = countTokens(current) / originalTokens
+      if (ratio < bestRatio) {
+        bestResult = current
+        bestRatio = ratio
+      }
+      if (ratio <= TARGET_RATIO) break
+      effectiveMaxTokens = Math.floor(effectiveMaxTokens * 0.9)
+      current = prePassState
     }
+    current = bestResult
 
     const compressedTokens = countTokens(current)
     const compressionRatio = originalTokens > 0 ? compressedTokens / originalTokens : 1
+    // Compute fidelityScore from compression aggressiveness: 1.0 = no compression, 0.0 = 100% compressed
+    const fidelityScore = originalTokens > 0
+      ? Math.round((1 - (originalTokens - compressedTokens) / originalTokens) * 100) / 100
+      : 1
 
     const ctx = yield* InstanceState.contextOrNull
     if (ctx) {
@@ -186,7 +207,7 @@ export const layer = Layer.succeed(Service, Service.of({
       originalTokens,
       compressedTokens,
       compressionRatio,
-      fidelityScore: 0.98,
+      fidelityScore,
       stages,
     }
   }),

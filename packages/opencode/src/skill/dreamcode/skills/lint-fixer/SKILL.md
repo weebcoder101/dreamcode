@@ -1,86 +1,79 @@
 ---
 name: lint-fixer
-description: Mandatory post-implementation lint and type-checking skill that runs after ANY code change, bug fix, new feature, refactor, API change, or configuration modification. Ensures all ruff lint errors, mypy type errors, and ESLint issues are resolved. Use after every implementation that modifies source files. Use when code has been edited. Use for every response where file edits were made.
+description: Mandatory post-implementation lint and type-checking skill that runs after ANY code change, bug fix, new feature, refactor, API change, or configuration modification. Ensures all TypeScript type errors, Effect-TS ecosystem issues, and lint errors are resolved. Use after every implementation that modifies source files.
 chains_with: [automated-learning]
 ---
 
-# Lint Fix Skill - Mandatory Post-Implementation Pipeline
+# Lint Fix Skill — Mandatory Post-Implementation Pipeline (TypeScript/Effect-TS)
 
 ## Purpose
-This skill runs **MANDATORILY** after the full NEURO (10 iterations) + code-hardener (5 iterations) + 15-iteration final review gate chain has completed and implementation has been performed. It ensures:
-1. All ruff lint errors are resolved
-2. All mypy type errors are resolved
-3. No new lint/type issues are introduced
+This skill runs **MANDATORILY** after implementation. It ensures:
+1. All TypeScript type errors resolved (`tsc --noEmit`)
+2. All Effect-TS ecosystem type errors fixed
+3. No new lint/type issues introduced
 4. Code follows the project's strict quality standards
 
-## When to Invoke
-This skill **MUST** be invoked in EVERY response where:
-- The full 15-iteration chain (NEURO 10 + code-hardener 5) has completed
-- The 15-iteration final review has been produced
-- Implementation has been performed based on the approved manifest
-- Any file edits were made to the codebase
+## Workflow — 5 Iterative Loops
 
-## Integration with 15-Iteration Chain
-
-The mandatory full sequence is:
-1. User request
-2. NEURO review — 10 progressive iterations
-3. Code-hardener — 5 progressive iterations
-4. 15-iteration final review gate
-5. Implementation (only after final review approval)
-6. **LINT-FIXER SKILL** (this skill) ← MANDATORY
-7. Final validation & response to user
-
-**NO RESPONSE SHOULD BE SENT TO USER WITHOUT COMPLETING THIS SKILL**
-
-## Workflow - 5 Iterative Loops
-
-### Loop 1: Ruff Check & Fix
+### Loop 1: TypeScript Type Check
 ```
-RUN: ruff check src/ tests/ benchmarks/
+RUN: bun run typecheck (or tsc --noEmit --project packages/opencode/tsconfig.json)
 IF errors found:
-  - Auto-fix with: ruff check --fix src/ tests/ benchmarks/
-  - Report fixed errors
-  - If any remain, invoke NEURO for architectural review
+  - Categorize by error family (see Effect-TS Type Error Families below)
+  - Apply automated fix pattern for each family
+  - Re-run check after fixes
 ```
 
-### Loop 2: Mypy Type Check & Fix
+### Effect-TS Type Error Families & Automated Fixes
+
+| Error Family | Detection Pattern | Automated Fix |
+|---|---|---|
+| `Context.Tag` unsatisfied | `Effect<A, E, R>` where R includes missing service | Add `Layer.provide(Missing.layer)` to composition |
+| `Schema.decodeUnknown` mismatch | `Schema.decodeUnknown(MyClass)` type arg ≠ passed value | Wrap in `Schema.decodeUnknownSync` with `try/catch` |
+| `Effect.gen` inference failure | `yield* service.method()` — type not inferred | Add explicit type annotation: `yield* service.method() as Effect<ReturnType>` |
+| ManagedRuntime type error | `ManagedRuntime.make(layer)` — provider mismatch | Check layer composition order; ensure all deps provided |
+| `Effect.catchAll` (v4 beta) | `Effect.catchAll(...)` — doesn't exist in v4 | Replace with `Effect.catch(...)` (catches all including defects) |
+| `Effect.fork` without scope | `Effect.fork(...)` — doesn't exist in v4 | Use `Effect.forkIn(scope)` |
+| `Schema.Struct` multi-field | `Schema.Struct({...})` — verbose | Use `Schema.Class` for multi-field data shapes |
+| Missing return type on `Effect.fn` | `Effect.fn("name")(function*(){...})` without return | Add type params: `Effect.fn("name")(function*(in: Input): Effect.Effect<Output>)` |
+| `any` type propagation | `: any` in type position | Replace with `unknown` + narrow with type guard |
+
+### Loop 2: Biome / ESLint Check & Fix
 ```
-RUN: mypy src/
+RUN: npx biome check --fix packages/opencode/src/
+   OR: npx eslint --fix packages/opencode/src/
 IF errors found:
-  - Categorize errors (Any return, Type assignment, Union handling)
-  - Apply type annotations (NDArray, list[float], cast, etc.)
-  - If complex type issues, invoke NEURO for guidance
+  - Auto-fix with --fix flag
+  - Categorize remaining errors (unused vars, missing deps, etc.)
 ```
 
-### Loop 3: Import Order & Format Fix
+### Loop 3: Import Order & Unused Imports
 ```
-RUN: ruff check --select I src/ tests/
-IF import errors:
-  - Organize imports with ruff
-  - Move imports to top of files
-  - Remove unused imports
+RUN: npx biome check --fix --formatter-enabled=true packages/opencode/src/
+RUN: npx ts-prune -p packages/opencode/tsconfig.json
+IF unused exports detected:
+  - Remove or prefix with `_`
 ```
 
-### Loop 4: Complex Pattern Detection
+### Loop 4: Complex Pattern Detection (Effect-TS)
 ```
 SCAN for complex patterns that commonly cause issues:
-- List comprehension with np.array reassignment
-- Optional type (X | None) without null checks
-- pd.DataFrame.values without type annotation
-- np.array operations without explicit dtype
+- Layer circular dependency (A → B → A)
+- Missing Scope in Effect.gen (yield* Effect.forkIn needs Scope.Scope)
+- Effect.catchCause without proper Cause matching
+- Schema decode without error boundary
+- Eq.filter without proper type narrowing
 
 IF found:
   - Fix with proper patterns
   - Document in this skill for future detection
 ```
 
-### Loop 5: NEURO Integration - Full Validation
+### Loop 5: NEURO Integration — Full Validation
 ```
 INVOKE NEURO with the complete context:
 - Current file changes
-- All lint fixes applied
-- Type annotations added
+- All type fixes applied
 - Any remaining issues
 
 NEURO REVIEW:
@@ -97,61 +90,76 @@ IF NEURO rejects:
 
 ## Key Fix Patterns
 
-### Type Annotation Patterns
-```python
-# Fix: Any return from function
-def func() -> NDArray[np.float64]:
-    result: NDArray[np.float64] = np.array(...)
-    return result
+### Effect-TS Type Fix Patterns
+```typescript
+// Fix: Effect.catchAll doesn't exist in v4 — use Effect.catch
+// ❌ old
+pipe(effect, Effect.catchAll(handler))
+// ✅ new
+pipe(effect, Effect.catch(handler))  // catches all errors including defects
+pipe(effect, Effect.catchTag("SomeTag", handler))  // catches tagged errors only
 
-# Fix: List to ndarray reassignment
-var_list: list[float] = []
-for i in range(n):
-    var_list.append(compute())
-var_arr = np.array(var_list, dtype=np.float64)
+// Fix: Effect.fork needs Scope — use Effect.forkIn
+// ❌ old
+yield* Effect.fork(effect)
+// ✅ new
+const scope = yield* Scope.Scope
+yield* Effect.forkIn(effect, scope)
 
-# Fix: Optional type iteration
-assets = scenario_transform.assets
-if assets is None:
-    raise ValueError("assets cannot be None")
-for a in assets:
-    ...
+// Fix: Schema multi-field — use Class not Struct
+// ❌ old
+const MySchema = Schema.Struct({ name: Schema.String, age: Schema.Number })
+// ✅ new
+class MySchema extends Schema.Class<MySchema>("MySchema")({
+  name: Schema.String,
+  age: Schema.Number,
+}) {}
 
-# Fix: DataFrame values
-if isinstance(samples, pd.DataFrame):
-    arr: NDArray[np.float64] = samples.values.astype(np.float64)
-    return arr
+// Fix: Layer dependency missing
+// ❌ old — MissingFoo not provided
+const layer = Layer.effect(Service, Effect.gen(function* () {
+  const foo = yield* MissingFoo  // Effect<A, E, R> where R requires MissingFoo
+}))
+// ✅ new
+const layer = Layer.effect(Service, Effect.gen(function* () {
+  const foo = yield* MissingFoo
+})).pipe(Layer.provide(MissingFoo.defaultLayer))
+
+// Fix: Tag identity
+// ❌ old — Service.toString() doesn't exist in v4
+SomeService.toString()
+// ✅ new
+SomeService.key
 ```
 
-### Import Patterns
-```python
-# Always at top of file
-from __future__ import annotations
-import numpy as np
-import pandas as pd
-from typing import Any, TYPE_CHECKING
-# ... other imports
+### Bun-built Binary Patterns
+```typescript
+// Bun 1.3.x compiled binaries: replace ChildProcess + Stream with Bun.spawn
+// ❌ old (breaks in compiled binary)
+const child = yield* ChildProcess.make({ command: "python3", args, stdin: Stream.make(bytes) })
+// ✅ new
+const proc = Bun.spawn(["python3", ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+const writer = proc.stdin.getWriter()
+await writer.write(bytes); await writer.close()
+const text = await proc.stdout.text()
+await proc.exited
 ```
 
 ## Files to Always Check
-- src/project_q/simulation/monte_carlo.py
-- src/project_q/simulation/scenario_transform.py
-- src/project_q/risk/metrics.py
-- src/project_q/copula/fitting.py
-- src/project_q/dashboard/api_server.py
-- src/project_q/dependence/engine.py
-- src/project_q/dependence/metrics.py
-- All frontend JavaScript/JSX files
+- packages/opencode/src/**/*.ts
+- packages/opencode/test/**/*.ts
+- packages/function/src/**/*.ts
+- All frontend JavaScript/JSX/TSX files
 - All test files
 
 ## Execution Command
 ```bash
-ruff check src/ tests/ benchmarks/ --fix
-mypy src/
+bun run typecheck 2>&1 || npx tsc --noEmit --project packages/opencode/tsconfig.json
+npx biome check --fix packages/opencode/src/
 ```
 
 ## Exit Criteria
-- ruff check: All checks passed
-- mypy src/: Success: no issues found
-- No new warnings introduced
+- `tsc --noEmit`: Success: no issues found
+- All Effect-TS v4 patterns correct (no catchAll, no standalone fork)
+- No new lint warnings introduced
 - NEURO has provided sign-off (for Loop 5)

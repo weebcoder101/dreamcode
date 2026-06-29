@@ -302,23 +302,11 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
-      // Helper to fetch subagent session cost/tokens from DB after task completes.
-      // Uses Effect.option to convert NotFound to Option.none (no catchAll needed —
-      // Effect.option already handles the error channel).
-      const subagentSessionCost = (): Effect.Effect<{
-        cost: number
-        tokens: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined
-      }> =>
-        Effect.option(sessions.get(nextSession.id)).pipe(
-          Effect.map(
-            Option.match({
-              onNone: () => ({ cost: 0, tokens: undefined } as const),
-              onSome: (s) => ({ cost: s.cost ?? 0, tokens: s.tokens }),
-            }),
-          ),
-        )
-
-      // Refs track cost/tokens populated by runTask AFTER its prompt completes
+      // Refs track cost/tokens populated by runTask AFTER its prompt completes.
+      // CRITICAL: cost is read from the prompt result.info, NOT from re-reading
+      // the DB. The prompt return value already has the cost set by the processor,
+      // so re-reading from DB introduces a race with the projector's applyUsage
+      // commit and was the root cause of the ~$0.05 discrepancy.
       const costRef = yield* Ref.make(0)
       const tokensRef = yield* Ref.make<{ input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined>(undefined)
 
@@ -343,8 +331,9 @@ export const TaskTool = Tool.define(
           agent: next.name,
           parts,
         })
-        // Capture cost from DB AFTER prompt completes — projector has committed step-finish parts by now
-        const { cost, tokens } = yield* subagentSessionCost()
+        // Use cost/tokens from prompt result.info — avoids race with projector DB write
+        const cost = (result as SessionV1.WithParts).info.cost ?? 0
+        const tokens = (result as SessionV1.WithParts).info.tokens
         yield* Ref.set(costRef, cost)
         yield* Ref.set(tokensRef, tokens)
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""

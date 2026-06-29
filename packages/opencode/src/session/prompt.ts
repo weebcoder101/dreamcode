@@ -451,30 +451,14 @@ export const layer = Layer.effect(
         result,
       )
 
-      assistantMessage.finish = "tool-calls"
-      assistantMessage.time.completed = Date.now()
-      // Propagate subagent cost/tokens to parent session for accurate TUI context display
-      const sc = Number((result as any)?.subagentCost)
-      if (Number.isFinite(sc) && sc > 0) {
-        assistantMessage.cost = (assistantMessage.cost ?? 0) + sc
-      }
-      const st = (result as any)?.subagentTokens
-      if (st != null) {
-        const t = assistantMessage.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-        assistantMessage.tokens = {
-          input: t.input + (st.input ?? 0),
-          output: t.output + (st.output ?? 0),
-          reasoning: t.reasoning + (st.reasoning ?? 0),
-          cache: {
-            read: t.cache.read + (st.cache?.read ?? 0),
-            write: t.cache.write + (st.cache?.write ?? 0),
-          },
-        }
-      }
       yield* sessions.updateMessage(assistantMessage)
 
-      // Normalize potentially partial subagent tokens to the full shape StepFinishPart schema requires
-      // (all fields non-nullable — missing reasoning/cache would produce NaN in SQLite via applyUsage)
+      // ── Subagent Cost Propagation ───────────────────────────────────
+      // CRITICAL: The step-finish part is the SINGLE source of truth for
+      // subagent cost. DO NOT also add cost to assistantMessage.cost —
+      // that would double-count (the projector's applyUsage sums step-finish
+      // parts, and stats.ts also sums message.info.cost). The double-count
+      // was the root cause of the ~$0.05 discrepancy.
       const normalizeTokens = (t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] => {
         const cache = t?.cache as Record<string, unknown> | undefined
         return {
@@ -488,10 +472,6 @@ export const layer = Layer.effect(
         }
       }
 
-      // Create a step-finish part so the projector's PartUpdated handler
-      // propagates subagent cost/tokens to the session's DB cost row.
-      // This mirrors the main LLM flow (processor.ts) where step-finish parts
-      // carry cost/tokens and trigger applyUsage in the projector.
       const subagentCost_ = Number((result as any)?.subagentCost)
       const subagentTokens_ = (result as any)?.subagentTokens
       if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
@@ -1387,11 +1367,13 @@ Before every response, verify your reasoning:
 
           // Subagents should NOT trigger auto-compaction — they do focused work
           // and compaction during their execution is costly and disruptive.
+          // Also skip if compaction is locked (parent agent is mid-synthesis).
           if (
             agent.mode !== "subagent" &&
             lastFinished &&
             lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model })) &&
+            !(yield* compaction.isCompactionLocked)
           ) {
             yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
             continue
@@ -2411,6 +2393,10 @@ Before every response, verify your reasoning:
             const finalTools = personaRound >= MAX_PERSONA_ROUNDS
               ? Object.fromEntries(Object.entries(tools).filter(([id]) => id !== TaskTool.id)) as typeof tools
               : tools
+            // Lock compaction during synthetic phase — prevents mid-response
+            // auto-compact from truncating the context epoch. Unlocked after
+            // process completes (ensuring block below).
+            yield* compaction.lockCompaction
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -2422,7 +2408,7 @@ Before every response, verify your reasoning:
               tools: finalTools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
-            })
+            }).pipe(Effect.ensuring(compaction.unlockCompaction))
 
             if (structured !== undefined) {
               handle.message.structured = structured

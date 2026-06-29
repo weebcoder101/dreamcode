@@ -161,6 +161,11 @@ export interface Interface {
     auto: boolean
     overflow?: boolean
   }) => Effect.Effect<void>
+  // Synthesis-aware compaction gate: locked while parent agent synthesizes,
+  // preventing mid-response compaction that would truncate the context epoch.
+  readonly lockCompaction: Effect.Effect<void>
+  readonly unlockCompaction: Effect.Effect<void>
+  readonly isCompactionLocked: Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SessionCompaction") {}
@@ -179,6 +184,12 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const compressor = yield* ContextCompressor.Service
+
+    // Compaction gate — prevents auto-compact from firing while parent agent
+    // is mid-synthesis. Set by lockCompaction at synthesis start, cleared by
+    // unlockCompaction at synthesis end. The prompt.ts loop checks this gate
+    // before firing auto-compact (see SessionLoop step at prompt.ts:1388-1398).
+    const compactionLock = yield* Ref.make(false)
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -604,6 +615,9 @@ export const layer = Layer.effect(
       prune,
       process: processCompaction,
       create,
+      lockCompaction: Ref.set(compactionLock, true),
+      unlockCompaction: Ref.set(compactionLock, false),
+      isCompactionLocked: Ref.get(compactionLock),
     })
   }),
 )
