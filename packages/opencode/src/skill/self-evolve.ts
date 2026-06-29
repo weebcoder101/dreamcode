@@ -160,4 +160,4 @@ export const layer = Layer.effect(
 
 export const defaultLayer = layer
 
-export * as SelfEvolve from "./self-evolve"
+export const SelfEvolve = { Service, layer, defaultLayer }
