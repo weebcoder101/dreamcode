@@ -305,10 +305,6 @@ export const TaskTool = Tool.define(
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
       // Refs track cost/tokens populated by runTask AFTER its prompt completes.
-      // CRITICAL: cost is read from the prompt result.info, NOT from re-reading
-      // the DB. The prompt return value already has the cost set by the processor,
-      // so re-reading from DB introduces a race with the projector's applyUsage
-      // commit and was the root cause of the ~$0.05 discrepancy.
       const costRef = yield* Ref.make(0)
       const tokensRef = yield* Ref.make<{ input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined>(undefined)
 
@@ -333,10 +329,20 @@ export const TaskTool = Tool.define(
           agent: next.name,
           parts,
         })
-        // Use cost/tokens from prompt result.info — avoids race with projector DB write
-        const info = result.info
-        const cost = info.role === "assistant" ? info.cost : 0
-        const tokens = info.role === "assistant" ? info.tokens : undefined
+        // CRITICAL: Sum costs from ALL assistant messages to capture nested subagent costs.
+        // result.info.cost only reflects the LAST message's cost; handleSubtask costs are on
+        // earlier messages (step-finish parts). Using DB cost has a projector race (~$0.05);
+        // computing from child session messages is synchronous and race-free.
+        const allMsgs = yield* sessions.messages({ sessionID: nextSession.id }).pipe(
+          Effect.catchAll(() => Effect.succeed([] as SessionV1.WithParts[])),
+        )
+        const cost = allMsgs
+          .filter((m): m is SessionV1.WithParts & { info: SessionV1.Assistant } => m.info.role === "assistant")
+          .reduce((sum, m) => sum + (m.info.cost ?? 0), 0)
+        // Tokens from the last assistant message is acceptable — per-message token counts
+        // are diagnostic, not cumulative spend.
+        const lastAssistantMsg = allMsgs.findLast((m): m is SessionV1.WithParts & { info: SessionV1.Assistant } => m.info.role === "assistant")
+        const tokens = lastAssistantMsg?.info.role === "assistant" ? lastAssistantMsg.info.tokens : undefined
         yield* Ref.set(costRef, cost)
         yield* Ref.set(tokensRef, tokens)
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
