@@ -69,7 +69,7 @@ function callMCP(httpClient: HttpClient.HttpClient, mcpURL: string, toolName: st
     )
 }
 
-const buildMemorySummary = (input: PersistInput): string => {
+export const buildMemorySummary = (input: PersistInput): string => {
   const lines: string[] = [
     `## ${input.chainName}`,
     "",
@@ -96,7 +96,7 @@ const buildMemorySummary = (input: PersistInput): string => {
   return lines.join("\n")
 }
 
-const classifyMemory = (input: PersistInput): MemoryType => {
+export const classifyMemory = (input: PersistInput): MemoryType => {
   if (input.memoryType) return input.memoryType
   const desc = input.taskDescription.toLowerCase()
   if (/fix|bug|error/.test(desc)) return "bugfix"

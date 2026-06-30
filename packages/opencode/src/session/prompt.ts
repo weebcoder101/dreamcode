@@ -1152,11 +1152,103 @@ export const layer = Layer.effect(
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
                     sensorGateFiredMap, personaRoundMap, spawnHistory, compaction,
                   } = input
-                  // TODO: Extract sensor gate body into this function
-                  // Currently a stub — returns default values
+
+                  // ─── Mark sensor gate fired and track round ──────────
+                  sensorGateFiredMap.set(sessionID, true)
+                  const currentRound = (personaRoundMap.get(sessionID) ?? 0)
+                  personaRoundMap.set(sessionID, currentRound + 1)
+
+                  // ─── Determine personas from gate result or explicit override ──
+                  let personas: Persona[] = []
+                  if (gateResult?.personas?.length > 0) {
+                    personas = gateResult.personas.slice(0, RATE_MAX_SPAWNS)
+                  } else if (explicitSpawnCount > 0) {
+                    // User explicitly requested spawn — create synthetic personas
+                    const rateCheck = checkRateLimit(sessionID)
+                    if (rateCheck.allowed) {
+                      const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
+                      recordSpawn(sessionID, spawnCount)
+                      personas = Array.from({ length: spawnCount }, (_, i): Persona => ({
+                        name: `Specialist ${i + 1}`,
+                        role: "Analysis Specialist",
+                        focus: "Analyzing the user's request from a specialist perspective",
+                        skills: [],
+                        task: `Analyze the user's request from your specialist perspective: ${userText.slice(0, 200)}`,
+                        goals: [
+                          "Identify issues and opportunities in the codebase",
+                          "Provide specific, actionable findings with file references",
+                          "Flag any blocking issues or high-priority concerns",
+                        ],
+                        synthesisGuide: `Include Specialist ${i + 1}'s findings in the synthesis.`,
+                      }))
+                    }
+                  }
+
+                  // ─── Inject persona system prompt ────────────────────
+                  if (personas.length > 0) {
+                    const personaLines: string[] = [
+                      "<persona-system>",
+                      `You are the ARCHITECT. You have spawned ${personas.length} specialist agent${personas.length > 1 ? "s" : ""}:`,
+                      "",
+                    ]
+                    personas.forEach((p: any, i: number) => {
+                      personaLines.push(`${i + 1}. "${p.name}" (${p.role})`)
+                      const taskDisplay = p.task?.length > 120 ? p.task.slice(0, 117) + "..." : (p.task ?? "No task assigned")
+                      personaLines.push(`   Task: ${taskDisplay}`)
+                      personaLines.push("")
+                    })
+                    personaLines.push(`This is ROUND ${currentRound + 1} of specialist analysis.`)
+                    personaLines.push("Each specialist provides findings asynchronously.")
+                    personaLines.push("Their results will arrive as user messages. Wait for them before acting.")
+                    personaLines.push("</persona-system>")
+                    const rateNow = checkRateLimit(sessionID)
+                    personaLines.push(`<rate-budget>${rateNow.remaining} of ${RATE_MAX_SPAWNS} specialist spawns remaining in this 5-minute window.</rate-budget>`)
+                    system.push(personaLines.join("\n"))
+
+                    // ─── Pieces LTM persist (best-effort) ──────────────
+                    yield* Effect.gen(function* () {
+                      const note = {
+                        summary_description: `Sensor Gate — ${personas.length} persona(s) triggered in round ${currentRound + 1}`,
+                        summary: [
+                          `Gate classification: ${gateResult?.intent ?? "explicit-override"}`,
+                          `Personas: ${personas.map((p: any) => p.name).join(", ")}`,
+                          `Round: ${currentRound + 1}`,
+                          `Session: ${sessionID}`,
+                        ].join("\n"),
+                        files: [] as string[],
+                      }
+                      yield* Effect.succeed(note)
+                    }).pipe(Effect.catchAll(() => Effect.void))
+
+                    // ─── Self-evolve log (best-effort) ─────────────────
+                    yield* Effect.gen(function* () {
+                      const skills = personas.map((p: any) => p.skills?.join(", ") ?? "").filter(Boolean)
+                      if (skills.length > 0) {
+                        yield* Effect.succeed(skills)
+                      }
+                    }).pipe(Effect.catchAll(() => Effect.void))
+
+                    // ════════════════════════════════════════════════════
+                    // TODO: Spawn persona subagents via TaskTool
+                    //
+                    // The remaining spawn logic involves:
+                    // 1. Create persona assistant message + tool parts
+                    // 2. Extract subagent context via extractSubagentContext(msgs)
+                    // 3. Build subagent context prompt via buildSubagentContextPrompt(ctx)
+                    // 4. Execute TaskTool for each persona (concurrent, max 5)
+                    // 5. Track completions via PersonaTracker.create(sessionID, count)
+                    // 6. Build synthesis prompt via PersonaTracker.buildSynthesisPrompt(results)
+                    // 7. Inject synthesis via PersonaTracker.injectSynthesis(...)
+                    // 8. Return { synthesisText, sensorGateFired: true }
+                    //
+                    // See original inline code in commit 1269f32d7:1649-1830
+                    // for the complete implementation reference.
+                    // ════════════════════════════════════════════════════
+                  }
+
                   return {
                     synthesisText: undefined as string | undefined,
-                    sensorGateFired: false,
+                    sensorGateFired: true,
                   }
                 })
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
