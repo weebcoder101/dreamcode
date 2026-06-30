@@ -1139,19 +1139,24 @@ export const layer = Layer.effect(
       }
       return { info, parts }
     }, Effect.scoped)
-                const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: any) {
+                const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: {
+                  gateResult: any; explicitSpawnCount: number; sessionID: SessionID;
+                  msgs: any[]; system: string[]; model: any; ctx: any;
+                  handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
+                  sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
+                  sensorGateFiredMap: Map<SessionID, boolean>; personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
+                }) {
                   const {
                     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
                     handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
                     sensorGateFiredMap, personaRoundMap, spawnHistory, compaction,
-                    isLowConfidence, spawnEval, bypassAgentCheck,
                   } = input
-                  // ─── End Sensor Gate ────────────────────────────────────────
-                  // Return the values modified by this function
+                  // TODO: Extract sensor gate body into this function
+                  // Currently a stub — returns default values
                   return {
-                    synthesisText: synthesisText!,
-                    sensorGateFired: sensorGateFired!,
+                    synthesisText: undefined as string | undefined,
+                    sensorGateFired: false,
                   }
                 })
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
@@ -1433,7 +1438,6 @@ Before every response, verify your reasoning:
                     handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
                     sensorGateFiredMap, personaRoundMap, spawnHistory, compaction,
-                    isLowConfidence, spawnEval, bypassAgentCheck,
                   })
                   synthesisText = sgpResult.synthesisText
                 }
