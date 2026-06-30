@@ -1436,6 +1436,8 @@ Before every response, verify your reasoning:
                     isLowConfidence, spawnEval, bypassAgentCheck,
                   })
                   synthesisText = sgpResult.synthesisText
+                }
+              }
             }
             // ─── End Sensor Gate ────────────────────────────────────────
             const extraMsgs = synthesisText
