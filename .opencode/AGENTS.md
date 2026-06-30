@@ -1,6 +1,6 @@
 # AGENTS.md — DreamCode Orchestrator v2 (Upgraded)
 
-DreamCode is a fork of opencode with a 38-skill orchestration system, sensor gate, and Pieces LTM integration.
+DreamCode is a fork of opencode with a 43-skill orchestration system, sensor gate, and Pieces LTM integration.
 
 ---
 
@@ -52,7 +52,7 @@ Skill Plan:
 
 ---
 
-## 2. Skill Registry (38 skills)
+## 2. Skill Registry (43 skills)
 
 | # | Skill ID | Category | Description |
 |---|----------|----------|-------------|
@@ -94,6 +94,11 @@ Skill Plan:
 | 35 | `git-feature-workflow` | TOOL | Codex-style feature lifecycle |
 | 36 | `scheduled-automations` | META | Cron-like job engine |
 | 37 | `effect` | LANGUAGE | Effect-TS patterns |
+| 38 | `customize-opencode` | TOOL | Configuration, theme, keybindings, agent settings |
+| 39 | `deslop` | LANGUAGE | Anti-slop frontend skill — real design systems, audit-first redesigns |
+| 40 | `product-thinking` | SOFT SKILL | Product-oriented user needs, prioritization, feature design |
+| 41 | `python-best-practices` | LANGUAGE | Modern Python tooling (ruff, mypy, pytest), typing, project structure |
+| 42 | `token-predictor` | META | Shipping checklist generator with NEURO enrichment & circuit breaker |
 
 ---
 

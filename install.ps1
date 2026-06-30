@@ -218,13 +218,18 @@ $SKILLS_DST = "$env:USERPROFILE\.dreamcode\skills"
 # Source candidates:
 #   1. Bundled alongside the binary in the extracted archive (pre-built)
 #   2. Source repo path (BuildFromSource)
-$bundledSkills = "$extractDir\skills"
+# Search recursively for skills directory (same pattern as binary search)
+$skillsDir = Get-ChildItem -Recurse -Directory -Filter "skills" -Path $extractDir | Where-Object {
+  # Must contain chain-orchestrator (the key skill with sensor_gate.py)
+  $_.GetFiles("*.py", [System.IO.SearchOption]::AllDirectories).Count -gt 0
+} | Select-Object -First 1
+
 $repoSkills = "$INSTALL_DIR\packages\opencode\src\skill\dreamcode\skills"
 $skillsSource = $null
 
-if (-not $BuildFromSource -and (Test-Path $bundledSkills)) {
-  $skillsSource = $bundledSkills
-  Write-Color "Found bundled skills in release archive." $MUTED
+if (-not $BuildFromSource -and $skillsDir) {
+  $skillsSource = $skillsDir.FullName
+  Write-Color "Found bundled skills in release archive at $skillsSource" $MUTED
 } elseif ($BuildFromSource -and (Test-Path $repoSkills)) {
   $skillsSource = $repoSkills
   Write-Color "Found skills in source repo." $MUTED
@@ -242,6 +247,13 @@ if ($skillsSource) {
     # Count installed scripts
     $scriptCount = (Get-ChildItem -Path $SKILLS_DST -Filter "*.py" -Recurse).Count
     Write-Color "Installed $scriptCount Python scripts to $SKILLS_DST" $GREEN
+    
+    # Also install alongside the binary so runtime resolver finds them
+    # via dirname(process.execPath) + "/skills"
+    $binSkillsDir = "$BIN_DIR\skills"
+    New-Item -ItemType Directory -Force -Path $binSkillsDir | Out-Null
+    Copy-Item -Path "$skillsSource\*" -Destination $binSkillsDir -Recurse -Force
+    Write-Color "Also installed skills to $binSkillsDir (for runtime resolution)" $MUTED
   } catch {
     Write-Color "WARN: Failed to install Python scripts: $_" $ORANGE
     Write-Color "Personas and skill chains may not work without Python scripts." $ORANGE
@@ -251,7 +263,13 @@ if ($skillsSource) {
   Write-Color "If using a pre-built release, the skills should be bundled in the archive." $ORANGE
   Write-Color "If building from source, ensure the repo is complete." $ORANGE
   Write-Color "Personas and skill chains will be disabled without Python scripts." $ORANGE
-  Write-Color "To fix: download a full release or set `$env:DREAMCODE_DIR to your repo root." $ORANGE
+  Write-Color "To fix:" $ORANGE
+  Write-Color "  Option A: Re-run with -BuildFromSource from a full repo clone:" $CYAN
+  Write-Color "    .\install.ps1 -BuildFromSource" $CYAN
+  Write-Color "  Option B: Set DREAMCODE_DIR to your repo root AND use -BuildFromSource:" $CYAN
+  Write-Color "    `$env:DREAMCODE_DIR = 'C:\path\to\dreamcode'; .\install.ps1 -BuildFromSource" $CYAN
+  Write-Color "  Option C: Manually copy skills from the extracted archive:" $CYAN
+  Write-Color "    Copy-Item -Path (Get-ChildItem -Recurse -Directory -Filter skills -Path ""$extractDir"" | Select-Object -First 1).FullName -Destination ""$SKILLS_DST"" -Recurse -Force" $CYAN
 }
 
 # ─── Phase 1e: Verify Python availability ─────────────────────────────
