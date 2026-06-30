@@ -1,4 +1,4 @@
-import { Effect, Context, Layer, Schedule, Duration } from "effect"
+import { Effect, Context, Layer, pipe, Schedule, Duration } from "effect"
 import { PiecesLTMConfig } from "./config"
 
 export type MemoryType =
@@ -40,24 +40,28 @@ export interface Interface {
 export class PiecesLTM extends Context.Service<PiecesLTM, Interface>()("@dreamcode/PiecesLTM") {}
 
 function callMCP(mcpURL: string, toolName: string, arguments_: Record<string, unknown>): Effect.Effect<unknown> {
-  return Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${mcpURL}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: { name: toolName, arguments: arguments_ },
-        }),
-        signal: AbortSignal.timeout(30_000),
-      })
-      if (!res.ok) throw new Error(`MCP call failed: ${res.status} ${res.statusText}`)
-      return res.json() as unknown
-    },
-    catch: (err) => ({ error: `MCP call failed: ${err instanceof Error ? err.message : String(err)}` }),
-  })
+  return pipe(
+    Effect.tryPromise({
+      try: async () => {
+        const res = await fetch(`${mcpURL}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: toolName, arguments: arguments_ },
+          }),
+          signal: AbortSignal.timeout(30_000),
+        })
+        if (!res.ok) throw new Error(`MCP call failed: ${res.status} ${res.statusText}`)
+        return res.json() as unknown
+      },
+      catch: (err) => ({ error: `MCP call failed: ${err instanceof Error ? err.message : String(err)}` }),
+    }),
+    // One retry with exponential backoff for transient MCP failures
+    Effect.retry({ times: 1, delay: "500 millis" }),
+  )
 }
 
 export const buildMemorySummary = (input: PersistInput): string => {
@@ -132,18 +136,13 @@ export const defaultLayer = Layer.effect(
     })
 
     const health = Effect.fn("PiecesLTM.health")(function* () {
-      try {
-        const res = yield* Effect.tryPromise({
-          try: async () => {
-            const r = await fetch(cfg.mcpURL, { signal: AbortSignal.timeout(5_000) })
-            return { reachable: r.ok, mcpURL: cfg.mcpURL } as HealthStatus
-          },
-          catch: () => ({ reachable: false, mcpURL: cfg.mcpURL } as HealthStatus),
-        })
-        return res
-      } catch {
-        return { reachable: false, mcpURL: cfg.mcpURL } as HealthStatus
-      }
+      return yield* Effect.tryPromise({
+        try: async () => {
+          const r = await fetch(cfg.mcpURL, { signal: AbortSignal.timeout(5_000) })
+          return { reachable: r.ok, mcpURL: cfg.mcpURL } as HealthStatus
+        },
+        catch: () => ({ reachable: false, mcpURL: cfg.mcpURL } as HealthStatus),
+      })
     })
 
     return PiecesLTM.of({ persist, query, health })

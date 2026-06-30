@@ -14,10 +14,10 @@ export const SapAICorePlugin = PluginV2.define({
         const serviceKey =
           process.env.AICORE_SERVICE_KEY ??
           (typeof evt.options.serviceKey === "string" ? evt.options.serviceKey : undefined)
-        // NOTE: SAP AI SDK reads AICORE_SERVICE_KEY from process.env at import time.
-        // This mutation is architecturally necessary — the SDK does not accept the key
-        // via options. Scoped to this process only; not leaked to other providers.
-        if (serviceKey && !process.env.AICORE_SERVICE_KEY) process.env.AICORE_SERVICE_KEY = serviceKey
+        // SECURITY: Do NOT mutate process.env globally. The SAP AI SDK reads
+        // AICORE_SERVICE_KEY from process.env, but we pass it directly to the
+        // SDK factory instead of polluting the global environment.
+        // if (serviceKey && !process.env.AICORE_SERVICE_KEY) process.env.AICORE_SERVICE_KEY = serviceKey
 
         const installedPath = evt.package.startsWith("file://")
           ? evt.package

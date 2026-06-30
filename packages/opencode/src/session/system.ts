@@ -44,6 +44,10 @@ export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly knowledge: () => Effect.Effect<string | undefined, unknown, unknown>
+  /** Invalidate the knowledge cache so the next call to knowledge()
+   *  re-queries LTM. Called by SelfEvolve.capture() after persisting
+   *  new learnings so they appear on the NEXT turn's system prompt. */
+  readonly invalidateKnowledgeCache: () => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SystemPrompt") {}
@@ -54,6 +58,13 @@ export const layer = Layer.effect(
     const skill = yield* Skill.Service
     const locations = yield* LocationServiceMap
     const selfEvolve = yield* SelfEvolve.Service
+
+    // ─── Per-session KV cache stability ─────────────────────────
+    // Cache the knowledge block so the system prompt prefix stays
+    // byte-identical across consecutive turns within a context epoch.
+    // Reset via invalidateKnowledgeCache() when SelfEvolve.capture()
+    // persists new learnings.
+    let cachedKnowledge: string | undefined = undefined
 
     return Service.of({
       environment: (Effect.fn("SystemPrompt.environment")(function* (model: any) {
@@ -95,7 +106,15 @@ export const layer = Layer.effect(
         ].filter((part): part is string => part !== undefined)
       }) as any),
 
+      invalidateKnowledgeCache: Effect.fn("SystemPrompt.invalidateKnowledgeCache")(function* () {
+        cachedKnowledge = undefined
+      }),
+
       knowledge: Effect.fn("SystemPrompt.knowledge")(function* () {
+        // Return cached version if available — keeps system prompt
+        // prefix stable for KV cache hits across consecutive turns.
+        if (cachedKnowledge !== undefined) return cachedKnowledge
+
         // ─── Self-Evolution Knowledge Injection ──────────────────────
         // Cross-session knowledge rules are injected here so the model
         // doesn't have to re-learn Effect v4 API differences on every turn.
@@ -114,6 +133,9 @@ export const layer = Layer.effect(
         ]
 
         // Supplement with dynamically learned rules from SelfEvolve LTM
+        // IMPORTANT: Always return the <learned-knowledge> block even when
+        // LTM is unreachable. Non-deterministic presence/absence of the
+        // knowledge block is the #1 cause of KV cache misses on DeepSeek.
         const dynLearnings = yield* selfEvolve.learnings().pipe(
           Effect.catch(() => Effect.succeed([] as LearningSignal[])),
         )
@@ -125,12 +147,16 @@ export const layer = Layer.effect(
           })
           .map((l) => `- ${l.whatToChange}`)
 
-        return [
+        const text = [
           "<learned-knowledge>",
           ...baseLearnings,
           ...(dynRules.length > 0 ? ["", "Dynamically learned rules:", ...dynRules] : []),
           "</learned-knowledge>",
         ].join("\n")
+
+        // Cache for KV prefix stability
+        cachedKnowledge = text
+        return text
       }),
 
       skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info) {

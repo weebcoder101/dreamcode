@@ -80,6 +80,13 @@ const request = (url: string, format: Format, userAgent = browserUserAgent) =>
 
 const assertHttpUrl = (url: URL) => {
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("URL must use http:// or https://")
+  // SECURITY: Block internal/private IP ranges to prevent SSRF attacks.
+  const host = url.hostname.toLowerCase()
+  const blockedHosts = ["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "169.254.169.254"]
+  if (blockedHosts.includes(host)) throw new Error("Internal URLs are not allowed")
+  // Block RFC 1918 private ranges
+  const privateRanges = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.)/
+  if (privateRanges.test(host)) throw new Error("Private IP ranges are not allowed")
 }
 
 const execute = (http: HttpClient.HttpClient, url: string, format: Format, userAgent = browserUserAgent) =>

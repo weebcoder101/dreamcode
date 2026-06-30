@@ -137,11 +137,13 @@ const McpRequest = <F extends Schema.Struct.Fields>(args: Schema.Struct<F>) =>
   })
 
 const exaUrl = (apiKey: string | undefined) => {
-  if (!apiKey) return EXA_URL
-  const url = new URL(EXA_URL)
-  url.searchParams.set("exaApiKey", apiKey)
-  return url.toString()
+  // SECURITY: Never pass API keys as URL query parameters — they leak into
+  // server logs, proxy logs, CDN logs, and Referer headers. Pass via header.
+  return EXA_URL
 }
+
+const exaHeaders = (apiKey: string | undefined): Record<string, string> =>
+  apiKey ? { "x-api-key": apiKey } : {}
 
 const callMcp = <F extends Schema.Struct.Fields>(
   http: HttpClient.HttpClient,
@@ -216,7 +218,7 @@ export const layer = Layer.effectDiscard(
                       numResults: input.numResults || 8,
                       livecrawl: input.livecrawl || "fallback",
                       contextMaxCharacters: input.contextMaxCharacters,
-                    })
+                    }, exaHeaders(config.exaApiKey))
                   : yield* callMcp(
                       http,
                       PARALLEL_URL,

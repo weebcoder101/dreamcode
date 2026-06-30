@@ -81,6 +81,21 @@ IMPORTANT:
 - Complete all necessary research and tool calls BEFORE calling this tool
 - This tool provides your final answer - no further actions are taken after calling it`
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+
+// Default knowledge block returned when Pieces LTM is unreachable.
+// Ensures the <learned-knowledge> system prompt section is ALWAYS
+// present so the KV prefix cache doesn't miss on block absence.
+const DEFAULT_KNOWLEDGE_BLOCK = `<learned-knowledge>
+Cross-session Effect v4 API rules (persistent across sessions):
+- Effect.catchAll does NOT exist in Effect v4 beta — use Effect.catch instead
+- Effect.fork and Effect.forkDaemon do NOT exist in Effect v4 — use Effect.forkIn(scope)
+- Effect.catch catches all errors including defects; use Effect.catchTag for tagged errors
+- Use Effect.gen(function* () { ... }) for composition
+- Use Effect.fn('Domain.method') for named/traced effects
+- Use Schema.Class for multi-field data; Schema.TaggedErrorClass for typed errors
+- Use Bun.spawn() wrapped in Effect.tryPromise for subprocesses in compiled binaries
+- Use Layer.mock(Service, { method1, method2 }) for test stubs
+</learned-knowledge>`
 function sanitizeForSystemPrompt(text: string): string {
   // Strip ALL closing tags (</tag>) and self-closing tags (<tag/>) before
   // HTML/XML escaping to prevent prompt injection via fake system tags.
@@ -88,15 +103,38 @@ function sanitizeForSystemPrompt(text: string): string {
   // content (e.g. <chain-enforcement>...</chain-enforcement>), so stripping
   // closing/self-closing tags prevents attackers from closing system blocks
   // or injecting fake blocks — without needing a blocklist that goes stale.
-  // Order matters: escape HTML/XML metacharacters, & first to avoid double-escaping.
+  // Order: escape metacharacters FIRST so any remaining angle brackets are
+  // harmless HTML entities. The tag stripping after is defensive (already
+  // escaped). Also strip opening tags that look like known system blocks
+  // by catching <tag-name...> patterns.
   return text
-    .replace(/<[a-zA-Z][^>]*\/>/g, "")      // self-closing tags: <tag/>
-    .replace(/<\/[a-zA-Z][^>]*>/g, "")       // closing tags: </tag>
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
+    .replace(/<[a-zA-Z][^>]*\/>/g, "")      // self-closing tags (defensive, already escaped)
+    .replace(/<\/[a-zA-Z][^>]*>/g, "")       // closing tags (defensive, already escaped)
+    .replace(/<[a-zA-Z][^>]*>/g, "")         // opening tags that survived escaping
 }
+/**
+ * Normalize raw subtask cost tokens from TaskTool result into the
+ * StepFinishPart schema shape. Extracted to module scope because it's
+ * used both in handleSubtask (cost propagation) and processSensorGatePhase
+ * (persona cost attribution).
+ */
+function normalizeTokens(t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] {
+  const cache = t?.cache as Record<string, unknown> | undefined
+  return {
+    input: (t?.input as number) ?? 0,
+    output: (t?.output as number) ?? 0,
+    reasoning: (t?.reasoning as number) ?? 0,
+    cache: {
+      read: (cache?.read as number) ?? 0,
+      write: (cache?.write as number) ?? 0,
+    },
+  }
+}
+
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
   // They are not pending work and must not trigger an assistant-prefill request.
@@ -164,9 +202,11 @@ export const layer = Layer.effect(
     })
     const sensorGateFiredMap = new Map<SessionID, boolean>()
     const personaRoundMap = new Map<SessionID, number>()
-    const MAX_PERSONA_ROUNDS = 3
     // ─── Rolling-Window Rate Limiter ─────────────────────────────────
     // Max 5 persona spawns per 5-minute window per session.
+    // This is the SOLE cost-control mechanism. The task tool is always
+    // available — the sensor gate's evaluateSpawnNecessity() decides
+    // when actually to use it.
     // Prevents compute cost explosion from rapid-fire specialist requests.
     const RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
     const RATE_MAX_SPAWNS = 5
@@ -427,18 +467,7 @@ export const layer = Layer.effect(
       // MessageUpdated. So updating assistantMessage.cost is safe and
       // necessary — without it, the web app's totalCost sum misses all
       // subagent spend.
-      const normalizeTokens = (t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] => {
-        const cache = t?.cache as Record<string, unknown> | undefined
-        return {
-          input: (t?.input as number) ?? 0,
-          output: (t?.output as number) ?? 0,
-          reasoning: (t?.reasoning as number) ?? 0,
-          cache: {
-            read: (cache?.read as number) ?? 0,
-            write: (cache?.write as number) ?? 0,
-          },
-        }
-      }
+      // (normalizeTokens is defined at module scope, shared with processSensorGatePhase)
       const subagentCost_ = Number((result as any)?.subagentCost)
       const subagentTokens_ = (result as any)?.subagentTokens
       if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
@@ -1161,10 +1190,10 @@ export const layer = Layer.effect(
                     sensorGateFiredMap, personaRoundMap, spawnHistory, compaction, chainExecutor,
                   } = input
 
-                  // ─── Mark sensor gate fired and track round ──────────
+                  // ─── Mark sensor gate fired ───────────────────────────
                   sensorGateFiredMap.set(sessionID, true)
                   const currentRound = (personaRoundMap.get(sessionID) ?? 0)
-                  personaRoundMap.set(sessionID, currentRound + 1)
+                  // Round counter incremented below inside personas.length > 0 block
 
                   // ─── Skill Chain Execution: Pre-run skill scripts ──────────
                   // Execute the sensor gate's skill chain programmatically and inject
@@ -1221,7 +1250,7 @@ export const layer = Layer.effect(
 
                     // ─── Chain-Gap Detection ──────────────────────────
                     const missingSkills = gateResult.chain.filter(
-                      (name) => !chainResults.some(
+                      (name: string) => !chainResults.some(
                         (r: ChainResult) => r.name === name && r.status === "ok",
                       ),
                     )
@@ -1240,7 +1269,7 @@ export const layer = Layer.effect(
                         }
                       }
                       const stillMissing = gateResult.chain.filter(
-                        (name) => !chainResults.some(
+                        (name: string) => !chainResults.some(
                           (r: ChainResult) => r.name === name && r.status === "ok",
                         ),
                       )
@@ -1288,54 +1317,78 @@ export const layer = Layer.effect(
                         `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.</skill-loading-gap>`,
                       )
                     }
-                      // ─── Persist chain execution results to self-evolve (best-effort) ──
-                      yield* selfEvolve.capture({
-                        chain: gateResult.chain,
-                        intent: gateResult.intent ?? "sensor-gate",
-                        outcome: chainResults.every(r => r.status === "ok") ? "success" : "partial",
-                        signals: chainResults.filter(r => r.status === "error").map(r => ({
-                          whatWorked: "",
-                          whatFailed: `Skill ${r.name} failed: ${r.output.slice(0, 200)}`,
-                          whatToChange: `Chain skill ${r.name} needs fixing`,
-                        })),
-                      }).pipe(Effect.catch(() => Effect.void))
-                    }
+                    // ─── Chain enforcement: tell model to load skill content ─────────
+                    // Script results are pre-injected as <script-result> blocks, but the
+                    // model MUST also call the `skill` tool to get full workflow instructions,
+                    // directory references, and execution scripts. The [SKILLS LOADED]
+                    // acknowledgement is checked at runtime for tool-call tracking.
+                    system.push([
+                      "",
+                      "<chain-enforcement>",
+                      "A sensor gate skill chain has been configured for this prompt.",
+                      "Script execution results are available in the <script-result> blocks above.",
+                      "However, you MUST also load each chain skill using the `skill` tool:",
+                      "",
+                      ...gateResult.chain.map((name: string) => `  - Call \`skill\` with name="${sanitizeForSystemPrompt(name)}"`),
+                      "",
+                      "After loading ALL chain skills, acknowledge with: [SKILLS LOADED]",
+                      "</chain-enforcement>",
+                    ].join("\n"))
 
-                    // ─── Determine personas from gate result or explicit override ──
-                    // Run spawn necessity check FIRST — prevents unnecessary specialist
-                    // spawning for simple tasks, saving cost and token usage.
-                    const evaluation = evaluateSpawnNecessity(gateResult, userText)
-                    if (!evaluation.shouldSpawn) {
-                      debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
-                    }
-                    let personas: Persona[] = []
-                  if (evaluation.shouldSpawn && gateResult?.personas?.length > 0) {
-                    personas = gateResult.personas.slice(0, Math.min(evaluation.suggestedCount, RATE_MAX_SPAWNS))
-                  } else if (explicitSpawnCount > 0) {
-                    // User explicitly requested spawn — create synthetic personas
-                    const rateCheck = checkRateLimit(sessionID)
-                    if (rateCheck.allowed) {
-                      const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
-                      recordSpawn(sessionID, spawnCount)
-                      personas = Array.from({ length: spawnCount }, (_, i): Persona => ({
-                        name: `Specialist ${i + 1}`,
-                        role: "Analysis Specialist",
-                        focus: "Analyzing the user's request from a specialist perspective",
-                        skills: [],
-                        task: `Analyze the user's request from your specialist perspective: ${userText.slice(0, 200)}`,
-                        goals: [
-                          "Identify issues and opportunities in the codebase",
-                          "Provide specific, actionable findings with file references",
-                          "Flag any blocking issues or high-priority concerns",
-                        ],
-                        synthesisGuide: `Include Specialist ${i + 1}'s findings in the synthesis.`,
-                      }))
-                    }
+                    // ─── Persist chain execution results to self-evolve (best-effort) ──
+                    yield* selfEvolve.capture({
+                      chain: gateResult.chain,
+                      intent: gateResult.intent ?? "sensor-gate",
+                      outcome: chainResults.every(r => r.status === "ok") ? "success" : "partial",
+                      signals: chainResults.filter(r => r.status === "error").map(r => ({
+                        whatWorked: "",
+                        whatFailed: `Skill ${r.name} failed: ${r.output.slice(0, 200)}`,
+                        whatToChange: `Chain skill ${r.name} needs fixing`,
+                      })),
+                    }).pipe(Effect.catch(() => Effect.void))
+                    // Invalidate knowledge cache so next turn sees fresh learnings
+                    yield* sys.invalidateKnowledgeCache().pipe(Effect.catch(() => Effect.void))
+                  }
+
+                  // ─── Determine personas from gate result or explicit override ──
+                  // Run spawn necessity check FIRST — prevents unnecessary specialist
+                  // spawning for simple tasks, saving cost and token usage.
+                  const evaluation = evaluateSpawnNecessity(gateResult, userText)
+                  if (!evaluation.shouldSpawn) {
+                    debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
+                  }
+                  let personas: Persona[] = []
+                  const rateCheck = checkRateLimit(sessionID)
+                  if (evaluation.shouldSpawn && gateResult?.personas?.length > 0 && rateCheck.allowed) {
+                    personas = gateResult.personas.slice(0, Math.min(evaluation.suggestedCount, rateCheck.remaining))
+                    recordSpawn(sessionID, personas.length)
+                  } else if (explicitSpawnCount > 0 && rateCheck.allowed) {
+                    const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
+                    recordSpawn(sessionID, spawnCount)
+                    personas = Array.from({ length: spawnCount }, (_, i): Persona => ({
+                      name: `Specialist ${i + 1}`,
+                      role: "Analysis Specialist",
+                      focus: "Analyzing the user's request from a specialist perspective",
+                      skills: [],
+                      task: `Analyze the user's request from your specialist perspective: ${sanitizeForSystemPrompt(userText.slice(0, 200))}`,
+                      goals: [
+                        "Identify issues and opportunities in the codebase",
+                        "Provide specific, actionable findings with file references",
+                        "Flag any blocking issues or high-priority concerns",
+                      ],
+                      synthesisGuide: `Include Specialist ${i + 1}'s findings in the synthesis.`,
+                    }))
+                  }
+
+                  // ─── Increment round counter (only on actual spawn) ─────
+                  if (personas.length > 0) {
+                    personaRoundMap.set(sessionID, currentRound + 1)
                   }
 
                   // ─── Inject persona system prompt ────────────────────
                   let synthesisText: string | undefined  // declared outside if for scope
                   if (personas.length > 0) {
+                    const effectiveRound = (personaRoundMap.get(sessionID) ?? 0)
                     const personaLines: string[] = [
                       "<persona-system>",
                       `You are the ARCHITECT. You have spawned ${personas.length} specialist agent${personas.length > 1 ? "s" : ""}:`,
@@ -1347,7 +1400,7 @@ export const layer = Layer.effect(
                       personaLines.push(`   Task: ${taskDisplay}`)
                       personaLines.push("")
                     })
-                    personaLines.push(`This is ROUND ${currentRound + 1} of specialist analysis.`)
+                    personaLines.push(`This is ROUND ${effectiveRound} of specialist analysis.`)
                     personaLines.push("Each specialist provides findings asynchronously.")
                     personaLines.push("Their results will arrive as user messages. Wait for them before acting.")
                     personaLines.push("</persona-system>")
@@ -1508,8 +1561,8 @@ export const layer = Layer.effect(
                           )
                           .pipe(
                             Effect.matchEffect({
-                              onSuccess: (result) => Effect.gen(function* () {
-                                yield* updatePart("completed", result.output)
+                              onSuccess: (result: any) => Effect.gen(function* () {
+                                yield* updatePart("completed", result?.output)
                                 // ═══════════════════════════════════════════
                                 // PROPAGATE SUBAGENT COST TO PARENT SESSION
                                 // ═══════════════════════════════════════════
@@ -1517,18 +1570,9 @@ export const layer = Layer.effect(
                                 // can add this cost to session.cost. Without
                                 // this, persona/subagent spend is invisible
                                 // in the spends tab and stats command.
-                                const subagentCost_ = Number((result as any)?.subagentCost)
-                                const subagentTokens_ = (result as any)?.subagentTokens
+                                const subagentCost_ = Number(result?.subagentCost)
+                                const subagentTokens_ = result?.subagentTokens
                                 if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
-                                  const tokens: SessionV1.Tokens = {
-                                    input: (subagentTokens_?.input as number) ?? 0,
-                                    output: (subagentTokens_?.output as number) ?? 0,
-                                    reasoning: (subagentTokens_?.reasoning as number) ?? 0,
-                                    cache: {
-                                      read: (subagentTokens_?.cache as any)?.read ?? 0,
-                                      write: (subagentTokens_?.cache as any)?.write ?? 0,
-                                    },
-                                  }
                                   yield* sessions.updatePart({
                                     id: PartID.ascending(),
                                     messageID: personaAssistantMsg.id,
@@ -1536,7 +1580,7 @@ export const layer = Layer.effect(
                                     type: "step-finish",
                                     reason: "completed",
                                     cost: subagentCost_,
-                                    tokens,
+                                    tokens: normalizeTokens(subagentTokens_),
                                   } satisfies SessionV1.StepFinishPart)
                                   // Also update msg.cost so the TUI's totalCost sum sees it
                                   yield* sessions.updateMessage({
@@ -1824,7 +1868,10 @@ Before every response, verify your reasoning:
             const [skills, env, knowledge, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
-              sys.knowledge().pipe(Effect.catch(() => Effect.succeed(undefined))),
+              // Always return a <learned-knowledge> block — even on LTM failure.
+              // Non-deterministic block presence is the #1 cause of DeepSeek
+              // KV cache misses (40x cost multiplier: $0.001 → $0.04).
+              sys.knowledge().pipe(Effect.catch(() => Effect.succeed(DEFAULT_KNOWLEDGE_BLOCK))),
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
@@ -1873,10 +1920,10 @@ Before every response, verify your reasoning:
             const extraMsgs = synthesisText
               ? [{ role: "user" as const, content: synthesisText }]
               : []
-            const personaRound = personaRoundMap.get(sessionID) ?? 0
-            const finalTools = personaRound >= MAX_PERSONA_ROUNDS
-              ? Object.fromEntries(Object.entries(tools).filter(([id]) => id !== TaskTool.id)) as typeof tools
-              : tools
+            // Task tool is ALWAYS available. Cost control is handled by the
+            // rolling-window rate limiter (5 spawns/5 min) + sensor gate's
+            // evaluateSpawnNecessity(). No hard caps on round counts.
+            const finalTools = tools
             // Lock compaction during synthetic phase — prevents mid-response
             // auto-compact from truncating the context epoch. Unlocked after
             // process completes (ensuring block below).

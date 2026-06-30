@@ -27,8 +27,26 @@ export const DynamicProviderPlugin = PluginV2.define({
 
         if (!packageName.startsWith("file://") && !allowed.has(packageName)) return
 
+        // SECURITY: file:// imports bypass the allowlist. Restrict to
+        // configured directories to prevent arbitrary code execution.
+        // Use realpathSync to resolve symlinks and prevent traversal attacks.
         const installedPath = yield* Effect.gen(function* () {
-          if (packageName.startsWith("file://")) return packageName
+          if (packageName.startsWith("file://")) {
+            const resolvedPath = packageName.replace("file://", "")
+            try {
+              const realpath = require("fs").realpathSync(resolvedPath)
+              const allowedPrefixes = [
+                path.resolve("node_modules"),
+                path.resolve(".dreamcode"),
+              ]
+              if (!allowedPrefixes.some((p) => realpath.startsWith(p + "/") || realpath === p)) {
+                return undefined
+              }
+            } catch {
+              return undefined
+            }
+            return packageName
+          }
           const result = yield* npm.add(packageName)
           return Option.getOrUndefined(result.entrypoint)
         }).pipe(

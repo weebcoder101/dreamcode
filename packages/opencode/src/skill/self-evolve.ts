@@ -140,15 +140,20 @@ export const layer = Layer.effect(
         if (raw && typeof raw === "object") {
           const r = raw as { candidates?: Array<{ description?: string; metadata?: Record<string, unknown> }> }
           if (r.candidates) {
-            for (const c of r.candidates) {
-              if (c.description) {
-                // Derived signal from persistent memory
-                signals.push({
-                  whatWorked: "Preserved in Pieces LTM",
-                  whatFailed: "See learning note",
-                  whatToChange: c.description,
-                })
-              }
+            // Sort deterministically by description to prevent KV cache
+            // invalidation from non-deterministic MCP result ordering.
+            const sorted = r.candidates
+              .filter((c): c is { description: string; metadata?: Record<string, unknown> } =>
+                typeof c.description === "string" && c.description.length > 0
+              )
+              .sort((a, b) => a.description.localeCompare(b.description))
+            for (const c of sorted) {
+              // Derived signal from persistent memory
+              signals.push({
+                whatWorked: "Preserved in Pieces LTM",
+                whatFailed: "See learning note",
+                whatToChange: c.description,
+              })
             }
           }
         }
@@ -161,6 +166,11 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer
+// Layer.mergeAll in Effect v4 beta does NOT resolve cross-layer
+// dependencies. SelfEvolve requires PiecesLTM.PiecesLTM, so we
+// must explicitly provide it via Layer.provide.
+export const defaultLayer = layer.pipe(
+  Layer.provide(PiecesLTM.defaultLayer),
+)
 
 export const SelfEvolve = { Service, layer, defaultLayer }

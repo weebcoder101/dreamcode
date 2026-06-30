@@ -334,7 +334,9 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
                 score += 10
                 recordScore("sensor_gate_run", 10, `Sensor gate executed for skill: ${skillName}`)
               } else {
-                yield* Effect.die(new Error("Sensor gate returned empty result"))
+                results.push(`[SENSOR GATE: empty result]`)
+                score -= 5
+                recordScore("sensor_gate_empty", -5, "Sensor gate returned empty")
               }
             } catch (e) {
               logError("sensor_gate", e)

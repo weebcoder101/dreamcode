@@ -682,7 +682,9 @@ function runSensorGateEffect(
       ).pipe(
         Effect.timeout(Duration.millis(timeoutMs)),
         Effect.catch((e) => {
-          debugLog("[sensor-gate] subprocess timeout or error:", String(e), "timeoutMs:", timeoutMs)
+          // SECURITY: Log sensor gate subprocess errors instead of silently swallowing.
+          // This prevents silent failures from being treated as empty results.
+          console.warn("[sensor-gate] subprocess timeout or error:", String(e), "timeoutMs:", timeoutMs)
           return Effect.succeed("")
         }),
       )

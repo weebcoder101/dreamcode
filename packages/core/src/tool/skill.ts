@@ -25,11 +25,11 @@ export const Output = Schema.Struct({
 })
 
 export const description = [
-  "Load a specialized skill when the task at hand matches one of the available skills in the system context.",
+  "Load a specialized skill when the sensor gate specifies a skill chain. Use this tool to inject the skill's instructions and resources into the current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc. in the same directory as the skill.",
   "",
-  "Use this tool to inject the skill's instructions and resources into the current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc. in the same directory as the skill.",
+  "The skill name must match one of the skills listed in the sensor gate's skill chain. After loading all chain skills, acknowledge with [SKILLS LOADED].",
   "",
-  "The skill name must match one of the available skills in the system context.",
+  "IMPORTANT: Do NOT rely solely on <script-result> blocks for chain skills. You MUST also call this tool for each skill to get the full workflow instructions, directory references, and execution scripts.",
 ].join("\n")
 
 export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>) => {

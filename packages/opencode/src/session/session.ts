@@ -391,7 +391,16 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
   const outputTokens = safe(input.usage.outputTokens ?? 0)
   const reasoningTokens = safe(input.usage.reasoningTokens ?? 0)
 
-  const cacheReadInputTokens = safe(input.usage.cacheReadInputTokens ?? 0)
+  const cacheReadInputTokens = safe(
+    Number(
+      input.usage.cacheReadInputTokens ??
+        // @ts-expect-error
+        input.metadata?.["openrouter"]?.["usage"]?.["prompt_cache_hit_tokens"] ??
+        // @ts-expect-error
+        input.metadata?.["usage"]?.["prompt_tokens_details"]?.["cached_tokens"] ??
+        0,
+    ),
+  )
   const cacheWriteInputTokens = safe(
     Number(
       input.usage.cacheWriteInputTokens ??
@@ -403,6 +412,8 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
         input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
         // @ts-expect-error
         input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
+        // @ts-expect-error
+        input.metadata?.["openrouter"]?.["usage"]?.["prompt_cache_write_tokens"] ??
         0,
     ),
   )

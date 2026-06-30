@@ -1216,7 +1216,7 @@ const TOOL_RULES = {
   skill: {
     view: {
       output: false,
-      final: false,
+      final: true,
     },
     run: runSkill,
     scroll: {
