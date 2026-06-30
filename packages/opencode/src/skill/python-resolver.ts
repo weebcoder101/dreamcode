@@ -202,6 +202,9 @@ export function resolveSkillsDir(): string {
     ...(isWindows() ? [
       join(dirname(process.execPath), "skills"),
       join(HOME, "AppData", "Roaming", "dreamcode", "skills"),
+      join(HOME, "AppData", "Local", "dreamcode", "skills"),
+      ...(process.env.APPDATA ? [join(process.env.APPDATA, "dreamcode", "skills")] : []),
+      ...(process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, "dreamcode", "skills")] : []),
     ] : [
       join(dirname(process.execPath), "skills"),
     ]),
@@ -327,7 +330,8 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
  */
 export const BASE_SUBPROCESS_ENV: Record<string, string | undefined> = {
   PATH: process.env.PATH,
-  HOME: process.env.HOME,
+  HOME: process.env.HOME ?? process.env.USERPROFILE,
+  USERPROFILE: process.env.USERPROFILE,
   PYTHONPATH: process.env.PYTHONPATH ?? "",
 }
 

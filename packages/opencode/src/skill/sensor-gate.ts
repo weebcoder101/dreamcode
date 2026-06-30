@@ -350,7 +350,17 @@ export function evaluateSpawnNecessity(
 
   // Allow zero specialists for simple tasks
   // NOTE: score 0 → ceil(0/2) = 0 (no spawns). score 1 → ceil(1/2) = 1. score 2 → ceil(2/2) = 1.
-  const suggestedCount = Math.min(5, Math.max(0, Math.ceil(score / 2)))
+  let suggestedCount = Math.min(5, Math.max(0, Math.ceil(score / 2)))
+
+  // SAFETY FLOOR: If personas are populated but scoring yielded 0,
+  // still spawn at least 1 specialist. This handles the case where the
+  // sensor gate returned default/empty classification but TS fallback
+  // generated personas. Without this floor, persona spawning is silently
+  // blocked even when specialist profiles exist.
+  if (suggestedCount === 0 && result.personas.length > 0 && !result.is_social_greeting) {
+    suggestedCount = 1
+    reasons.push("Baseline: personas available — spawning 1 specialist as safety measure")
+  }
 
   return {
     shouldSpawn: suggestedCount > 0,
@@ -608,8 +618,20 @@ function runSensorGateEffect(
 ): Effect.Effect<SensorGateResult | null> {
   const sensorGate = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
   if (!sensorGate) {
-    debugLog("[sensor-gate] sensor_gate.py not found in any skills directory")
-    return Effect.succeed(null)
+    console.warn("[sensor-gate] sensor_gate.py not found — using TypeScript fallback personas")
+    // Return a default result so TS fallback personas are generated instead of returning null.
+    // Returning null causes processSensorGatePhase to be skipped entirely.
+    return Effect.succeed({
+      confidence: 0.5,
+      risk_level: "medium" as const,
+      domain_tags: [] as string[],
+      chain: [] as string[],
+      personas: [] as Persona[],
+      mode: "STANDARD" as const,
+      intent: prompt.slice(0, 200),
+      is_social_greeting: false,
+      complexity: "medium" as const,
+    })
   }
 
   const clamped = prompt.length > SAFE_PROMPT_MAX
@@ -630,7 +652,7 @@ function runSensorGateEffect(
       } catch (e) {
         // Temp file creation failed — do NOT fall back to --prompt CLI arg
         // which would leak the prompt in process listings.
-        debugLog("[sensor-gate] failed to create tmp file:", e)
+        console.warn("[sensor-gate] failed to create tmp file:", e)
         return yield* Effect.fail(new Error(`[sensor-gate] Failed to create temp file for prompt: ${e}`))
       }
 
@@ -676,7 +698,7 @@ function runSensorGateEffect(
               lastError = e
             }
           }
-          debugLog("[sensor-gate] ALL Python commands failed:", lastError)
+          console.warn("[sensor-gate] ALL Python commands failed:", lastError)
           return "" as string
         }
       ).pipe(
