@@ -631,6 +631,17 @@ function runSensorGateEffect(
       intent: prompt.slice(0, 200),
       is_social_greeting: false,
       complexity: "medium" as const,
+      // ── Defaults for missing fields ───────────
+      time_sensitivity: "medium" as const,
+      requires_tools: "files",
+      deliverable_type: "multi",
+      primary_skill: "",
+      support_skills: [] as string[],
+      automation: "none" as const,
+      guardian_decision: "APPROVED" as const,
+      guardian_risk: "low" as const,
+      skill_plan: "",
+      raw_output: "[Fallback: sensor_gate.py not found]",
     })
   }
 

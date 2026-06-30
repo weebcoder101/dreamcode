@@ -1288,52 +1288,44 @@ export const layer = Layer.effect(
                       )
                     }
 
-                    // ─── Runtime Skill Loading Enforcement ─────────────
-                    const skillToolCalls = new Set<string>()
-                    for (const msg of msgs) {
-                      if (msg.info.role !== "assistant") continue
-                      for (const part of msg.parts) {
-                        if (part.type !== "tool") continue
-                        if (part.tool !== "skill") continue
-                        if (part.state.status === "completed") {
-                          skillToolCalls.add(part.state.input.name ?? "")
+                    // ─── Runtime Skill Content Pre-Loading ─────────────────
+                    // Instead of telling the model to call the `skill` tool (which the
+                    // model routinely ignores), programmatically load ALL chain skill
+                    // content right here and inject it into the system prompt.
+                    // This guarantees skills are always loaded regardless of model compliance.
+                    const preloadedSkills: string[] = []
+                    const failedSkills: string[] = []
+                    for (const skillName of gateResult.chain) {
+                      try {
+                        const info = yield* skillService.require(skillName, { skipAutoExecute: true }).pipe(
+                          Effect.catch(() => Effect.succeed(undefined)),
+                        )
+                        if (info) {
+                          system.push(`\n<loaded-skill name="${sanitizeForSystemPrompt(info.name)}">\n${sanitizeForSystemPrompt(info.content)}\n</loaded-skill>`)
+                          preloadedSkills.push(info.name)
+                        } else {
+                          failedSkills.push(skillName)
                         }
+                      } catch {
+                        failedSkills.push(skillName)
                       }
                     }
-                    // Mark skills that chain executor successfully executed as already loaded
-                    // (prevents false <skill-loading-gap> warnings — results are already
-                    // available as <script-result> blocks in the system prompt).
-                    for (const result of chainResults) {
-                      if (result.status === "ok") {
-                        skillToolCalls.add(result.name)
-                      }
-                    }
-                    const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
-                    if (unloadedChainSkills.length > 0) {
+                    if (failedSkills.length > 0) {
                       system.push(
-                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
-                        `Script execution results are available in <script-result> blocks, but you MUST also load the skill content ` +
-                        `via the \`skill\` tool to get the full workflow instructions. ` +
-                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.</skill-loading-gap>`,
+                        `\n<skill-loading-gap>WARNING: Could not load skill content for: ${sanitizeForSystemPrompt(failedSkills.join(", "))}. ` +
+                        `Script execution results are available in <script-result> blocks above.</skill-loading-gap>`,
                       )
                     }
-                    // ─── Chain enforcement: tell model to load skill content ─────────
-                    // Script results are pre-injected as <script-result> blocks, but the
-                    // model MUST also call the `skill` tool to get full workflow instructions,
-                    // directory references, and execution scripts. The [SKILLS LOADED]
-                    // acknowledgement is checked at runtime for tool-call tracking.
-                    system.push([
-                      "",
-                      "<chain-enforcement>",
-                      "A sensor gate skill chain has been configured for this prompt.",
-                      "Script execution results are available in the <script-result> blocks above.",
-                      "However, you MUST also load each chain skill using the `skill` tool:",
-                      "",
-                      ...gateResult.chain.map((name: string) => `  - Call \`skill\` with name="${sanitizeForSystemPrompt(name)}"`),
-                      "",
-                      "After loading ALL chain skills, acknowledge with: [SKILLS LOADED]",
-                      "</chain-enforcement>",
-                    ].join("\n"))
+                    if (preloadedSkills.length > 0) {
+                      system.push([
+                        "",
+                        "<skills-preloaded>",
+                        "All chain skills have been loaded and injected into the context above.",
+                        `Loaded skills: ${sanitizeForSystemPrompt(preloadedSkills.join(", "))}`,
+                        "You do NOT need to call the `skill` tool — the content is already available.",
+                        "</skills-preloaded>",
+                      ].join("\n"))
+                    }
 
                     // ─── Persist chain execution results to self-evolve (best-effort) ──
                     yield* selfEvolve.capture({
