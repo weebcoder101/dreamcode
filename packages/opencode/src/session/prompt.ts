@@ -420,11 +420,13 @@ export const layer = Layer.effect(
       )
       yield* sessions.updateMessage(assistantMessage)
       // ── Subagent Cost Propagation ───────────────────────────────────
-      // CRITICAL: The step-finish part is the SINGLE source of truth for
-      // subagent cost. DO NOT also add cost to assistantMessage.cost —
-      // that would double-count (the projector's applyUsage sums step-finish
-      // parts, and stats.ts also sums message.info.cost). The double-count
-      // was the root cause of the ~$0.05 discrepancy.
+      // Two channels, no double-counting:
+      // 1. Step-finish part  → projector's applyUsage  → session.cost (DB)
+      // 2. msg.cost update   → TUI totalCost display   → msg.cost (UI)
+      // The projector only reacts to PartUpdated (step-finish), never to
+      // MessageUpdated. So updating assistantMessage.cost is safe and
+      // necessary — without it, the web app's totalCost sum misses all
+      // subagent spend.
       const normalizeTokens = (t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] => {
         const cache = t?.cache as Record<string, unknown> | undefined
         return {
@@ -449,6 +451,11 @@ export const layer = Layer.effect(
           cost: subagentCost_,
           tokens: normalizeTokens(subagentTokens_),
         } satisfies SessionV1.StepFinishPart)
+        // Also update msg.cost so the TUI's totalCost sum sees it
+        yield* sessions.updateMessage({
+          ...assistantMessage,
+          cost: (assistantMessage.cost ?? 0) + subagentCost_,
+        })
       }
       if (result && part.state.status === "running") {
         yield* sessions.updatePart({
@@ -1145,12 +1152,13 @@ export const layer = Layer.effect(
                   handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
                   sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
                   sensorGateFiredMap: Map<SessionID, boolean>; personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
+                  chainExecutor: any;
                 }) {
                   const {
                     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
                     handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
-                    sensorGateFiredMap, personaRoundMap, spawnHistory, compaction,
+                    sensorGateFiredMap, personaRoundMap, spawnHistory, compaction, chainExecutor,
                   } = input
 
                   // ─── Mark sensor gate fired and track round ──────────
@@ -1158,10 +1166,151 @@ export const layer = Layer.effect(
                   const currentRound = (personaRoundMap.get(sessionID) ?? 0)
                   personaRoundMap.set(sessionID, currentRound + 1)
 
-                  // ─── Determine personas from gate result or explicit override ──
-                  let personas: Persona[] = []
-                  if (gateResult?.personas?.length > 0) {
-                    personas = gateResult.personas.slice(0, RATE_MAX_SPAWNS)
+                  // ─── Skill Chain Execution: Pre-run skill scripts ──────────
+                  // Execute the sensor gate's skill chain programmatically and inject
+                  // <script-result> blocks into the system prompt. This pre-runs Python
+                  // scripts (analysis, planning, debugging) BEFORE the LLM turn, so results
+                  // are available as context. Also handles chain-gap detection, mandated
+                  // skill re-execution, runtime enforcement, and LTM auto-persistence.
+                  if (gateResult?.chain?.length > 0) {
+                    const chainResults: ChainResult[] = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
+                      Effect.catch((e) => {
+                        console.warn("[chain-executor] execute() failed:", e)
+                        return Effect.succeed([] as ChainResult[])
+                      }),
+                    )
+                    for (const result of chainResults) {
+                      if (result.status === "ok" && result.output) {
+                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
+                      } else if (result.status === "not_found") {
+                        system.push(`\n<skill-missing name="${sanitizeForSystemPrompt(result.name)}"/>`)
+                      } else {
+                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" status="error">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</script-result>`)
+                      }
+                    }
+
+                    // Run full pipeline + verify for complex tasks (high complexity or 2+ chain)
+                    // Guard: skip if execute() already covered all skills successfully (prevents
+                    // the orchestrator from re-executing the same Python scripts).
+                    const allExecOk = chainResults.length > 0 && chainResults.every(r => r.status === "ok")
+                    if (!allExecOk && (gateResult.complexity === "high" || gateResult.chain.length > 1)) {
+                      const pipelineResults = yield* chainExecutor.runFullPipeline().pipe(
+                        Effect.catch((e) => {
+                          console.warn("[chain-executor] runFullPipeline() failed:", e)
+                          return Effect.succeed([])
+                        }),
+                      )
+                      for (const result of pipelineResults) {
+                        if (result.status === "ok" && result.output) {
+                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</chain-executor-result>`)
+                        } else if (result.status === "error") {
+                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}" status="warning">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</chain-executor-result>`)
+                        }
+                      }
+
+                      const verifyResult = yield* chainExecutor.verify(chainResults).pipe(
+                        Effect.catch((e) => {
+                          console.warn("[chain-executor] verify() failed:", e)
+                          return Effect.succeed("")
+                        }),
+                      )
+                      if (verifyResult) {
+                        system.push(`\n<chain-verification>\n${sanitizeForSystemPrompt(verifyResult.slice(0, 2000))}\n</chain-verification>`)
+                      }
+                    }
+
+                    // ─── Chain-Gap Detection ──────────────────────────
+                    const missingSkills = gateResult.chain.filter(
+                      (name) => !chainResults.some(
+                        (r: ChainResult) => r.name === name && r.status === "ok",
+                      ),
+                    )
+                    const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
+                    const missingMandated = missingSkills.filter((s: string) => MANDATED_SKILLS.has(s))
+
+                    if (missingMandated.length > 0) {
+                      debugLog("[prompt] Re-executing mandated skills:", missingMandated)
+                      const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
+                        Effect.catch(() => Effect.succeed([] as Array<ChainResult>)),
+                      )
+                      chainResults.push(...(reExecuteResult as ChainResult[]))
+                      for (const result of reExecuteResult as ChainResult[]) {
+                        if (result.status === "ok" && result.output) {
+                          system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" source="mandated-rerun">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
+                        }
+                      }
+                      const stillMissing = gateResult.chain.filter(
+                        (name) => !chainResults.some(
+                          (r: ChainResult) => r.name === name && r.status === "ok",
+                        ),
+                      )
+                      if (stillMissing.length > 0) {
+                        system.push(
+                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(stillMissing.join(", "))}. ` +
+                          `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
+                          `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+                        )
+                      }
+                    } else if (missingSkills.length > 0) {
+                      system.push(
+                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(missingSkills.join(", "))}. ` +
+                        `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
+                        `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+                      )
+                    }
+
+                    // ─── Runtime Skill Loading Enforcement ─────────────
+                    const skillToolCalls = new Set<string>()
+                    for (const msg of msgs) {
+                      if (msg.info.role !== "assistant") continue
+                      for (const part of msg.parts) {
+                        if (part.type !== "tool") continue
+                        if (part.tool !== "skill") continue
+                        if (part.state.status === "completed") {
+                          skillToolCalls.add(part.state.input.name ?? "")
+                        }
+                      }
+                    }
+                    // Mark skills that chain executor successfully executed as already loaded
+                    // (prevents false <skill-loading-gap> warnings — results are already
+                    // available as <script-result> blocks in the system prompt).
+                    for (const result of chainResults) {
+                      if (result.status === "ok") {
+                        skillToolCalls.add(result.name)
+                      }
+                    }
+                    const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
+                    if (unloadedChainSkills.length > 0) {
+                      system.push(
+                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
+                        `Script execution results are available in <script-result> blocks, but you MUST also load the skill content ` +
+                        `via the \`skill\` tool to get the full workflow instructions. ` +
+                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.</skill-loading-gap>`,
+                      )
+                    }
+                      // ─── Persist chain execution results to self-evolve (best-effort) ──
+                      yield* selfEvolve.capture({
+                        chain: gateResult.chain,
+                        intent: gateResult.intent ?? "sensor-gate",
+                        outcome: chainResults.every(r => r.status === "ok") ? "success" : "partial",
+                        signals: chainResults.filter(r => r.status === "error").map(r => ({
+                          whatWorked: "",
+                          whatFailed: `Skill ${r.name} failed: ${r.output.slice(0, 200)}`,
+                          whatToChange: `Chain skill ${r.name} needs fixing`,
+                        })),
+                      }).pipe(Effect.catch(() => Effect.void))
+                    }
+
+                    // ─── Determine personas from gate result or explicit override ──
+                    // Run spawn necessity check FIRST — prevents unnecessary specialist
+                    // spawning for simple tasks, saving cost and token usage.
+                    const evaluation = evaluateSpawnNecessity(gateResult, userText)
+                    if (!evaluation.shouldSpawn) {
+                      debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
+                    }
+                    let personas: Persona[] = []
+                  if (evaluation.shouldSpawn && gateResult?.personas?.length > 0) {
+                    personas = gateResult.personas.slice(0, Math.min(evaluation.suggestedCount, RATE_MAX_SPAWNS))
                   } else if (explicitSpawnCount > 0) {
                     // User explicitly requested spawn — create synthetic personas
                     const rateCheck = checkRateLimit(sessionID)
@@ -1185,6 +1334,7 @@ export const layer = Layer.effect(
                   }
 
                   // ─── Inject persona system prompt ────────────────────
+                  let synthesisText: string | undefined  // declared outside if for scope
                   if (personas.length > 0) {
                     const personaLines: string[] = [
                       "<persona-system>",
@@ -1206,48 +1356,231 @@ export const layer = Layer.effect(
                     system.push(personaLines.join("\n"))
 
                     // ─── Pieces LTM persist (best-effort) ──────────────
-                    yield* Effect.gen(function* () {
-                      const note = {
-                        summary_description: `Sensor Gate — ${personas.length} persona(s) triggered in round ${currentRound + 1}`,
-                        summary: [
-                          `Gate classification: ${gateResult?.intent ?? "explicit-override"}`,
-                          `Personas: ${personas.map((p: any) => p.name).join(", ")}`,
-                          `Round: ${currentRound + 1}`,
-                          `Session: ${sessionID}`,
-                        ].join("\n"),
-                        files: [] as string[],
-                      }
-                      yield* Effect.succeed(note)
-                    }).pipe(Effect.catchAll(() => Effect.void))
+                    yield* piecesLTM.persist({
+                      chainName: `sensor-gate-${gateResult?.intent ?? "explicit-override"}`,
+                      taskDescription: `${personas.length} persona(s) triggered in round ${currentRound + 1}: ${personas.map((p: any) => p.name).join(", ")}`,
+                      outcome: "success",
+                      keyDecisions: [`Gate classification: ${gateResult?.intent ?? "explicit-override"}`, `Round: ${currentRound + 1}`],
+                      memoryType: "standup",
+                    }).pipe(Effect.catch(() => Effect.void))
 
                     // ─── Self-evolve log (best-effort) ─────────────────
                     yield* Effect.gen(function* () {
-                      const skills = personas.map((p: any) => p.skills?.join(", ") ?? "").filter(Boolean)
-                      if (skills.length > 0) {
-                        yield* Effect.succeed(skills)
+                      const named = personas.filter((p: any) => p.name && p.skills?.length > 0) as Array<{ name: string; skills: string[]; role: string; focus: string; task?: string; goals?: string[] }>
+                      if (named.length > 0) {
+                        yield* selfEvolve.capture({
+                          chain: named.map((p) => p.skills.join(",")),
+                          intent: `persona-spawn-round-${currentRound + 1}`,
+                          outcome: "success",
+                          signals: named.map((p) => ({
+                            whatWorked: `Spawning specialist ${p.name} for ${p.role}`,
+                            whatFailed: "",
+                            whatToChange: `Specialist ${p.name} (${p.focus}) was spawned in round ${currentRound + 1}`,
+                          })),
+                        })
                       }
-                    }).pipe(Effect.catchAll(() => Effect.void))
+                    }).pipe(Effect.catch(() => Effect.void))
 
                     // ════════════════════════════════════════════════════
-                    // TODO: Spawn persona subagents via TaskTool
-                    //
-                    // The remaining spawn logic involves:
-                    // 1. Create persona assistant message + tool parts
-                    // 2. Extract subagent context via extractSubagentContext(msgs)
-                    // 3. Build subagent context prompt via buildSubagentContextPrompt(ctx)
-                    // 4. Execute TaskTool for each persona (concurrent, max 5)
-                    // 5. Track completions via PersonaTracker.create(sessionID, count)
-                    // 6. Build synthesis prompt via PersonaTracker.buildSynthesisPrompt(results)
-                    // 7. Inject synthesis via PersonaTracker.injectSynthesis(...)
-                    // 8. Return { synthesisText, sensorGateFired: true }
-                    //
-                    // See original inline code in commit 1269f32d7:1649-1830
-                    // for the complete implementation reference.
+                    // Spawn persona subagents via TaskTool
                     // ════════════════════════════════════════════════════
+                    const personaTeam = personas.slice(0, Math.min(personas.length, RATE_MAX_SPAWNS))
+                    const subtaskOps = yield* ops({ disableTaskTool: true })
+                    const { task: taskTool } = yield* registry.named()
+                    const abortController = new AbortController()
+
+                    // 1. Create persona assistant message
+                    const personaAssistantMsg: SessionV1.Assistant = {
+                      id: MessageID.ascending(),
+                      role: "assistant" as const,
+                      parentID: lastUserMsg?.info?.id,
+                      sessionID,
+                      mode: "tool_call",
+                      agent: "general",
+                      variant: lastUser?.model?.variant,
+                      path: { cwd: ctx.directory, root: ctx.worktree },
+                      cost: 0,
+                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                      providerID: model.providerID,
+                      modelID: model.id,
+                      time: { created: Date.now() },
+                    }
+                    yield* sessions.updateMessage(personaAssistantMsg)
+
+                    // 2. Create tool parts for each persona
+                    const personaParts: SessionV1.ToolPart[] = yield* Effect.all(
+                      personaTeam.map((p: any) =>
+                        Effect.sync(() => ({
+                          id: PartID.ascending(),
+                          messageID: personaAssistantMsg.id,
+                          sessionID,
+                          type: "tool" as const,
+                          callID: ulid(),
+                          tool: TaskTool.id,
+                          state: {
+                            status: "running" as const,
+                            input: { prompt: p.focus, description: `persona:${p.name}`, subagent_type: "general" },
+                            metadata: {},
+                            time: { start: Date.now() },
+                          },
+                        } as SessionV1.ToolPart)),
+                      ),
+                    )
+                    for (const part of personaParts) {
+                      yield* sessions.updatePart(part)
+                    }
+
+                    // 3. Extract subagent context
+                    const subagentCtx = extractSubagentContext(msgs)
+                    const contextBlock = buildSubagentContextPrompt(subagentCtx)
+
+                    // 4. Execute TaskTool for each persona concurrently
+                    const tracker = yield* PersonaTracker.create(sessionID, personaTeam.length)
+
+                    yield* Effect.forEach(
+                      personaTeam,
+                      Effect.fnUntraced(function* (persona: any, i: number) {
+                        const part = personaParts[i]!
+                        const otherCtx = personaTeam.length > 1
+                          ? "\nOther specialist agents are analyzing related aspects. Do NOT duplicate work.\n"
+                          : ""
+
+                        const personaPrompt = [
+                          "## Output Requirements",
+                          "Provide your findings as a STRUCTURED ANALYSIS with:",
+                          "1. **Summary**: One paragraph overview",
+                          "2. **Key Issues**: Bullet list with file:line references",
+                          "3. **Recommendations**: Actionable fixes with code snippets",
+                          "4. **Confidence**: High/Medium/Low for each finding",
+                          "",
+                          "Be CONCISE. Focus on ACTIONABLE items only.",
+                          otherCtx,
+                          "## Synthesis Guide",
+                          persona.synthesisGuide,
+                          "",
+                          contextBlock,
+                          "## User Prompt",
+                          sanitizeForSystemPrompt(userText.trim()),
+                          "",
+                          `## Your Identity`,
+                          `You are "${persona.name}" — ${persona.role}.`,
+                          `Your focus area: ${persona.focus}.`,
+                          ...(personaTeam.length > 1
+                            ? ["", "## Other Specialists",
+                              ...personaTeam.filter((_: any, j: number) => j !== i).map((o: any) => `- "${o.name}" (${o.role}) — ${o.focus}`), ""]
+                            : []),
+                          "## Task",
+                          persona.task,
+                        ].join("\n")
+
+                        const updatePart = (status: "completed" | "error", output: string) =>
+                          Effect.gen(function* () {
+                            yield* tracker.complete(persona.name, persona.role, output, status, {
+                              task: persona.task, goals: persona.goals, synthesisGuide: persona.synthesisGuide,
+                            })
+                            const st = part.state as Record<string, any>
+                            yield* sessions.updatePart({
+                              ...part,
+                              state: status === "completed"
+                                ? { ...st, status: "completed", output, title: persona.name, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                                : { ...st, status: "error", error: output, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                            } as SessionV1.ToolPart)
+                          }).pipe(Effect.catchCause((cause) => Effect.logWarning("updatePart failed", { cause })))
+
+                        return yield* taskTool
+                          .execute(
+                            { prompt: personaPrompt, description: `persona:${persona.name}`, subagent_type: "general" },
+                            {
+                              agent: "general" as any,
+                              sessionID,
+                              messageID: personaAssistantMsg.id,
+                              messages: subagentCtx.recentMessages,
+                              abort: abortController.signal,
+                              callID: (part as SessionV1.ToolPart).callID,
+                              extra: { bypassAgentCheck: true, promptOps: subtaskOps },
+                              metadata: (meta: any) => Effect.gen(function* () {
+                                yield* sessions.updatePart({
+                                  ...part,
+                                  state: { ...(part.state as any), title: meta?.title ?? (part.state as any).title, metadata: { ...(part.state as any).metadata, ...meta?.metadata } },
+                                } as SessionV1.ToolPart)
+                              }),
+                            },
+                          )
+                          .pipe(
+                            Effect.matchEffect({
+                              onSuccess: (result) => Effect.gen(function* () {
+                                yield* updatePart("completed", result.output)
+                                // ═══════════════════════════════════════════
+                                // PROPAGATE SUBAGENT COST TO PARENT SESSION
+                                // ═══════════════════════════════════════════
+                                // Creates a step-finish part so the projector
+                                // can add this cost to session.cost. Without
+                                // this, persona/subagent spend is invisible
+                                // in the spends tab and stats command.
+                                const subagentCost_ = Number((result as any)?.subagentCost)
+                                const subagentTokens_ = (result as any)?.subagentTokens
+                                if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
+                                  const tokens: SessionV1.Tokens = {
+                                    input: (subagentTokens_?.input as number) ?? 0,
+                                    output: (subagentTokens_?.output as number) ?? 0,
+                                    reasoning: (subagentTokens_?.reasoning as number) ?? 0,
+                                    cache: {
+                                      read: (subagentTokens_?.cache as any)?.read ?? 0,
+                                      write: (subagentTokens_?.cache as any)?.write ?? 0,
+                                    },
+                                  }
+                                  yield* sessions.updatePart({
+                                    id: PartID.ascending(),
+                                    messageID: personaAssistantMsg.id,
+                                    sessionID,
+                                    type: "step-finish",
+                                    reason: "completed",
+                                    cost: subagentCost_,
+                                    tokens,
+                                  } satisfies SessionV1.StepFinishPart)
+                                  // Also update msg.cost so the TUI's totalCost sum sees it
+                                  yield* sessions.updateMessage({
+                                    ...personaAssistantMsg,
+                                    cost: (personaAssistantMsg.cost ?? 0) + subagentCost_,
+                                  })
+                                }
+                              }),
+                              onFailure: (error) => {
+                                abortController.abort()
+                                return updatePart("error", String(error))
+                              },
+                            }),
+                          )
+                      }),
+                      { concurrency: RATE_MAX_SPAWNS },
+                    )
+
+                    // 5. Poll until all personas complete
+                    const pollResults = (): Effect.Effect<PersonaTracker.PersonaResult[]> =>
+                      Effect.gen(function* () {
+                        const remaining = yield* tracker.remaining()
+                        if (remaining <= 0) return yield* tracker.getAll()
+                        yield* Effect.sleep("500 millis")
+                        return yield* pollResults()
+                      })
+
+                    const allResults = yield* pollResults().pipe(
+                      Effect.timeout("30 seconds"),
+                      Effect.catch(() => tracker.getAll()),
+                    )
+
+                    // 6. Build synthesis prompt from results
+                    synthesisText = PersonaTracker.buildSynthesisPrompt(allResults)
+
+                    // 7. Inject synthesis as synthetic user message
+                    yield* Effect.tryPromise({
+                      try: () => PersonaTracker.injectSynthesis(sessionID, allResults, sessions, model.providerID, model.id),
+                      catch: (e) => Effect.logWarning("injectSynthesis failed", { error: e }),
+                    })
                   }
 
                   return {
-                    synthesisText: undefined as string | undefined,
+                    synthesisText,
                     sensorGateFired: true,
                   }
                 })
@@ -1530,6 +1863,7 @@ Before every response, verify your reasoning:
                     handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
                     sensorGateFiredMap, personaRoundMap, spawnHistory, compaction,
+                    chainExecutor,
                   })
                   synthesisText = sgpResult.synthesisText
                 }
@@ -1780,6 +2114,7 @@ export const defaultLayer = Layer.suspend(() =>
         SensorGate.defaultLayer,
         Skill.defaultLayer,
         ChainExecutor.defaultLayer,
+        SelfEvolve.defaultLayer,
         PiecesLTM.defaultLayer,
         ContextCompressor.defaultLayer,
       ),

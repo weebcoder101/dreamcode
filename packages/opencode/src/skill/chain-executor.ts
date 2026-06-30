@@ -172,7 +172,7 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
   const results: ChainResult[] = []
 
   for (const skillName of chain) {
-    const skillInfo = yield* skillService.require(skillName).pipe(Effect.option)
+    const skillInfo = yield* skillService.require(skillName, { skipAutoExecute: true }).pipe(Effect.option)
     if (skillInfo._tag === "None") {
       results.push({ name: skillName, output: "", status: "not_found", executionType: "content" })
       continue

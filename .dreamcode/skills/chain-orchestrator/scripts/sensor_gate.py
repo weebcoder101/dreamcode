@@ -25,6 +25,10 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+# Module-level constants
+INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
+TRIVIAL_TASKS = {"communication", "documentation", "onboarding"}
+
 def _find_project_root() -> Path:
     """Find project root by looking for .opencode directory."""
     current = Path.cwd()
@@ -214,7 +218,6 @@ def build_dynamic_graph(prompt: str) -> dict:
     # Only include dream/innovation when task actually requires it
     # (not for trivial communication-only tasks)
     task_types = {t["task_type"] for t in tasks}
-    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
     if task_types & INNOVATION_TASKS:
         needed_skills.add("breakthrough-overdrive-innovation")
     
@@ -251,7 +254,6 @@ def build_dynamic_graph(prompt: str) -> dict:
     
     # MINIMUM SKILL FLOOR — trivial tasks need fewer skills
     task_types = {t["task_type"] for t in tasks}
-    TRIVIAL_TASKS = {"communication"}
     if task_types <= TRIVIAL_TASKS:
         # Trivial: just the needed skills, no forced chain
         pass
@@ -335,7 +337,7 @@ def classify_intent(prompt: str, chain_result: dict) -> str:
     for pattern, _task_type, _priority in PATTERN_RULES:
         if re.search(pattern, prompt_lower):
             matched += 1
-    confidence_score = round(min(matched / max(total_patterns, 1) + 0.3, 0.95), 2) if matched > 0 else 0.6
+    confidence_score = round(min(matched / max(total_patterns, 1) + 0.3, 0.95), 2) if matched > 0 else round(matched / max(total_patterns, 1), 2)
 
     complexity = chain_result.get("complexity", "low")
 
@@ -641,7 +643,6 @@ def emit_plan(chain_result: dict) -> str:
     chain = chain_result["chain"]
     # Determine actual mode from detected tasks
     task_types = {t["task_type"] for t in chain_result.get("detected_tasks", [])}
-    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
     has_innovation = bool(task_types & INNOVATION_TASKS) or "breakthrough-overdrive-innovation" in chain
     is_trivial = not task_types or task_types <= {"communication"}
 
@@ -708,7 +709,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         elif skill == "neuro":
             lines.extend([
                 f"STEP {step_num}: {skill}",
-                f"  Run: python3 .dreamcode/skills/neuro/scripts/neuro_harness.py --task \"{prompt[:60]}\" --phase pre_patch",
+                f"  Run: python3 .opencode/skills/neuro/scripts/neuro_harness.py --task \"{prompt[:60]}\" --phase pre_patch",
                 f"  For each file, run NEURO review.",
                 f"  Parse the output and apply the top 3 recommendations.",
                 "",
@@ -716,7 +717,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         elif skill == "code-hardener":
             lines.extend([
                 f"STEP {step_num}: {skill}",
-                f"  Run: python3 .dreamcode/skills/neuro/scripts/neuro_harness.py --task \"HARDEN: {prompt[:60]}\" --phase post_patch",
+                f"  Run: python3 .opencode/skills/neuro/scripts/neuro_harness.py --task \"HARDEN: {prompt[:60]}\" --phase post_patch",
                 f"  Apply hardening: type annotations, error handling, input validation.",
                 "",
             ])
@@ -769,7 +770,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         "FINAL STEP: Persist results to Pieces LTM.",
         "  Primary: Use the PiecesLTM Service (inside opencode runtime):",
         "    PiecesLTM.Service.persist({ chainName: '...', taskDescription: '...', outcome: 'success' })",
-        "  Fallback: Run: python3 .dreamcode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
+        "  Fallback: Run: python3 .opencode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
         f"    --chain \"{', '.join(chain)}\" --task \"{prompt[:80]}\" --outcome success",
         "",
         "After ALL steps complete, respond to the user with:",

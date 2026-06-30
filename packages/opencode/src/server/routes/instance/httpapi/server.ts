@@ -52,6 +52,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { Skill } from "@/skill"
 import { ChainExecutor } from "@/skill/chain-executor"
+import { SelfEvolve } from "@/skill/self-evolve"
 import { PiecesLTM } from "@/pieces-ltm"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Snapshot } from "@/snapshot"
@@ -250,6 +251,7 @@ export function createRoutes(
       SensorGate.defaultLayer,
       ChainExecutor.defaultLayer,
       PiecesLTM.defaultLayer,
+      SelfEvolve.defaultLayer,
       SessionPrompt.defaultLayer,
       SessionRevert.defaultLayer,
       SessionShare.defaultLayer,

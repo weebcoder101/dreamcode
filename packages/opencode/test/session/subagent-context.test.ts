@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, it } from "bun:test"
 import { extractSubagentContext, buildSubagentContextPrompt } from "../../src/session/subagent-context"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
@@ -9,7 +9,7 @@ function makeMsg(role: "user" | "assistant", text: string, synthetic = false): S
   return {
     info: {
       id: MessageID.ascending(),
-      sessionID: SessionID.make("test"),
+      sessionID: SessionID.make("ses_test"),
       role,
       agent: "general",
       time: { created: Date.now() },
@@ -18,7 +18,7 @@ function makeMsg(role: "user" | "assistant", text: string, synthetic = false): S
       {
         id: PartID.ascending(),
         messageID: "" as any,
-        sessionID: SessionID.make("test"),
+        sessionID: SessionID.make("ses_test"),
         type: "text",
         text,
         synthetic,

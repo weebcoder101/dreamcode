@@ -323,8 +323,7 @@ def show_perk_status() -> None:
         log(f"    ✓ {perk}")
     
     if next_level:
-        needed = next_level.__class__.__name__  # This won't work, fix below
-        # Find the threshold
+        # Find the threshold for next level
         for threshold, level in sorted(PERKS.items()):
             if level == next_level:
                 log(f"\n  Next rank: {next_level['name']} ({threshold} pts)")

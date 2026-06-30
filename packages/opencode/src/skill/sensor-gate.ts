@@ -780,7 +780,7 @@ function runNeuroHarnessEffect(
               stdio: ["pipe", "pipe", "pipe"],
               env: {
                 ...BASE_SUBPROCESS_ENV,
-                NEURO_API_KEY: process.env.NEUCODE_NEURO_API_KEY ?? process.env.NEURO_API_KEY ?? "",
+                NEURO_API_KEY: "",  // Omitted: prevents key leak to subprocess. Scripts gracefully skip when unset.
                 PROJECT_ROOT: projectRoot,
               },
             })

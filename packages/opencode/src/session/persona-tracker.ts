@@ -31,27 +31,29 @@ export interface PersonaTracker {
   readonly getAll: () => Effect.Effect<PersonaResult[]>
 }
 
-export function create(sessionID: string, total: number): PersonaTracker {
-  const resultsRef = Effect.runSync(Ref.make<PersonaResult[]>([]))
-  const remainingRef = Effect.runSync(Ref.make(total))
+export function create(sessionID: string, total: number): Effect.Effect<PersonaTracker> {
+  return Effect.gen(function* () {
+    const resultsRef = yield* Ref.make<PersonaResult[]>([])
+    const remainingRef = yield* Ref.make(total)
 
-  const complete = Effect.fn("PersonaTracker.complete")(function* (
-    name: string,
-    role: string,
-    output: string,
-    status: "completed" | "error",
-    extra?: { task?: string; goals?: string[]; synthesisGuide?: string },
-  ) {
-    yield* Ref.update(resultsRef, (r) => [...r, { name, role, output, status, ...extra }])
-    yield* Ref.update(remainingRef, (r) => r - 1)
+    const complete = Effect.fn("PersonaTracker.complete")(function* (
+      name: string,
+      role: string,
+      output: string,
+      status: "completed" | "error",
+      extra?: { task?: string; goals?: string[]; synthesisGuide?: string },
+    ) {
+      yield* Ref.update(resultsRef, (r) => [...r, { name, role, output, status, ...extra }])
+      yield* Ref.update(remainingRef, (r) => r - 1)
+    })
+
+    return {
+      sessionID,
+      remaining: () => Ref.get(remainingRef),
+      complete,
+      getAll: () => Ref.get(resultsRef),
+    } as PersonaTracker
   })
-
-  return {
-    sessionID,
-    remaining: () => Ref.get(remainingRef),
-    complete,
-    getAll: () => Ref.get(resultsRef),
-  }
 }
 
 export function buildSynthesisPrompt(results: PersonaResult[]): string {

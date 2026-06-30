@@ -89,6 +89,9 @@ export const DEFAULT_LEARNINGS: LearningSignal[] = [
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    // PiecesLTM is now resolved via Effect's dependency injection layer system.
+    // The SelfEvolve layer's dependencies must include PiecesLTM (handled by
+    // the caller's Layer.mergeAll or explicit Layer.provide).
     const ltm = yield* PiecesLTM.PiecesLTM
 
     /**
@@ -98,8 +101,8 @@ export const layer = Layer.effect(
     const capture = Effect.fn("SelfEvolve.capture")(function* (input: CaptureInput) {
       if (input.signals.length === 0) return
 
-      // Persist each signal as a separate learn memory
-      for (const signal of input.signals) {
+      // Persist each signal as a separate learn memory (skip if LTM unavailable)
+      if (ltm) { for (const signal of input.signals) {
         const persistInput: PersistInput = {
           chainName: input.chain.join(" → "),
           taskDescription: signal.whatToChange,
@@ -116,7 +119,7 @@ export const layer = Layer.effect(
           memoryType: "learn",
         }
         yield* ltm.persist(persistInput).pipe(Effect.catch(() => Effect.void))
-      }
+      }}
     })
 
     /**
@@ -127,23 +130,25 @@ export const layer = Layer.effect(
       // Start with hardcoded default learnings (Effect v4 API rules)
       const signals: LearningSignal[] = [...DEFAULT_LEARNINGS]
 
-      // Try to supplement with LTM-stored rules
-      const raw: unknown = yield* (ltm as unknown as { query: (input: { query: string; topics: string[] }) => Effect.Effect<unknown> }).query({
-        query: "learned rules Effect v4 API differences patterns",
-        topics: ["learned rules", "Effect v4", "self-evolution"],
-      }).pipe(Effect.catch(() => Effect.succeed(null)))
+      // Try to supplement with LTM-stored rules (skip if LTM unavailable)
+      if (ltm) {
+        const raw: unknown = yield* ltm.query({
+          query: "learned rules Effect v4 API differences patterns",
+          topics: ["learned rules", "Effect v4", "self-evolution"],
+        }).pipe(Effect.catch(() => Effect.succeed(null)))
 
-      if (raw && typeof raw === "object") {
-        const r = raw as { candidates?: Array<{ description?: string; metadata?: Record<string, unknown> }> }
-        if (r.candidates) {
-          for (const c of r.candidates) {
-            if (c.description) {
-              // Derived signal from persistent memory
-              signals.push({
-                whatWorked: "Preserved in Pieces LTM",
-                whatFailed: "See learning note",
-                whatToChange: c.description,
-              })
+        if (raw && typeof raw === "object") {
+          const r = raw as { candidates?: Array<{ description?: string; metadata?: Record<string, unknown> }> }
+          if (r.candidates) {
+            for (const c of r.candidates) {
+              if (c.description) {
+                // Derived signal from persistent memory
+                signals.push({
+                  whatWorked: "Preserved in Pieces LTM",
+                  whatFailed: "See learning note",
+                  whatToChange: c.description,
+                })
+              }
             }
           }
         }

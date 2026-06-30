@@ -148,30 +148,38 @@ export function getPythonArgs(cmd?: string): string[] {
 // This mapping bridges the gap without filesystem changes.
 
 const SKILL_DIR_ALIASES: Record<string, string> = {
-  "api-design": "api",
-  "data-science": "data",
-  "git-workflow": "git",
-  "product-thinking": "product",
-  "python-best-practices": "python",
-  "quantum-poc": "quantum",
+  // Sensor-gate canonical name → registered SKILL.md name
+  // The sensor gate emits short names (api, data, git, ...) but SKILL.md
+  // frontmatter may use descriptive names (api-design, data-science, ...).
+  // This mapping bridges the gap so skillService.require() finds the right skill.
+  "api": "api-design",
+  "data": "data-science",
+  "git": "git-workflow",
+  "product": "product-thinking",
+  "python": "python-best-practices",
+  "quantum": "quantum-poc",
 }
 
 /**
- * Resolve a skill name to its actual directory name, checking aliases.
- * If the canonical name exists as-is, return it. Otherwise check the alias map.
+ * Resolve a skill name to its actual registered skill name, checking aliases.
+ * Checks the alias map first (canonical → registered), then falls back to
+ * directory existence check, then returns the name as-is.
  */
 export function resolveSkillDirName(canonicalName: string): string {
-  // If the canonical name exists directly, use it
+  // Check alias map first (canonical sensor-gate name → registered SKILL.md name)
+  const aliased = SKILL_DIR_ALIASES[canonicalName]
+  if (aliased) return aliased
+
+  // If no alias, check if the name exists as a directory directly
   const skillsDir = resolveSkillsDir()
   if (skillsDir) {
     try {
       if (existsSync(join(skillsDir, canonicalName)) && statSync(join(skillsDir, canonicalName)).isDirectory()) {
         return canonicalName
       }
-    } catch { /* fall through to alias check */ }
+    } catch { /* fall through */ }
   }
-  // Check alias map (e.g. "api-design" → "api")
-  return SKILL_DIR_ALIASES[canonicalName] ?? canonicalName
+  return canonicalName
 }
 
 /**

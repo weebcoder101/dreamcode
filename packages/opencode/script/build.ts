@@ -242,14 +242,14 @@ for (const item of targets) {
       autoloadPackageJson: true,
       target: name.replace(pkg.name, "bun") as any,
       outfile: `dist/${name}/bin/dreamcode`,
-      execArgv: [`--user-agent=dreamcode/${Script.version}`, "--use-system-ca", "--"],
+      execArgv: [`--user-agent=dreamcode/${pkg.version}`, "--use-system-ca", "--"],
       windows: {},
     },
     files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
     entrypoints: ["./src/index.ts", parserWorker, workerPath, ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : [])],
     define: {
       FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
-      OPENCODE_VERSION: `'${Script.version}'`,
+      OPENCODE_VERSION: `'${pkg.version}'`,
       OPENCODE_MODELS_DEV: generated.modelsData,
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       OPENCODE_WORKER_PATH: workerPath,
@@ -293,7 +293,7 @@ for (const item of targets) {
     JSON.stringify(
       {
         name,
-        version: Script.version,
+        version: pkg.version,
         preferUnplugged: true,
         os: [item.os],
         cpu: [item.arch],
@@ -303,7 +303,7 @@ for (const item of targets) {
       2,
     ),
   )
-  binaries[name] = Script.version
+  binaries[name] = pkg.version
 }
 
 // Create dev entry point bin/dreamcode[.cmd] → native binary (single / win32 build)
@@ -374,7 +374,7 @@ if (Script.release || win32Flag) {
     const ghRepo = process.env.GH_REPO
     if (!ghRepo) throw new Error("GH_REPO env var is required for release upload")
     if (!/^[\w.-]+\/[\w.-]+$/.test(ghRepo)) throw new Error(`GH_REPO must be in owner/repo format, got: ${ghRepo}`)
-    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${ghRepo}`
+    await $`gh release upload v${pkg.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${ghRepo}`
   }
 }
 

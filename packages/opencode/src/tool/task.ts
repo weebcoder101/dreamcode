@@ -275,7 +275,9 @@ export const TaskTool = Tool.define(
 
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
         Effect.provideService(Database.Service, database),
-        Effect.orDie,
+        Effect.catchTag("NotFoundError", (err) =>
+          Effect.fail(new Error(`Parent message ${ctx.messageID} not found in session ${ctx.sessionID}. It may have been compacted or the persona spawning path never persisted it.`)),
+        ),
       )
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
