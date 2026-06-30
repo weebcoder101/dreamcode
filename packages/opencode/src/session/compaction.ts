@@ -381,7 +381,7 @@ export const layer = Layer.effect(
 
       // RIT Compaction: compress conversation history in background
       const conversationJson = JSON.stringify(modelMessages, null, 2)
-      const compressed = yield* compressor.compress(conversationJson)
+      const compressed = yield* compressor.compress(conversationJson, undefined, { skipRitEnrichment: true })
 
       const tailIndex = selected.tail_start_id
         ? history.findIndex((message) => message.info.id === selected.tail_start_id)

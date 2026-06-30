@@ -138,27 +138,37 @@ function stage6_ritEnrichment(context: string): string {
   return ritSummary + context
 }
 
-function createPipeline(currentMaxTokens: number = 150000): CompressionStage[] {
-  return [
+function createPipeline(currentMaxTokens: number = 150000, skipRitEnrichment: boolean = false): CompressionStage[] {
+  const stages: CompressionStage[] = [
     { name: "budget_reduction", execute: (ctx) => stage1_budgetReduction(ctx, currentMaxTokens) },
     { name: "snip", execute: stage2_snip },
     { name: "microcompact", execute: stage3_microcompact },
     { name: "context_collapse", execute: stage4_contextCollapse },
     { name: "auto_compact", execute: stage5_autoCompact },
-    { name: "rit_enrichment", execute: stage6_ritEnrichment },
   ]
+  if (!skipRitEnrichment) {
+    stages.push({ name: "rit_enrichment", execute: stage6_ritEnrichment })
+  }
+  return stages
+}
+
+export interface CompressOptions {
+  maxTokens?: number
+  /** When true, skip stage6_ritEnrichment (used during compaction to avoid adding tokens back) */
+  skipRitEnrichment?: boolean
 }
 
 export interface Interface {
-  readonly compress: (context: string, maxTokens?: number) => Effect.Effect<CompressionResult>
+  readonly compress: (context: string, maxTokens?: number, options?: CompressOptions) => Effect.Effect<CompressionResult>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/ContextCompressor") {}
 
 export const layer = Layer.succeed(Service, Service.of({
-  compress: Effect.fn("ContextCompressor.compress")(function* (context: string, maxTokens?: number) {
+  compress: Effect.fn("ContextCompressor.compress")(function* (context: string, maxTokens?: number, options?: CompressOptions) {
     const TARGET_RATIO = 0.6
-    const MAX_ITERATIONS = 3
+    const MAX_ITERATIONS = 2
+    const skipRit = options?.skipRitEnrichment ?? false
     let current = context
     let bestResult = current
     let bestRatio = 1
@@ -167,7 +177,7 @@ export const layer = Layer.succeed(Service, Service.of({
     let effectiveMaxTokens = maxTokens ?? Math.floor(originalTokens * TARGET_RATIO)
 
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-      const pipeline = createPipeline(effectiveMaxTokens)
+      const pipeline = createPipeline(effectiveMaxTokens, skipRit)
       const prePassState = current
       for (const stage of pipeline) {
         const before = current
@@ -181,6 +191,7 @@ export const layer = Layer.succeed(Service, Service.of({
         bestResult = current
         bestRatio = ratio
       }
+      // Early exit if already at or below target ratio
       if (ratio <= TARGET_RATIO) break
       effectiveMaxTokens = Math.floor(effectiveMaxTokens * 0.9)
       current = prePassState
@@ -198,8 +209,22 @@ export const layer = Layer.succeed(Service, Service.of({
     if (ctx) {
       const cacheDir = path.join(ctx.directory, ".dreamcode", "context_cache")
       fs.mkdirSync(cacheDir, { recursive: true })
+      // Clean up cache files older than 1 hour
+      const oneHourAgo = Date.now() - 3600_000
+      try {
+        const existing = fs.readdirSync(cacheDir)
+        for (const file of existing) {
+          const filePath = path.join(cacheDir, file)
+          const stat = fs.statSync(filePath)
+          if (stat.isFile() && stat.mtimeMs < oneHourAgo) {
+            fs.unlinkSync(filePath)
+          }
+        }
+      } catch {
+        // Best-effort cleanup
+      }
       const cacheFile = path.join(cacheDir, `compressed_${Date.now()}.md`)
-      fs.writeFileSync(cacheFile, current)
+      fs.writeFileSync(cacheFile, current, { mode: 0o600 })
     }
 
     return {

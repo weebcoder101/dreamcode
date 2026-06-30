@@ -19,6 +19,7 @@ const AUTO: CachePolicyObject = {
   tools: true,
   system: true,
   messages: "latest-user-message",
+  ttlSeconds: 3600,  // 1-hour TTL — avoids re-writing KV cache on every turn
 }
 
 const NONE: CachePolicyObject = {}

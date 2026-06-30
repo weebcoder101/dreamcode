@@ -10,7 +10,7 @@ const COMPACTION_BUFFER = 20_000
 // Prevents unbounded context growth (e.g. 213K tokens never compacting
 // because the threshold is 616K for a 1M-context model).
 // Raised from 200K to 250K per user request for more context headroom.
-const MAX_COMPACTION_THRESHOLD = 250_000
+const MAX_COMPACTION_THRESHOLD = 350_000
 
 export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outputTokenMax?: number }) {
   const context = input.model.limit.context
