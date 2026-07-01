@@ -86,6 +86,10 @@ export type SessionData = {
   visible: Map<string, string>
   end: Set<string>
   echo: Map<string, Set<string>>
+  /** Cumulative cost across all messages in the session (parent + subagent task responses). */
+  cost: number
+  /** Message IDs whose cost has already been counted in `cost`. Prevents double-counting on replay. */
+  costMessages: Set<string>
 }
 
 export type SessionDataInput = {
@@ -124,6 +128,8 @@ export function createSessionData(
     visible: new Map(),
     end: new Set(),
     echo: new Map(),
+    cost: 0,
+    costMessages: new Set(),
   }
 }
 
@@ -843,10 +849,19 @@ export function reduceSessionData(input: SessionDataInput): SessionDataOutput {
       next = { status: "assistant responding" }
     }
 
+    // Accumulate message cost into running total. Each message ID counted only
+    // once so replay/bootstrap replays don't double-count.
+    const msgID = info.id
+    const msgCost = typeof info.cost === "number" && info.cost > 0 ? info.cost : 0
+    if (msgCost > 0 && msgID && !data.costMessages.has(msgID)) {
+      data.cost += msgCost
+      data.costMessages.add(msgID)
+    }
+
     const usage = formatUsage(
       info.tokens,
       input.limits[modelKey(info.providerID, info.modelID)],
-      typeof info.cost === "number" ? info.cost : undefined,
+      data.cost > 0 ? data.cost : undefined,
     )
     if (usage) {
       next = {

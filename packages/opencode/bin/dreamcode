@@ -1,6 +1,3 @@
 #!/usr/bin/env bash
-# Resolve symlinks so this works when invoked through `bun link`'s
-# global install chain (which creates a symlink to this script).
-REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
-SCRIPT_DIR="$(cd "$(dirname "$REAL_PATH")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "$SCRIPT_DIR/../dist/dreamcode-linux-x64/bin/dreamcode" "$@"
