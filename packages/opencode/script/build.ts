@@ -2,6 +2,7 @@
 
 import { $ } from "bun"
 import fs from "fs"
+import os from "os"
 import path from "path"
 import { fileURLToPath } from "url"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
@@ -337,12 +338,18 @@ if ((singleFlag || win32Flag) && targets.length > 0) {
       // checkout is on a different OS).
       const rel = path.relative(binDir, distBin)
       fs.mkdirSync(binDir, { recursive: true })
+      // Create launcher that follows symlinks (works via symlinks)
       fs.writeFileSync(
         binLauncher,
         [
           `#!/usr/bin/env bash`,
-          `SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"`,
-          `exec "$SCRIPT_DIR/${rel}" "$@"`,
+          `# Resolve real directory even if accessed via symlink (bun link)`,
+          `SCRIPT_SOURCE="\${BASH_SOURCE[0]}"`,
+          `while [ -h "\$SCRIPT_SOURCE" ]; do`,
+          `  SCRIPT_SOURCE="\$(readlink "\$SCRIPT_SOURCE")"`,
+          `done`,
+          `SCRIPT_DIR="\$(cd "\$(dirname "\$SCRIPT_SOURCE")" && pwd)"`,
+          `exec "\$SCRIPT_DIR/${rel}" "\$@"`,
         ].join("\n") + "\n",
       )
       fs.chmodSync(binLauncher, 0o755)
@@ -351,31 +358,3 @@ if ((singleFlag || win32Flag) && targets.length > 0) {
   }
 }
 
-// Register globally so `dreamcode` works from anywhere after build.
-// Runs unconditionally so the global symlink always reflects the latest
-// binary, regardless of --single/--win32 flags.
-try {
-  await $`bun link`
-  console.log(`Registered: bun link → dreamcode is now globally available`)
-} catch {
-  console.warn(`Warning: bun link failed — run "bun link" manually to use dreamcode globally`)
-}
-
-if (Script.release || win32Flag) {
-  for (const key of Object.keys(binaries)) {
-    if (key.includes("linux")) {
-      await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
-    } else {
-      // Use python3 zipfile (available on all platforms; avoids system `zip` dependency)
-      await $`python3 -c "import shutil; shutil.make_archive('../../${key}', 'zip', '.')"`.cwd(`dist/${key}/bin`)
-    }
-  }
-  if (Script.release) {
-    const ghRepo = process.env.GH_REPO
-    if (!ghRepo) throw new Error("GH_REPO env var is required for release upload")
-    if (!/^[\w.-]+\/[\w.-]+$/.test(ghRepo)) throw new Error(`GH_REPO must be in owner/repo format, got: ${ghRepo}`)
-    await $`gh release upload v${pkg.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${ghRepo}`
-  }
-}
-
-export { binaries }
