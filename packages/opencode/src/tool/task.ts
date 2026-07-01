@@ -334,7 +334,7 @@ export const TaskTool = Tool.define(
         // earlier messages (step-finish parts). Using DB cost has a projector race (~$0.05);
         // computing from child session messages is synchronous and race-free.
         const allMsgs = yield* sessions.messages({ sessionID: nextSession.id }).pipe(
-          Effect.catchAll(() => Effect.succeed([] as SessionV1.WithParts[])),
+          Effect.catch(() => Effect.succeed([] as SessionV1.WithParts[])),
         )
         const cost = allMsgs
           .filter((m): m is SessionV1.WithParts & { info: SessionV1.Assistant } => m.info.role === "assistant")

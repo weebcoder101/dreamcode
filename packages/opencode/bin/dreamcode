@@ -1,3 +1,8 @@
 #!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve real directory even if accessed via symlink (bun link)
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SCRIPT_SOURCE" ]; do
+  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 exec "$SCRIPT_DIR/../dist/dreamcode-linux-x64/bin/dreamcode" "$@"
