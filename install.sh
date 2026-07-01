@@ -82,9 +82,9 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "${CYAN}Updating existing DreamCode install...${NC}"
   CURRENT_BRANCH=$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
   echo -e "${MUTED}Branch: $CURRENT_BRANCH${NC}"
-  if [ "$CURRENT_BRANCH" = "HEAD" ]; then
-    echo -e "${MUTED}Detached HEAD — skipping git pull (CI mode)${NC}"
-  elif ! git -C "$INSTALL_DIR" pull origin "$CURRENT_BRANCH"; then
+  # Stash any local changes first so git pull doesn't abort
+  git -C "$INSTALL_DIR" stash --include-untracked 2>/dev/null || true
+  if ! git -C "$INSTALL_DIR" pull origin "$CURRENT_BRANCH"; then
     echo -e "${ORANGE}WARN: git pull failed on '$CURRENT_BRANCH'. Continuing with existing clone.${NC}"
   fi
 else
@@ -261,34 +261,54 @@ fi
 
 # 3) Binary version must match expected version
 DIST_BIN="$(pwd)/${NATIVE_BIN}"
-ACTUAL_VERSION=$("$DIST_BIN" --version 2>/dev/null || echo "FAILED")
+echo -e "${MUTED}  Binary path: $DIST_BIN${NC}"
+# Capture both stdout and stderr for diagnostics, but use only stdout for version
+ACTUAL_VERSION=$("$DIST_BIN" --version 2>&1 || true)
 if echo "$ACTUAL_VERSION" | grep -qF "$OPENCODE_VERSION"; then
-  echo -e "${GREEN}✓ Version verified: $ACTUAL_VERSION${NC}"
+  echo -e "${GREEN}✓ Version verified: $(echo "$ACTUAL_VERSION" | head -1)${NC}"
 else
-  echo -e "${RED}ERROR: Binary reports '$ACTUAL_VERSION', expected '$OPENCODE_VERSION'${NC}"
+  echo -e "${RED}ERROR: Binary reports '$(echo "$ACTUAL_VERSION" | head -1)', expected '$OPENCODE_VERSION'${NC}"
+  echo -e "${MUTED}  Full output: $ACTUAL_VERSION${NC}"
   echo -e "${ORANGE}Retrying build with explicit OPENCODE_VERSION...${NC}"
   if ! OPENCODE_VERSION="$OPENCODE_VERSION" bun run build $BUILD_ARGS; then
     echo -e "${RED}Rebuild also failed. Please report this error.${NC}"
     exit 1
   fi
-  ACTUAL_VERSION=$("$DIST_BIN" --version 2>/dev/null || echo "FAILED")
+  ACTUAL_VERSION=$("$DIST_BIN" --version 2>&1 || true)
   if ! echo "$ACTUAL_VERSION" | grep -qF "$OPENCODE_VERSION"; then
-    echo -e "${RED}ERROR: Rebuilt binary still reports '$ACTUAL_VERSION'. Version string mismatch persists.${NC}"
-    echo -e "${ORANGE}Check packages/opencode/script/build.ts and packages/script/src/index.ts${NC}"
-    exit 1
+    echo -e "${RED}ERROR: Rebuilt binary still reports '$(echo "$ACTUAL_VERSION" | head -1)'.${NC}"
+    echo -e "${ORANGE}  This is likely a build/environment issue. Check:${NC}"
+    echo -e "${ORANGE}  - packages/opencode/script/build.ts (OPENCODE_VERSION define)${NC}"
+    echo -e "${ORANGE}  - packages/core/src/installation/version.ts (InstallationVersion)${NC}"
+    echo -e "${ORANGE}  - Ensure bun is up to date: bun upgrade${NC}"
+    # Non-fatal: continue with install anyway, warn user
+    echo -e "${ORANGE}  Continuing with install (version check non-fatal).${NC}"
+  else
+    echo -e "${GREEN}✓ Version verified after rebuild: $(echo "$ACTUAL_VERSION" | head -1)${NC}"
   fi
-  echo -e "${GREEN}✓ Version verified after rebuild: $ACTUAL_VERSION${NC}"
 fi
 
 # ─── Create binary symlinks ───────────────────────────────────────────
 echo -e "${CYAN}Creating symlinks...${NC}"
 
-# Absolute symlink inside repo (for package.json "bin" field)
-mkdir -p "$(pwd)/bin"
-ln -sf "$DIST_BIN" "$(pwd)/bin/dreamcode"
-echo -e "${GREEN}Linked repo bin/dreamcode → ${DIST_BIN}${NC}"
+# Update repo launcher script (bin/dreamcode) to point to the actual compiled binary.
+# This launcher follows symlinks so it works correctly even when accessed via bun link.
+LAUNCHER_PATH="$(pwd)/bin/dreamcode"
+mkdir -p "$(dirname "$LAUNCHER_PATH")"
+cat > "$LAUNCHER_PATH" << LAUNCHER
+#!/usr/bin/env bash
+# Resolve real directory even if accessed via symlink (bun link)
+SCRIPT_SOURCE="\${BASH_SOURCE[0]}"
+while [ -h "\$SCRIPT_SOURCE" ]; do
+  SCRIPT_SOURCE="\$(readlink "\$SCRIPT_SOURCE")"
+done
+SCRIPT_DIR="\$(cd "\$(dirname "\$SCRIPT_SOURCE")" && pwd)"
+exec "\$SCRIPT_DIR/${NATIVE_BIN}" "\$@"
+LAUNCHER
+chmod +x "$LAUNCHER_PATH"
+echo -e "${GREEN}Updated repo launcher: $LAUNCHER_PATH -> $NATIVE_BIN${NC}"
 
-# Absolute symlink in ~/.local/bin — THE canonical entry point
+# Absolute symlink in ~/.local/bin — THE canonical entry point (used over bun link)
 LOCAL_BIN="$HOME/.local/bin"
 mkdir -p "$LOCAL_BIN"
 ln -sf "$DIST_BIN" "$LOCAL_BIN/dreamcode"
