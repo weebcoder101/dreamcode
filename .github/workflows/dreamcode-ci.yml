@@ -54,7 +54,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: [typecheck, unit-tests, integration-tests]
+    needs: [typecheck, integration-tests]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -62,7 +62,7 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - name: Build dreamcode binary
-        run: bun run packages/opencode/script/build.ts
+        run: bun run packages/opencode/script/build.ts --single
       - name: Binary smoke test
         run: |
           chmod +x packages/opencode/dist/dreamcode-linux-x64/bin/dreamcode
