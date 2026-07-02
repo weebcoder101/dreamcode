@@ -210,6 +210,7 @@ export const layer = Layer.effect(
     // Prevents compute cost explosion from rapid-fire specialist requests.
     const RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
     const RATE_MAX_SPAWNS = 5
+    const MAX_PERSONA_ROUNDS = 3 // hard cap on persona spawn rounds per session
     const spawnHistory = new Map<SessionID, Array<{ timestamp: number; count: number }>>()
     function checkRateLimit(sessionID: SessionID): { allowed: boolean; remaining: number; resetMs: number } {
       const now = Date.now()
@@ -1218,6 +1219,16 @@ export const layer = Layer.effect(
                       }
                     }
 
+                    // ─── Chain Enforcement: Sensor Gate Graph Must Be Followed ──
+                    // The sensor gate classified the prompt and produced a skill chain.
+                    // This chain is a MANDATORY execution graph. The model MUST visit
+                    // every skill in the chain using the `skill` tool to load its content
+                    // and execute its instructions. <script-result> blocks provide
+                    // pre-computed automation output; the model still MUST independently
+                    // load each skill's SKILL.md content via the skill tool and execute
+                    // its workflow instructions. This applies to ALL chain skills and
+                    // to any subagents spawned — they must also load the chain skills.
+
                     // Run full pipeline + verify for complex tasks (high complexity or 2+ chain)
                     // Guard: skip if execute() already covered all skills successfully (prevents
                     // the orchestrator from re-executing the same Python scripts).
@@ -1288,10 +1299,10 @@ export const layer = Layer.effect(
                       )
                     }
 
-                    // ─── Mandatory Skill Chain Loading ──────────────────────
-                    // The model MUST visibly load each chain skill using the `skill` tool
-                    // BEFORE proceeding with the response. Skills are NOT injected silently —
-                    // the user must see which skills are loaded and their content.
+                    // ─── Skill Loading Gap Detection ────────────────────────
+                    // Scan past messages to see if the model has already loaded skills
+                    // via the `skill` tool. This detects whether the model is actually
+                    // following the chain obligation from previous turns.
                     const skillToolCalls = new Set<string>()
                     for (const msg of msgs) {
                       if (msg.info.role !== "assistant") continue
@@ -1303,39 +1314,36 @@ export const layer = Layer.effect(
                         }
                       }
                     }
-                    // Mark skills that chain executor successfully executed as already loaded
-                    // (prevents false <skill-loading-gap> warnings — results are already
-                    // available as <script-result> blocks in the system prompt).
-                    for (const result of chainResults) {
-                      if (result.status === "ok") {
-                        skillToolCalls.add(result.name)
-                      }
-                    }
                     const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
                     if (unloadedChainSkills.length > 0) {
                       system.push(
-                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
-                        `Script execution results are available in <script-result> blocks, but you MUST also load the skill content ` +
-                        `via the \`skill\` tool to get the full workflow instructions. ` +
-                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.</skill-loading-gap>`,
+                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool in prior turns: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
+                        `You MUST load each chain skill via the \`skill\` tool to get the full workflow instructions. ` +
+                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.` +
+                        `\nSubagents spawned from this session must also load chain skills.</skill-loading-gap>`,
                       )
                     }
-                    // ─── Mandatory skill loading instruction ──────────────────
-                    // The model MUST load each chain skill using the `skill` tool
-                    // BEFORE proceeding. Script results are pre-injected as
-                    // <script-result> blocks, but the model must also call the
-                    // `skill` tool to load full workflow instructions visibly.
+
+                    // ─── Mandatory Skill Chain Enforcement ──────────────────────
+                    // The sensor gate produced a dynamic skill graph. The model MUST
+                    // follow it by loading each skill via the `skill` tool. Pre-injected
+                    // <script-result> blocks contain automation output but NOT the skill's
+                    // workflow instructions — those come from loading SKILL.md via the tool.
                     system.push([
                       "",
-                      "<skill-chain-required mode=\"strict\">",
-                      "A sensor gate skill chain has been configured for this prompt.",
-                      "You MUST load each chain skill using the `skill` tool BEFORE any other action:",
+                      "<skill-chain-obligation mode=\"strict\">",
+                      "The sensor gate has classified this prompt and produced a mandatory skill chain.",
+                      "You MUST load EVERY skill in this chain using the `skill` tool:",
                       "",
-                      ...gateResult.chain.map((name: string) => `  - Call \`skill\` with name="${sanitizeForSystemPrompt(name)}"`),
+                      ...gateResult.chain.map((name: string) => `  [MANDATORY] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — load content and follow instructions`),
                       "",
-                      "After loading ALL chain skills, acknowledge with: [SKILLS LOADED]",
-                      "Do NOT proceed until all skills are loaded and acknowledged.",
-                      "</skill-chain-required>",
+                      "Rules:",
+                      "  1. Load each skill's content via the `skill` tool — do NOT skip any",
+                      "  2. Execute the skill's workflow instructions and scripts",
+                      "  3. Any subagent you spawn MUST also load the same chain skills",
+                      "  4. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
+                      "  5. FAILURE to load all chain skills will produce INCOMPLETE results",
+                      "</skill-chain-obligation>",
                     ].join("\n"))
 
                     // ─── Persist chain execution results to self-evolve (best-effort) ──
@@ -1359,6 +1367,11 @@ export const layer = Layer.effect(
                   const evaluation = evaluateSpawnNecessity(gateResult, userText)
                   if (!evaluation.shouldSpawn) {
                     debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
+                  }
+                  // Hard round limit: prevent infinite persona spawning
+                  if (currentRound >= MAX_PERSONA_ROUNDS) {
+                    debugLog(`[sensor-gate] Spawn skipped: max rounds (${MAX_PERSONA_ROUNDS}) reached`)
+                    evaluation.shouldSpawn = false
                   }
                   let personas: Persona[] = []
                   const rateCheck = checkRateLimit(sessionID)
@@ -1924,8 +1937,8 @@ Before every response, verify your reasoning:
               ? [{ role: "user" as const, content: synthesisText }]
               : []
             // Task tool is ALWAYS available. Cost control is handled by the
-            // rolling-window rate limiter (5 spawns/5 min) + sensor gate's
-            // evaluateSpawnNecessity(). No hard caps on round counts.
+            // rolling-window rate limiter (5 spawns/5 min) + MAX_PERSONA_ROUNDS (3)
+            // + sensor gate's evaluateSpawnNecessity().
             const finalTools = tools
             // Lock compaction during synthetic phase — prevents mid-response
             // auto-compact from truncating the context epoch. Unlocked after

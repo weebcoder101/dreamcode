@@ -380,15 +380,20 @@ echo -e "${GREEN}Created dreamcode directories at $INSTALL_DIR${NC}"
 CONFIG_SKILLS="$HOME/.config/dreamcode/skills"
 REPO_SKILLS="$INSTALL_DIR/.dreamcode/skills"
 REPO_SKILLS_ALT="$INSTALL_DIR/.opencode/skills"
+PACKAGE_SKILLS="$INSTALL_DIR/packages/opencode/src/skill/dreamcode/skills"
 mkdir -p "$CONFIG_SKILLS"
-if [ -d "$REPO_SKILLS" ]; then
+if [ -d "$REPO_SKILLS" ] && ls "$REPO_SKILLS"/*/SKILL.md &>/dev/null 2>/dev/null; then
   cp -r "$REPO_SKILLS/"* "$CONFIG_SKILLS/" 2>/dev/null || true
   SKILL_COUNT=$(ls -d "$REPO_SKILLS"/*/ 2>/dev/null | wc -l)
   echo -e "${GREEN}Installed $SKILL_COUNT skills to $CONFIG_SKILLS${NC}"
-elif [ -d "$REPO_SKILLS_ALT" ]; then
+elif [ -d "$REPO_SKILLS_ALT" ] && ls "$REPO_SKILLS_ALT"/*/SKILL.md &>/dev/null 2>/dev/null; then
   cp -r "$REPO_SKILLS_ALT/"* "$CONFIG_SKILLS/" 2>/dev/null || true
   SKILL_COUNT=$(ls -d "$REPO_SKILLS_ALT"/*/ 2>/dev/null | wc -l)
   echo -e "${GREEN}Installed $SKILL_COUNT skills to $CONFIG_SKILLS${NC}"
+elif [ -d "$PACKAGE_SKILLS" ] && ls "$PACKAGE_SKILLS"/*/SKILL.md &>/dev/null 2>/dev/null; then
+  cp -r "$PACKAGE_SKILLS/"* "$CONFIG_SKILLS/" 2>/dev/null || true
+  SKILL_COUNT=$(ls -d "$PACKAGE_SKILLS"/*/ 2>/dev/null | wc -l)
+  echo -e "${GREEN}Installed $SKILL_COUNT skills from package source to $CONFIG_SKILLS${NC}"
 else
   echo -e "${ORANGE}WARN: No skills found in repo to install${NC}"
 fi

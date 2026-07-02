@@ -308,7 +308,7 @@ export const TaskTool = Tool.define(
       const costRef = yield* Ref.make(0)
       const tokensRef = yield* Ref.make<{ input: number; output: number; reasoning?: number; cache?: { read: number; write: number } } | undefined>(undefined)
 
-      const runTask = Effect.fn("TaskTool.runTask")(function* () {
+      const runTask = () => Effect.gen(function* () {
         let parts = yield* ops.resolvePromptParts(params.prompt)
 
         // Prepend parent context if available, so subagents see the conversation history
@@ -333,12 +333,13 @@ export const TaskTool = Tool.define(
         // result.info.cost only reflects the LAST message's cost; handleSubtask costs are on
         // earlier messages (step-finish parts). Using DB cost has a projector race (~$0.05);
         // computing from child session messages is synchronous and race-free.
-        const allMsgs = yield* sessions.messages({ sessionID: nextSession.id }).pipe(
-          Effect.catch(() => Effect.succeed([] as SessionV1.WithParts[])),
+        const allMsgs: SessionV1.WithParts[] = yield* Effect.catch(
+          sessions.messages({ sessionID: nextSession.id }),
+          () => Effect.succeed([] as SessionV1.WithParts[]),
         )
         const cost = allMsgs
           .filter((m): m is SessionV1.WithParts & { info: SessionV1.Assistant } => m.info.role === "assistant")
-          .reduce((sum, m) => sum + (m.info.cost ?? 0), 0)
+          .reduce((sum: number, m: SessionV1.WithParts & { info: SessionV1.Assistant }) => sum + (m.info.cost ?? 0), 0)
         // Tokens from the last assistant message is acceptable — per-message token counts
         // are diagnostic, not cumulative spend.
         const lastAssistantMsg = allMsgs.findLast((m): m is SessionV1.WithParts & { info: SessionV1.Assistant } => m.info.role === "assistant")
@@ -420,7 +421,7 @@ export const TaskTool = Tool.define(
 
       // Try to extend existing background job. If it exists, the new runTask is queued
       // and we fall through to wait for it — no early return (avoids stale cost).
-      const extended = yield* background.extend({ id: nextSession.id, run: runTask() })
+      const extended = yield* background.extend({ id: nextSession.id, run: runTask() as Effect.Effect<string> })
 
       if (!extended) {
         // Start new background job
@@ -433,7 +434,7 @@ export const TaskTool = Tool.define(
             title: params.description,
             metadata: { ...metadata, background: true, jobId: nextSession.id },
           }).pipe(Effect.andThen(notify(nextSession.id))),
-          run: runTask().pipe(
+          run: (runTask() as Effect.Effect<string>).pipe(
             Effect.onInterrupt(() => ops.cancel(nextSession.id)),
             Effect.ensuring(
               Ref.update(activeSubagentSessions, (set) => { set.delete(nextSession.id); return set }),

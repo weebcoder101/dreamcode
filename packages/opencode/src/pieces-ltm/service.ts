@@ -41,26 +41,23 @@ export class PiecesLTM extends Context.Service<PiecesLTM, Interface>()("@dreamco
 
 function callMCP(mcpURL: string, toolName: string, arguments_: Record<string, unknown>): Effect.Effect<unknown> {
   return pipe(
-    Effect.tryPromise({
-      try: async () => {
-        const res = await fetch(`${mcpURL}/messages`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "tools/call",
-            params: { name: toolName, arguments: arguments_ },
-          }),
-          signal: AbortSignal.timeout(30_000),
-        })
-        if (!res.ok) throw new Error(`MCP call failed: ${res.status} ${res.statusText}`)
-        return res.json() as unknown
-      },
-      catch: (err) => ({ error: `MCP call failed: ${err instanceof Error ? err.message : String(err)}` }),
+    Effect.tryPromise(async (_signal: AbortSignal) => {
+      const res = await fetch(`${mcpURL}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: toolName, arguments: arguments_ },
+        }),
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!res.ok) throw new Error(`MCP call failed: ${res.status} ${res.statusText}`)
+      return res.json() as unknown
     }),
-    // One retry with exponential backoff for transient MCP failures
     Effect.retry({ times: 1, delay: "500 millis" }),
+    Effect.catch(() => Effect.die("MCP call failed after retry")),
   )
 }
 
@@ -142,7 +139,9 @@ export const defaultLayer = Layer.effect(
           return { reachable: r.ok, mcpURL: cfg.mcpURL } as HealthStatus
         },
         catch: () => ({ reachable: false, mcpURL: cfg.mcpURL } as HealthStatus),
-      })
+      }).pipe(
+        Effect.catch(() => Effect.succeed({ reachable: false, mcpURL: cfg.mcpURL } as HealthStatus)),
+      )
     })
 
     return PiecesLTM.of({ persist, query, health })

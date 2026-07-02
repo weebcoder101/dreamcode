@@ -307,6 +307,12 @@ const discoverSkills = Effect.fnUntraced(function* (
     yield* scan(state, dir, OPENCODE_SKILL_PATTERN)
   }
 
+  // Scan binary-bundled skills directory (for compiled binary releases)
+  const binarySkillsDir = path.join(path.dirname(process.execPath), "skills")
+  if (yield* fsys.isDir(binarySkillsDir)) {
+    yield* scan(state, binarySkillsDir, SKILL_PATTERN)
+  }
+
   const cfg = yield* config.get()
   for (const item of cfg.skills?.paths ?? []) {
     const expanded = item.startsWith("~/") ? path.join(global.home, item.slice(2)) : item
@@ -357,21 +363,54 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
 
-    // First-run skill sync: if global config skills dir is empty, try to copy
-    // from the install directory so skills work from any CWD.
+    // First-run skill sync: if global config skills dir is empty or has no
+    // SKILL.md files, try to copy from the install/repo directory so skills
+    // work from any CWD. Validates source actually has skill content.
     const globalSkillsDir = path.join(global.home, ".config", "dreamcode", "skills")
     const installSkillsDir = path.join(global.home, ".dreamcode", "skills")
     const repoSkillsDir = path.join(global.home, "dreamcode", ".dreamcode", "skills")
     yield* Effect.tryPromise(async (_signal: AbortSignal) => {
-      const { stat, mkdir, readdir, cp } = await import("fs/promises")
-      const globalEmpty = !(await stat(globalSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-      if (!globalEmpty) return
-      const source = (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-        ? installSkillsDir
-        : (await stat(repoSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-          ? repoSkillsDir
-          : undefined
+      const { stat, mkdir, readdir, cp, access } = await import("fs/promises")
+
+      // Check if global dir already has SKILL.md files
+      const globalHasSkills = await (async () => {
+        try {
+          const entries = await readdir(globalSkillsDir)
+          for (const entry of entries) {
+            const skillMd = path.join(globalSkillsDir, entry, "SKILL.md")
+            try { await access(skillMd); return true } catch {}
+          }
+          return false
+        } catch { return false }
+      })()
+      if (globalHasSkills) return
+
+      // Find best source: prefers directories that actually have SKILL.md files
+      const candidates = [
+        { dir: installSkillsDir, name: "install" },
+        { dir: repoSkillsDir, name: "repo" },
+      ]
+
+      // Also try the package source as fallback
+      const pkgDir = path.join(global.home, "dreamcode", "packages", "opencode", "src", "skill", "dreamcode", "skills")
+      candidates.push({ dir: pkgDir, name: "package" })
+
+      let source: string | undefined
+      for (const c of candidates) {
+        try {
+          if (!(await stat(c.dir).then((s) => s.isDirectory()).catch(() => false))) continue
+          // Verify at least one subdirectory has SKILL.md
+          const entries = await readdir(c.dir)
+          for (const entry of entries) {
+            const skillMd = path.join(c.dir, entry, "SKILL.md")
+            try { await access(skillMd); source = c.dir; break } catch {}
+          }
+          if (source) break
+        } catch { continue }
+      }
+
       if (!source) return
+
       await mkdir(globalSkillsDir, { recursive: true })
       const entries = await readdir(source)
       for (const entry of entries) {

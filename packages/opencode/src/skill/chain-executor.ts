@@ -198,17 +198,21 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
     const scriptResult = yield* runPythonScript(script, userPrompt, cwd)
 
     if (scriptResult.exitCode !== 0) {
-      // Script crashed or was killed — propagate the error detail
+      // Script crashed or was killed — propagate the error detail.
+      // SKILL.md content is NOT injected here — the model must load it
+      // via the `skill` tool as part of mandatory chain enforcement.
       results.push({
         name: skillName,
-        output: scriptResult.output || `[ERROR] Script ${script} exited with code ${scriptResult.exitCode}`,
+        output: `<script-execution-result>\n${scriptResult.output || `[ERROR] Script exited with code ${scriptResult.exitCode}`}\n</script-execution-result>`,
         status: "error",
         executionType: "script",
       })
     } else {
+      // Include only the script execution output. The model must load
+      // the skill's SKILL.md content independently via the `skill` tool.
       results.push({
         name: skillName,
-        output: scriptResult.output || "[SKILL EXECUTED: no output]",
+        output: `<script-execution-result>\n${scriptResult.output || "[SKILL EXECUTED: no output]"}\n</script-execution-result>`,
         status: scriptResult.output ? "ok" : "error",
         executionType: "script",
       })

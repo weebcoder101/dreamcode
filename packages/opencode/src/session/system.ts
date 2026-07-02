@@ -166,7 +166,9 @@ export const layer = Layer.effect(
 
         return [
           "Skills provide specialized instructions and workflows for specific tasks.",
-          "When the sensor gate specifies a skill chain, load each skill using the skill tool before executing.",
+          "When the sensor gate specifies a skill chain, you MUST load each skill using the skill tool and execute its instructions.",
+          "FAILURE TO LOAD ALL CHAIN SKILLS WILL RESULT IN INCOMPLETE RESULTS.",
+          "Subagents must also load and execute the chain skills they are assigned.",
           Skill.fmt(list, { verbose: true }),
         ].join("\n")
       }),
