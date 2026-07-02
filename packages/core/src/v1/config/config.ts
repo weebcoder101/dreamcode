@@ -188,6 +188,9 @@ export const Info = Schema.Struct({
       max_subagents_per_parent: Schema.optional(NonNegativeInt).annotate({
         description: "Maximum concurrent subagents per parent session via the task tool (default: 8)",
       }),
+      max_total_subagents_per_session: Schema.optional(NonNegativeInt).annotate({
+        description: "Total subagent spawn limit per session — prevents sequential re-spawning (default: 20)",
+      }),
     }),
   ),
 }).annotate({ identifier: "Config" })
