@@ -1363,7 +1363,25 @@ export const layer = Layer.effect(
                   // ─── Determine personas from gate result or explicit override ──
                   // Run spawn necessity check FIRST — prevents unnecessary specialist
                   // spawning for simple tasks, saving cost and token usage.
-                  const evaluation = evaluateSpawnNecessity(gateResult, userText)
+                  let evaluation = evaluateSpawnNecessity(gateResult, userText)
+
+                  // Workflow skills (e.g. deep-research) manage their own subagents internally.
+                  // Override the evaluation to prevent persona spawning alongside the workflow's
+                  // own subagents — otherwise both systems spawn agents simultaneously causing
+                  // infinite spawn loops. This guard is defense-in-depth (selectPersonas() also
+                  // returns [] for workflow chains), but catching it at the execution layer
+                  // ensures persona subagents never get spawned regardless of other code paths.
+                  const WORKFLOW_SKILLS = new Set(["deep-research"])
+                  const hasWorkflowSkill = gateResult?.chain?.some((s: string) => WORKFLOW_SKILLS.has(s))
+                  if (hasWorkflowSkill) {
+                    evaluation = {
+                      shouldSpawn: false,
+                      reason: "Chain includes workflow-managed skill — workflow handles its own agents",
+                      suggestedCount: 0,
+                    }
+                    debugLog(`[sensor-gate] Workflow skill detected: ${evaluation.reason}`)
+                  }
+
                   if (!evaluation.shouldSpawn) {
                     debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
                   }
@@ -1907,7 +1925,10 @@ Before every response, verify your reasoning:
               const isSynthesis = lastUserMsg?.parts.some(
                 (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
               ) ?? false
-              if (userText.trim() && !isSynthesis) {
+              // Skip sensor gate for slash commands — commands handle their own flow.
+              // Without this, `/research` triggers persona spawning before the command runs.
+              const isSlashCommand = userText.trim().startsWith("/")
+              if (userText.trim() && !isSynthesis && !isSlashCommand) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>
                     Effect.as(Effect.logError("Sensor gate unavailable", { cause }), null),

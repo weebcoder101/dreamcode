@@ -27,10 +27,9 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { TuiEvent } from "@/server/tui-event"
 import open from "open"
-import { Cause, Effect, Exit, Layer, Option, Context, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Context, Schema } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
 
@@ -170,7 +169,6 @@ export const use = serviceUse(Service)
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const auth = yield* McpAuth.Service
     const events = yield* EventV2Bridge.Service
 
@@ -388,14 +386,23 @@ export const layer = Layer.effect(
     const descendants = Effect.fnUntraced(
       function* (pid: number) {
         if (process.platform === "win32") return [] as number[]
+        // Use Bun.spawn instead of effect/unstable/process ChildProcessSpawner.
+        // The old approach broke Linux compiled binaries due to bun 1.3.x rest-parameter
+        // corruption in effect/unstable/process Stream imports.
         const pids: number[] = []
         const queue = [pid]
         for (let index = 0; index < queue.length; index++) {
           const current = queue[index]
-          const handle = yield* spawner.spawn(ChildProcess.make("pgrep", ["-P", String(current)], { stdin: "ignore" }))
-          const text = yield* Stream.mkString(Stream.decodeText(handle.stdout))
-          yield* handle.exitCode
-          for (const tok of text.split("\n")) {
+          const result = yield* Effect.tryPromise({
+            try: async () => {
+              const proc = Bun.spawn(["pgrep", "-P", String(current)], { stdout: "pipe", stderr: "ignore" })
+              const text = await new Response(proc.stdout).text()
+              await proc.exited
+              return text
+            },
+            catch: () => "" as string,
+          })
+          for (const tok of result.split("\n")) {
             const cpid = parseInt(tok, 10)
             if (!isNaN(cpid) && !pids.includes(cpid)) {
               pids.push(cpid)

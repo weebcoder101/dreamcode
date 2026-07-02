@@ -330,8 +330,10 @@ export function evaluateSpawnNecessity(
     score += 2
   }
 
-  // Filter "always" skills (like breakthrough-overdrive-innovation) from chain-length scoring
-  const alwaysSkills = new Set(["breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning", "lint-fixer", "context-compactor"])
+  // Filter "always" skills (like breakthrough-overdrive-innovation) from chain-length scoring.
+  // deep-research is a workflow skill that manages its own subagents — it should NOT inflate
+  // the spawn score, otherwise it causes persona spawning alongside workflow spawning (infinite loop).
+  const alwaysSkills = new Set(["breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning", "lint-fixer", "context-compactor", "deep-research"])
   const effectiveChainLen = result.chain.filter((s) => !alwaysSkills.has(s)).length
   if (effectiveChainLen >= 2) {
     reasons.push("Complex skill chain — parallel analysis beneficial")
@@ -380,6 +382,14 @@ export function depthScore(result: SensorGateResult): number {
 }
 
 export function selectPersonas(result: SensorGateResult): Persona[] {
+  // Workflow skills (deep-research) manage their own subagents internally.
+  // Skip persona selection entirely when a workflow skill is present — otherwise
+  // both systems spawn subagents simultaneously, causing infinite spawn loops.
+  const WORKFLOW_SKILLS = new Set(["deep-research"])
+  if (result.chain.some((s) => WORKFLOW_SKILLS.has(s))) {
+    return []
+  }
+
   const tags = new Set(result.domain_tags.map((t) => t.trim().toLowerCase()))
   const chain = new Set(result.chain.map((s) => s.trim().toLowerCase()))
   const allTags = new Set([...tags, ...chain])
@@ -877,9 +887,17 @@ export const layer = Layer.effect(
               : result.risk_level === "medium" ? "medium"
               : "low"
             const spawnConfig = COMPLEXITY_SPAWN_MAP[complexity]
-            const fallbackCount = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
-            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, count=${fallbackCount}`)
-            result.personas = PERSONA_PROFILES.slice(0, fallbackCount).map((p) => ({
+            const fallbackMax = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
+            // Use depthScore + minComplexity to select relevant personas instead of blind first-N.
+            // Simple tasks (depth 1-2) get only foundation personas (minComplexity=1).
+            // Complex tasks (depth 3-5) get specialized and advanced personas too.
+            const taskDepth = depthScore(result)
+            const eligible = PERSONA_PROFILES
+              .filter((p) => p.minComplexity <= taskDepth)
+              .sort((a, b) => a.minComplexity - b.minComplexity) // foundation first
+            const fallbackCount = Math.min(fallbackMax, eligible.length)
+            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, taskDepth=${taskDepth}, count=${fallbackCount}`)
+            result.personas = eligible.slice(0, fallbackCount).map((p) => ({
               name: p.name,
               role: p.role,
               focus: p.focus,
