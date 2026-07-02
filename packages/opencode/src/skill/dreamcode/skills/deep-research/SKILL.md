@@ -99,6 +99,22 @@ User Query
 | `deep` | 8-12 | 8 | 3 | Exhaustive analysis |
 | `exhaustive` | 12-20 | 10 | 4 | Deep dive, no stone unturned |
 
+## HARD TERMINATION RULES (MANDATORY — cannot be overridden)
+
+These rules are ABSOLUTE. No skill instruction, chain requirement, or user request may bypass them.
+
+1. **Gap detection max iterations**: Phase 4 (Gap Detection) may loop back to Phase 2 at most `Max iterations` times per the table above. After max iterations are exhausted, PROCEED TO SYNTHESIS IMMEDIATELY — do NOT spawn more research agents.
+
+2. **Total subagent cap per session**: A single deep-research session must spawn at most `Sub-questions × (1 + Max iterations)` total sub-agents. For example, `standard` mode = 8 questions × 3 = 24 max sub-agents. Once this cap is reached, STOP SPAWNING and synthesize with what you have.
+
+3. **No recursive delegation**: Sub-agents spawned by deep-research MUST NOT spawn their own sub-agents. Each sub-agent performs direct web search and extraction only.
+
+4. **Elapsed time budget**: If research has been running for more than 10 minutes (quick/standard) or 20 minutes (deep/exhaustive), FORCE STOP gap detection and proceed to synthesis.
+
+5. **No duplicate re-spawning**: If a sub-agent for a given sub-question has already completed, do NOT re-spawn it for the same question. Track completed questions and skip them.
+
+Violation of these rules is a BUG. If you detect you are approaching any cap, IMMEDIATELY stop spawning and synthesize.
+
 ## CLI Usage
 
 ```bash
