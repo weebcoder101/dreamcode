@@ -1322,6 +1322,8 @@ export const layer = Layer.effect(
                     sensorGateFiredMap, personaRoundMap, spawnHistory, compaction, chainExecutor,
                   } = input
 
+                  yield* Effect.logWarning(`[SENSOR-GATE-DIAG] processSensorGatePhase entered gateResult.chain=${gateResult?.chain?.length ?? 0} personas=${gateResult?.personas?.length ?? 0} mode=${gateResult?.mode ?? "N/A"} explicitUserCount=${explicitSpawnCount}`)
+
                   // ─── Mark sensor gate fired ───────────────────────────
                   sensorGateFiredMap.set(sessionID, true)
                   const currentRound = (personaRoundMap.get(sessionID) ?? 0)
@@ -1436,6 +1438,7 @@ export const layer = Layer.effect(
                   // Run spawn necessity check FIRST — prevents unnecessary specialist
                   // spawning for simple tasks, saving cost and token usage.
                   let evaluation = evaluateSpawnNecessity(gateResult, userText)
+                  yield* Effect.logWarning(`[SENSOR-GATE-DIAG] evaluateSpawnNecessity shouldSpawn=${evaluation.shouldSpawn} suggestedCount=${evaluation.suggestedCount} reason=${evaluation.reason}`)
 
                   // Workflow skills (e.g. deep-research) manage their own subagents internally.
                   // Override the evaluation to prevent persona spawning alongside the workflow's
@@ -2010,6 +2013,7 @@ Before every response, verify your reasoning:
               // while personas are still processing.
               const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
               const isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} sensorGateFired=${currentSensorGateFired} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy}`)
               if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>

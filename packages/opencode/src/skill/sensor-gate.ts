@@ -946,13 +946,25 @@ export class Service extends Context.Service<Service, Interface>()("@dreamcode/S
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    // ─── Startup self-test: Verify sensor_gate.py is resolvable ──────
+    const sgResolve = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
+    const sgDir = resolveSkillsDir()
+    if (!sgResolve) {
+      yield* Effect.logWarning(`[SENSOR-GATE-DIAG] STARTUP FAIL: sensor_gate.py not resolvable. skillsDir=${sgDir}`)
+    } else {
+      yield* Effect.logWarning(`[SENSOR-GATE-DIAG] STARTUP OK: sensor_gate.py=${sgResolve} skillsDir=${sgDir}`)
+    }
+
     return Service.of({
       classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
         const ctx = yield* InstanceState.context
         const directory = ctx.directory
-        console.warn(`[sensor-gate-diag] classify called directory=${directory} promptLen=${prompt.length}`)
+        const resolveSkillsDirResult = resolveSkillsDir()
+        const sensorGateScript = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
+        yield* Effect.logWarning(`[SENSOR-GATE-DIAG] classify called directory=${directory} promptLen=${prompt.length} resolveSkillsDir=${resolveSkillsDirResult} sensorGateScript=${sensorGateScript ?? "NULL"} python=${resolvePythonCommand()}`)
+
         const result = yield* runSensorGateEffect(prompt, directory)
-        console.warn(`[sensor-gate-diag] classify result=${result ? "OK" : "NULL"} personas=${result?.personas?.length ?? 0} mode=${result?.mode ?? "N/A"} domain_tags=${(result?.domain_tags ?? []).join(",")}`)
+        yield* Effect.logWarning(`[SENSOR-GATE-DIAG] classify result=${result ? "OK" : "NULL"} personas=${result?.personas?.length ?? 0} mode=${result?.mode ?? "N/A"} domain_tags=${(result?.domain_tags ?? []).join(",")}`)
         if (!result) return null
 
         // Generate personas from TypeScript when Python script doesn't output them
