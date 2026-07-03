@@ -706,7 +706,10 @@ function runSensorGateEffect(
   prompt: string,
   projectRoot: string,
 ): Effect.Effect<SensorGateResult | null> {
+  const resolveSkillsDir_ = resolveSkillsDir()
   const sensorGate = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
+  console.warn(`[sensor-gate-diag] resolveSkillsDir=${resolveSkillsDir_} execPath=${typeof process !== "undefined" ? process.execPath : "N/A"}`)
+  console.warn(`[sensor-gate-diag] resolveScript sensor_gate.py=${sensorGate ?? "NOT FOUND"} projectRoot=${projectRoot}`)
   if (!sensorGate) {
     console.warn("[sensor-gate] sensor_gate.py not found — using TypeScript fallback personas")
     // Return a default result so TS fallback personas are generated instead of returning null.
@@ -750,6 +753,7 @@ function runSensorGateEffect(
       try {
         tmpFile = writePromptToTmpFile(clamped, projectRoot, "sg-")
         debugLog("[sensor-gate] temp file created:", tmpFile)
+        console.warn(`[sensor-gate-diag] temp file created: ${tmpFile}`)
       } catch (e) {
         // Temp file creation failed — do NOT fall back to --prompt CLI arg
         // which would leak the prompt in process listings.
@@ -946,7 +950,9 @@ export const layer = Layer.effect(
       classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
         const ctx = yield* InstanceState.context
         const directory = ctx.directory
+        console.warn(`[sensor-gate-diag] classify called directory=${directory} promptLen=${prompt.length}`)
         const result = yield* runSensorGateEffect(prompt, directory)
+        console.warn(`[sensor-gate-diag] classify result=${result ? "OK" : "NULL"} personas=${result?.personas?.length ?? 0} mode=${result?.mode ?? "N/A"} domain_tags=${(result?.domain_tags ?? []).join(",")}`)
         if (!result) return null
 
         // Generate personas from TypeScript when Python script doesn't output them
