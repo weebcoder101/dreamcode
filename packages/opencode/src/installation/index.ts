@@ -189,6 +189,9 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         if (exec.includes(path.join(".local", "bin"))) return "curl" as Method
         if (exec.includes(path.join(".dreamcode", "packages")) || exec.includes(`.dreamcode${path.sep}packages`)) return "curl" as Method
 
+        // Detect manual installation in common system PATH directories
+        if (exec.startsWith("/usr/local/bin/") || exec.startsWith("/usr/bin/") || exec.startsWith("/opt/")) return "curl" as Method
+
         const checks: Array<{ name: Method; command: () => Effect.Effect<string> }> = [
           { name: "npm", command: () => text(["npm", "list", "-g", "--depth=0"]) },
           { name: "yarn", command: () => text(["yarn", "global", "list"]) },

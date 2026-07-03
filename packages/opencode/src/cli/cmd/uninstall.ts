@@ -96,7 +96,7 @@ async function collectRemovalTargets(args: UninstallArgs, method: Installation.M
   ]
 
   const shellConfig = method === "curl" ? await getShellConfigFile() : null
-  const binary = method === "curl" ? process.execPath : null
+  const binary = process.execPath
 
   return { directories, shellConfig, binary }
 }
@@ -209,24 +209,21 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
     }
   }
 
-  if (method === "curl" && targets.binary) {
-    UI.empty()
-    prompts.log.message("To finish removing the binary, run:")
-    if (process.platform === "win32") {
-      prompts.log.info(`  Remove-Item "${targets.binary}"`)
-      const binDir = path.dirname(targets.binary)
-      if (binDir.includes(".dreamcode") || binDir.includes(".opencode")) {
-        prompts.log.info(`  Remove-Item "${binDir}" -Recurse -Force`)
-      }
-      prompts.log.info("")
-      prompts.log.info("If dreamcode.cmd shim exists, also run:")
-      const cmdShim = path.join(path.dirname(targets.binary), "dreamcode.cmd")
-      prompts.log.info(`  Remove-Item "${cmdShim}"`)
-    } else {
-      prompts.log.info(`  rm "${targets.binary}"`)
-      const binDir = path.dirname(targets.binary)
-      if (binDir.includes(".dreamcode") || binDir.includes(".opencode")) {
-        prompts.log.info(`  rmdir "${binDir}" 2>/dev/null`)
+  if (targets.binary) {
+    spinner.start("Removing binary...")
+    try {
+      await fs.unlink(targets.binary)
+      spinner.stop("Removed binary")
+    } catch (err: any) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        spinner.stop("Need elevated permissions to remove binary", 1)
+        prompts.log.warn(`Run: sudo rm "${targets.binary}"`)
+      } else if (err.code === "EBUSY" || err.code === "ETXTBSY") {
+        spinner.stop("Binary is in use (running process)", 1)
+        prompts.log.warn(`Remove after exit: rm "${targets.binary}"`)
+      } else {
+        spinner.stop("Failed to remove binary", 1)
+        prompts.log.warn(`Run manually: rm "${targets.binary}"`)
       }
     }
   }
