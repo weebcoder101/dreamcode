@@ -1911,7 +1911,12 @@ Before every response, verify your reasoning:
             // Only in root sessions — subagents must NOT re-enter persona spawning.
             // Also skip when the agent itself is a subagent (mode === "subagent").
             // Skip after synthesis — synthesis should NOT auto-spawn subagents.
-            if (step === 1 && !session.parentID) {
+            // Reload sensorGateFired from map on every iteration — the map
+            // is updated by processSensorGatePhase and subsequent user messages
+            // should NOT re-fire the gate for the same session. Capturing it
+            // once before the while(true) loop would cause stale reads.
+            const currentSensorGateFired = sensorGateFiredMap.get(sessionID) ?? false
+            if (step === 1 && !session.parentID && !currentSensorGateFired) {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
@@ -1928,7 +1933,12 @@ Before every response, verify your reasoning:
               // Skip sensor gate for slash commands — commands handle their own flow.
               // Without this, `/research` triggers persona spawning before the command runs.
               const isSlashCommand = userText.trim().startsWith("/")
-              if (userText.trim() && !isSynthesis && !isSlashCommand) {
+              // Skip sensor gate if session already has active subagents running.
+              // Prevents duplicate spawns when user sends follow-up messages (e.g. "alive?")
+              // while personas are still processing.
+              const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
+              const isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+              if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>
                     Effect.as(Effect.logError("Sensor gate unavailable", { cause }), null),

@@ -292,13 +292,17 @@ export function evaluateSpawnNecessity(
   }
 
   // Simplicity threshold: high confidence + low risk + single domain + simple phrasing
-  const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade)\s/i
-  const isSimpleTask = result.confidence >= 0.8
+  // Trivial prompts include: short status checks ("alive?", "done?"), single-word
+  // confirmations ("ok", "thanks", "looks good"), quick commands, and simple edits.
+  const TRIVIAL_PROMPT_RE = /^(?:(?:alive|done|ready|good|ok|okay|yes|no|thanks|ty|np|👍|✅)\s*)?$/i
+  const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade|check|run|bump|bump\s|pin|drop)\s/i
+  const isSimpleTask = (result.confidence >= 0.8
     && result.risk_level === "low"
     && uniqueDomains <= 1
     && prompt.length < 500
     && (result.complexity === "low" || !result.complexity)
-    && simplicityPatterns.test(prompt.trim())
+    && simplicityPatterns.test(prompt.trim()))
+    || (prompt.trim().length < 100 && !prompt.includes("\n") && !prompt.includes("```") && TRIVIAL_PROMPT_RE.test(prompt.trim()))
 
   if (isSimpleTask) {
     return { shouldSpawn: false, reason: "Simple high-confidence task — agent handles directly", suggestedCount: 0 }
@@ -354,14 +358,16 @@ export function evaluateSpawnNecessity(
   // NOTE: score 0 → ceil(0/2) = 0 (no spawns). score 1 → ceil(1/2) = 1. score 2 → ceil(2/2) = 1.
   let suggestedCount = Math.min(5, Math.max(0, Math.ceil(score / 2)))
 
-  // SAFETY FLOOR: If personas are populated but scoring yielded 0,
-  // still spawn at least 1 specialist. This handles the case where the
-  // sensor gate returned default/empty classification but TS fallback
-  // generated personas. Without this floor, persona spawning is silently
-  // blocked even when specialist profiles exist.
-  if (suggestedCount === 0 && result.personas.length > 0 && !result.is_social_greeting) {
+  // FALLBACK FLOOR: Only force 1 spawn when the sensor gate returned empty
+  // classification (domain_tags is empty, suggesting Python script failed or
+  // returned defaults), but TS fallback still generated personas. In this case
+  // the scoring system has no signal to work with so the 0 is misleading.
+  // When Python DID produce valid classification (domain_tags non-empty),
+  // trust the scoring system — spawning would waste compute on trivial tasks.
+  const hasNoClassificationSignal = result.domain_tags.filter(Boolean).length === 0
+  if (suggestedCount === 0 && result.personas.length > 0 && hasNoClassificationSignal && !result.is_social_greeting) {
     suggestedCount = 1
-    reasons.push("Baseline: personas available — spawning 1 specialist as safety measure")
+    reasons.push("Fallback: Python gate returned empty — spawning 1 specialist for coverage")
   }
 
   return {
