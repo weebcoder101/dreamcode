@@ -1208,13 +1208,30 @@ export const layer = Layer.effect(
                         return Effect.succeed([] as ChainResult[])
                       }),
                     )
-                    for (const result of chainResults) {
+                    // Split chain results: "script" type = pre-executed automation output;
+                    // "content" type = raw SKILL.md (NOT injected — agent must load via `skill` tool).
+                    const scriptResults = chainResults.filter(r => r.executionType === "script")
+                    const contentResults = chainResults.filter(r => r.executionType === "content")
+                    for (const result of scriptResults) {
                       if (result.status === "ok" && result.output) {
                         system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
-                      } else if (result.status === "not_found") {
-                        system.push(`\n<skill-missing name="${sanitizeForSystemPrompt(result.name)}"/>`)
                       } else {
                         system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" status="error">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</script-result>`)
+                      }
+                    }
+                    // Content-type skills are NOT auto-injected — the agent must load them
+                    // via the `skill` tool to receive SKILL.md workflow instructions.
+                    if (contentResults.length > 0) {
+                      const pending = contentResults.map(r => r.name)
+                      system.push(
+                        `\n<pending-skill-load requirement="mandatory">` +
+                        `These skills have NOT been pre-loaded — you MUST load them via the \`skill\` tool: ` +
+                        `${sanitizeForSystemPrompt(pending.join(", "))}</pending-skill-load>`,
+                      )
+                    }
+                    for (const result of chainResults) {
+                      if (result.status === "not_found") {
+                        system.push(`\n<skill-missing name="${sanitizeForSystemPrompt(result.name)}"/>`)
                       }
                     }
 
@@ -1328,20 +1345,34 @@ export const layer = Layer.effect(
                     // follow it by loading each skill via the `skill` tool. Pre-injected
                     // <script-result> blocks contain automation output but NOT the skill's
                     // workflow instructions — those come from loading SKILL.md via the tool.
+                    // Skills classified as "content" type are NOT auto-injected at all;
+                    // the model MUST load them via the `skill` tool to receive instructions.
+                    const scriptSkillNames = scriptResults.map(r => r.name)
+                    const contentSkillNames = contentResults.map(r => r.name)
+                    const chainItems = gateResult.chain.map((name: string) => {
+                      if (contentSkillNames.includes(name)) {
+                        return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — content NOT injected, REQUIRED to load via tool`
+                      }
+                      if (scriptSkillNames.includes(name)) {
+                        return `  [EXECUTED] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — script pre-executed, load SKILL.md for workflow instructions`
+                      }
+                      return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — REQUIRED to load via tool`
+                    })
                     system.push([
                       "",
                       "<skill-chain-obligation mode=\"strict\">",
                       "The sensor gate has classified this prompt and produced a mandatory skill chain.",
-                      "You MUST load EVERY skill in this chain using the `skill` tool:",
+                      "Every skill in this chain MUST be loaded via the `skill` tool:",
                       "",
-                      ...gateResult.chain.map((name: string) => `  [MANDATORY] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — load content and follow instructions`),
+                      ...chainItems,
                       "",
                       "Rules:",
-                      "  1. Load each skill's content via the `skill` tool — do NOT skip any",
-                      "  2. Execute the skill's workflow instructions and scripts",
-                      "  3. Any subagent you spawn MUST also load the same chain skills",
-                      "  4. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
-                      "  5. FAILURE to load all chain skills will produce INCOMPLETE results",
+                      "  1. [MUST-LOAD] skills were NOT pre-injected — you MUST call the `skill` tool to load their content",
+                      "  2. [EXECUTED] skills had their automation script pre-run; load SKILL.md via `skill` tool for workflow instructions",
+                      "  3. Follow each skill's workflow instructions after loading",
+                      "  4. Any subagent you spawn MUST also load the same chain skills",
+                      "  5. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
+                      "  6. FAILURE to load all chain skills will produce INCOMPLETE results",
                       "</skill-chain-obligation>",
                     ].join("\n"))
 

@@ -156,7 +156,7 @@ export function RunFooterSubagentBody(props: {
         <scrollbox
           width="100%"
           height="100%"
-          stickyScroll={true}
+          stickyScroll={tab()?.status === "running"}
           stickyStart="bottom"
           verticalScrollbarOptions={scrollbar()}
           ref={(item) => {
