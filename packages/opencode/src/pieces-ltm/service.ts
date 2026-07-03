@@ -57,7 +57,7 @@ function callMCP(mcpURL: string, toolName: string, arguments_: Record<string, un
       return res.json() as unknown
     }),
     Effect.retry({ times: 1, delay: "500 millis" }),
-    Effect.catch(() => Effect.die("MCP call failed after retry")),
+    Effect.catch(() => Effect.succeed(null)),
   )
 }
 
