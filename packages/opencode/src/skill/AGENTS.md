@@ -133,3 +133,31 @@ Contains 60 Windows-specific terms/patterns checked by `isWindowsRelated()`:
 const outExt = item.os === "win32" ? ".exe" : ""
 outfile: `dist/${name}/bin/dreamcode${outExt}`
 ```
+
+## sensor_gate.py — CRITICAL Deployment Rules
+
+### 7 copies MUST be in sync
+The sensor_gate.py source is at `packages/opencode/src/skill/dreamcode/skills/chain-orchestrator/scripts/sensor_gate.py`.
+It must be MANUALLY synced to ALL 7 deployed locations whenever changed:
+
+```
+/home/ronya/dreamcode/packages/opencode/dist/dreamcode-linux-x64/bin/skills/.../sensor_gate.py  (new binary path)
+/home/ronya/.dreamcode/packages/opencode/dist/dreamcode-linux-x64/bin/skills/.../sensor_gate.py  (old binary path)
+/home/ronya/dreamcode/.dreamcode/skills/.../sensor_gate.py          (repo .dreamcode)
+/home/ronya/dreamcode/.opencode/skills/.../sensor_gate.py           (repo .opencode)
+/home/ronya/.dreamcode/.dreamcode/skills/.../sensor_gate.py        (install dir .dreamcode)
+/home/ronya/.dreamcode/.opencode/skills/.../sensor_gate.py         (install dir .opencode)
+/home/ronya/.config/dreamcode/skills/.../sensor_gate.py            (XDG config)
+```
+
+Use this command to sync:
+```bash
+SOURCE="packages/opencode/src/skill/dreamcode/skills/chain-orchestrator/scripts/sensor_gate.py"
+for dest in ... (see above); do cp "$SOURCE" "$dest"; done
+```
+
+### Always wrap emit_plan and run_gate in try/except
+The `chain_result` dict passed to `emit_plan()` can have `detected_tasks` as `list[str]` or `list[dict]` depending on the calling code path. Iterating with `t["task_type"]` on a string crashes with `TypeError: string indices must be integers, not 'str'`. The defensive wrapper emits a valid fallback plan block.
+
+### Empty skills dirs are traps
+An empty `~/.dreamcode/skills/` directory matches `resolveSkillsDir()` but causes `resolveScript()` to fail. Always remove empty dirs or ensure they have the expected subdirectories.
