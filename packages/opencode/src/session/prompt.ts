@@ -140,6 +140,138 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // They are not pending work and must not trigger an assistant-prefill request.
   return part.state.status === "error" && part.state.metadata?.interrupted === true
 }
+
+// ─── Per-Turn Skill Chain Enforcement ─────────────────────────
+// These maps persist the sensor gate result across turns so the
+// chain enforcement (gap detection, skill-loading check, obligation)
+// can be re-injected on EVERY turn, not just the first gate-fire turn.
+const storedGateResultMap = new Map<SessionID, any>()
+const storedScriptResultsMap = new Map<SessionID, ChainResult[]>()
+const storedContentResultsMap = new Map<SessionID, ChainResult[]>()
+
+/**
+ * Re-execute mandated skills that failed on first attempt, then inject
+ * chain-gap warnings for any skills still missing.
+ */
+function* injectChainGapDetection(
+  system: string[],
+  gateResult: any,
+  chainResults: ChainResult[],
+  userText: string,
+  chainExecutor: any,
+): Effect.Effect<void> {
+  const missingSkills = gateResult.chain.filter(
+    (name: string) => !chainResults.some(
+      (r: ChainResult) => r.name === name && r.status === "ok",
+    ),
+  )
+  const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
+  const missingMandated = missingSkills.filter((s: string) => MANDATED_SKILLS.has(s))
+
+  if (missingMandated.length > 0) {
+    debugLog("[prompt] Re-executing mandated skills:", missingMandated)
+    const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
+      Effect.catch(() => Effect.succeed([] as Array<ChainResult>)),
+    )
+    chainResults.push(...(reExecuteResult as ChainResult[]))
+    for (const result of reExecuteResult as ChainResult[]) {
+      if (result.status === "ok" && result.output) {
+        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" source="mandated-rerun">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
+      }
+    }
+    const stillMissing = gateResult.chain.filter(
+      (name: string) => !chainResults.some(
+        (r: ChainResult) => r.name === name && r.status === "ok",
+      ),
+    )
+    if (stillMissing.length > 0) {
+      system.push(
+        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(stillMissing.join(", "))}. ` +
+        `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
+        `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+      )
+    }
+  } else if (missingSkills.length > 0) {
+    system.push(
+      `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(missingSkills.join(", "))}. ` +
+      `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
+      `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
+    )
+  }
+}
+
+/**
+ * Scan past messages for `skill` tool calls. If any chain skills
+ * remain unloaded, inject a warning. This runs on EVERY turn so
+ * the agent cannot "forget" to load skills after the first turn.
+ */
+function injectSkillLoadingGap(
+  system: string[],
+  gateResult: any,
+  msgs: any[],
+): void {
+  const skillToolCalls = new Set<string>()
+  for (const msg of msgs) {
+    if (msg.info.role !== "assistant") continue
+    for (const part of msg.parts) {
+      if (part.type !== "tool") continue
+      if (part.tool !== "skill") continue
+      if (part.state.status === "completed") {
+        skillToolCalls.add(part.state.input.name ?? "")
+      }
+    }
+  }
+  const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
+  if (unloadedChainSkills.length > 0) {
+    system.push(
+      `\n<skill-loading-gap mode="blocking">CRITICAL: The following required chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
+      `You CANNOT proceed with the user's request until EVERY chain skill is loaded. ` +
+      `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" NOW to load the first missing skill. ` +
+      `Only respond with a plan to load skills — do NOT attempt to answer the user's question until [SKILLS LOADED] is acknowledged.` +
+      `\nSubagents spawned from this session must also load chain skills.</skill-loading-gap>`,
+    )
+  }
+}
+
+/**
+ * Inject the mandatory skill chain obligation block listing every
+ * chain skill with its load status (MUST-LOAD vs EXECUTED).
+ */
+function injectSkillChainObligation(
+  system: string[],
+  gateResult: any,
+  scriptResults: ChainResult[],
+  contentResults: ChainResult[],
+): void {
+  const scriptSkillNames = scriptResults.map(r => r.name)
+  const contentSkillNames = contentResults.map(r => r.name)
+  const chainItems = gateResult.chain.map((name: string) => {
+    if (contentSkillNames.includes(name)) {
+      return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — content NOT injected, REQUIRED to load via tool`
+    }
+    if (scriptSkillNames.includes(name)) {
+      return `  [EXECUTED] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — script pre-executed, load SKILL.md for workflow instructions`
+    }
+    return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — REQUIRED to load via tool`
+  })
+  system.push([
+    "",
+    "<skill-chain-obligation mode=\"strict\">",
+    "The sensor gate has classified this prompt and produced a mandatory skill chain.",
+    "Every skill in this chain MUST be loaded via the `skill` tool:",
+    "",
+    ...chainItems,
+    "",
+    "Rules:",
+    "  1. [MUST-LOAD] skills were NOT pre-injected — you MUST call the `skill` tool to load their content",
+    "  2. [EXECUTED] skills had their automation script pre-run; load SKILL.md via `skill` tool for workflow instructions",
+    "  3. Follow each skill's workflow instructions after loading",
+    "  4. Any subagent you spawn MUST also load the same chain skills",
+    "  5. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
+    "  6. FAILURE to load all chain skills will produce INCOMPLETE results",
+    "</skill-chain-obligation>",
+  ].join("\n"))
+}
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -1275,106 +1407,15 @@ export const layer = Layer.effect(
                       }
                     }
 
-                    // ─── Chain-Gap Detection ──────────────────────────
-                    const missingSkills = gateResult.chain.filter(
-                      (name: string) => !chainResults.some(
-                        (r: ChainResult) => r.name === name && r.status === "ok",
-                      ),
-                    )
-                    const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
-                    const missingMandated = missingSkills.filter((s: string) => MANDATED_SKILLS.has(s))
+                    // ─── Store chain results for per-turn enforcement ───
+                    storedGateResultMap.set(sessionID, gateResult)
+                    storedScriptResultsMap.set(sessionID, scriptResults)
+                    storedContentResultsMap.set(sessionID, contentResults)
 
-                    if (missingMandated.length > 0) {
-                      debugLog("[prompt] Re-executing mandated skills:", missingMandated)
-                      const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
-                        Effect.catch(() => Effect.succeed([] as Array<ChainResult>)),
-                      )
-                      chainResults.push(...(reExecuteResult as ChainResult[]))
-                      for (const result of reExecuteResult as ChainResult[]) {
-                        if (result.status === "ok" && result.output) {
-                          system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" source="mandated-rerun">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
-                        }
-                      }
-                      const stillMissing = gateResult.chain.filter(
-                        (name: string) => !chainResults.some(
-                          (r: ChainResult) => r.name === name && r.status === "ok",
-                        ),
-                      )
-                      if (stillMissing.length > 0) {
-                        system.push(
-                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(stillMissing.join(", "))}. ` +
-                          `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
-                          `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
-                        )
-                      }
-                    } else if (missingSkills.length > 0) {
-                      system.push(
-                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(missingSkills.join(", "))}. ` +
-                        `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
-                        `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
-                      )
-                    }
-
-                    // ─── Skill Loading Gap Detection ────────────────────────
-                    // Scan past messages to see if the model has already loaded skills
-                    // via the `skill` tool. This detects whether the model is actually
-                    // following the chain obligation from previous turns.
-                    const skillToolCalls = new Set<string>()
-                    for (const msg of msgs) {
-                      if (msg.info.role !== "assistant") continue
-                      for (const part of msg.parts) {
-                        if (part.type !== "tool") continue
-                        if (part.tool !== "skill") continue
-                        if (part.state.status === "completed") {
-                          skillToolCalls.add(part.state.input.name ?? "")
-                        }
-                      }
-                    }
-                    const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
-                    if (unloadedChainSkills.length > 0) {
-                      system.push(
-                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool in prior turns: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
-                        `You MUST load each chain skill via the \`skill\` tool to get the full workflow instructions. ` +
-                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.` +
-                        `\nSubagents spawned from this session must also load chain skills.</skill-loading-gap>`,
-                      )
-                    }
-
-                    // ─── Mandatory Skill Chain Enforcement ──────────────────────
-                    // The sensor gate produced a dynamic skill graph. The model MUST
-                    // follow it by loading each skill via the `skill` tool. Pre-injected
-                    // <script-result> blocks contain automation output but NOT the skill's
-                    // workflow instructions — those come from loading SKILL.md via the tool.
-                    // Skills classified as "content" type are NOT auto-injected at all;
-                    // the model MUST load them via the `skill` tool to receive instructions.
-                    const scriptSkillNames = scriptResults.map(r => r.name)
-                    const contentSkillNames = contentResults.map(r => r.name)
-                    const chainItems = gateResult.chain.map((name: string) => {
-                      if (contentSkillNames.includes(name)) {
-                        return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — content NOT injected, REQUIRED to load via tool`
-                      }
-                      if (scriptSkillNames.includes(name)) {
-                        return `  [EXECUTED] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — script pre-executed, load SKILL.md for workflow instructions`
-                      }
-                      return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — REQUIRED to load via tool`
-                    })
-                    system.push([
-                      "",
-                      "<skill-chain-obligation mode=\"strict\">",
-                      "The sensor gate has classified this prompt and produced a mandatory skill chain.",
-                      "Every skill in this chain MUST be loaded via the `skill` tool:",
-                      "",
-                      ...chainItems,
-                      "",
-                      "Rules:",
-                      "  1. [MUST-LOAD] skills were NOT pre-injected — you MUST call the `skill` tool to load their content",
-                      "  2. [EXECUTED] skills had their automation script pre-run; load SKILL.md via `skill` tool for workflow instructions",
-                      "  3. Follow each skill's workflow instructions after loading",
-                      "  4. Any subagent you spawn MUST also load the same chain skills",
-                      "  5. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
-                      "  6. FAILURE to load all chain skills will produce INCOMPLETE results",
-                      "</skill-chain-obligation>",
-                    ].join("\n"))
+                    // ─── Inject Chain Enforcement (gate-fire turn) ──────
+                    yield* injectChainGapDetection(system, gateResult, chainResults, userText, chainExecutor)
+                    injectSkillLoadingGap(system, gateResult, msgs)
+                    injectSkillChainObligation(system, gateResult, scriptResults, contentResults)
 
                     // ─── Persist chain execution results to self-evolve (best-effort) ──
                     yield* selfEvolve.capture({
@@ -1989,6 +2030,19 @@ Before every response, verify your reasoning:
               }
             }
             // ─── End Sensor Gate ────────────────────────────────────────
+            // ─── Per-Turn Chain Enforcement ────────────────────────────
+            // After the gate fires on the first turn, re-inject chain
+            // enforcement on EVERY turn so the agent is constantly reminded
+            // to load chain skills via the `skill` tool.
+            {
+              const storedGate = storedGateResultMap.get(sessionID)
+              if (storedGate) {
+                const storedScripts = storedScriptResultsMap.get(sessionID) ?? []
+                const storedContent = storedContentResultsMap.get(sessionID) ?? []
+                injectSkillLoadingGap(system, storedGate, msgs)
+                injectSkillChainObligation(system, storedGate, storedScripts, storedContent)
+              }
+            }
             const extraMsgs = synthesisText
               ? [{ role: "user" as const, content: synthesisText }]
               : []
