@@ -22,8 +22,6 @@ const ERROR_LOG = path.join(HOME, ".dreamcode", "error_log.jsonl")
 function findSensorGate(): string | undefined {
   const candidates = [
     path.join(SKILLS_DIR, "chain-orchestrator", "scripts", "sensor_gate.py"),
-    path.join(process.cwd(), ".dreamcode", "skills", "chain-orchestrator", "scripts", "sensor_gate.py"),
-    path.join(process.cwd(), ".opencode", "skills", "chain-orchestrator", "scripts", "sensor_gate.py"),
   ]
   for (const p of candidates) {
     try {

@@ -18,16 +18,14 @@ Usage:
     python sensor_gate.py --prompt "user prompt here" --json
 """
 
+from __future__ import annotations
 import json
 import re
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
-
-# Module-level constants
-INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
-TRIVIAL_TASKS = {"communication", "documentation", "onboarding"}
 
 def _find_project_root() -> Path:
     """Find project root by looking for .opencode directory."""
@@ -107,7 +105,6 @@ SKILL_GRAPH = {
     # ── META SKILLS ──
     "breakthrough-overdrive-innovation": {"needs": [], "triggers": ["neuro", "research", "deep-research"], "always": True},
     "context-compactor": {"needs": [], "triggers": [], "always": False},
-    "effect": {"needs": [], "triggers": ["architecture", "code-hardener"], "always": False},
     "exhaustive-crosscheck": {"needs": [], "triggers": ["neuro"], "always": False},
     "neuro": {"needs": [], "triggers": ["model-router", "code-hardener"], "always": False},
     "model-router": {"needs": ["neuro"], "triggers": [], "always": False},
@@ -218,6 +215,7 @@ def build_dynamic_graph(prompt: str) -> dict:
     # Only include dream/innovation when task actually requires it
     # (not for trivial communication-only tasks)
     task_types = {t["task_type"] for t in tasks}
+    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
     if task_types & INNOVATION_TASKS:
         needed_skills.add("breakthrough-overdrive-innovation")
     
@@ -254,6 +252,7 @@ def build_dynamic_graph(prompt: str) -> dict:
     
     # MINIMUM SKILL FLOOR — trivial tasks need fewer skills
     task_types = {t["task_type"] for t in tasks}
+    TRIVIAL_TASKS = {"communication"}
     if task_types <= TRIVIAL_TASKS:
         # Trivial: just the needed skills, no forced chain
         pass
@@ -319,7 +318,7 @@ def _rank(p):
 
 
 def _is_social_greeting(prompt: str) -> bool:
-    social_patterns = r'^\s*(hi|hello|hey|thanks|thank you|bye|goodbye|cheers|sup|yo)\s*[!.?]*\s*$'
+    social_patterns = r'^\s*(?:(?:say|just|please)\s+)*(hi|hello|hey|thanks|thank you|bye|goodbye|cheers|sup|yo)\b'
     return bool(re.match(social_patterns, prompt.strip(), re.IGNORECASE))
 
 
@@ -337,7 +336,7 @@ def classify_intent(prompt: str, chain_result: dict) -> str:
     for pattern, _task_type, _priority in PATTERN_RULES:
         if re.search(pattern, prompt_lower):
             matched += 1
-    confidence_score = round(min(matched / max(total_patterns, 1) + 0.3, 0.95), 2) if matched > 0 else round(matched / max(total_patterns, 1), 2)
+    confidence_score = round(min(matched / max(total_patterns, 1) + 0.3, 0.95), 2) if matched > 0 else 0.6
 
     complexity = chain_result.get("complexity", "low")
 
@@ -640,27 +639,21 @@ def run_enforcement_checks(config: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def emit_plan(chain_result: dict) -> str:
+    mode = chain_result.get("mode", "DREAM_INNOVATION")
+    primary_task = chain_result.get("primary_task", "general")
     chain = chain_result["chain"]
-    # Determine actual mode from detected tasks
-    task_types = {t["task_type"] for t in chain_result.get("detected_tasks", [])}
-    has_innovation = bool(task_types & INNOVATION_TASKS) or "breakthrough-overdrive-innovation" in chain
-    is_trivial = not task_types or task_types <= {"communication"}
 
-    primary = "breakthrough-overdrive-innovation" if has_innovation else (chain[0] if chain else "general")
-    supports = [s for s in chain if s != primary][:2]
-
-    if is_trivial:
-        mode = "TRIVIAL"
-    elif has_innovation:
-        mode = "DREAM_INNOVATION"
+    if mode == "DREAM_INNOVATION":
+        primary = "breakthrough-overdrive-innovation"
     else:
-        mode = "STANDARD"
+        primary = primary_task if primary_task else chain[0] if chain else "general"
 
+    supports = [s for s in chain if s != primary][:2]
     lines = [
         "Skill Plan:",
         f"- primary: {primary}",
         f"- supports: {', '.join(supports)}",
-        "- automation: none",
+        f"- automation: {chain_result.get('automation', 'none')}",
         f"- mode: {mode}",
         f"- chain: {' → '.join(chain)}",
     ]
@@ -709,7 +702,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         elif skill == "neuro":
             lines.extend([
                 f"STEP {step_num}: {skill}",
-                f"  Run: python3 .opencode/skills/neuro/scripts/neuro_harness.py --task \"{prompt[:60]}\" --phase pre_patch",
+                f"  Run: python3 .dreamcode/skills/neuro/scripts/neuro_harness.py --task \"{prompt[:60]}\" --phase pre_patch",
                 f"  For each file, run NEURO review.",
                 f"  Parse the output and apply the top 3 recommendations.",
                 "",
@@ -717,7 +710,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         elif skill == "code-hardener":
             lines.extend([
                 f"STEP {step_num}: {skill}",
-                f"  Run: python3 .opencode/skills/neuro/scripts/neuro_harness.py --task \"HARDEN: {prompt[:60]}\" --phase post_patch",
+                f"  Run: python3 .dreamcode/skills/neuro/scripts/neuro_harness.py --task \"HARDEN: {prompt[:60]}\" --phase post_patch",
                 f"  Apply hardening: type annotations, error handling, input validation.",
                 "",
             ])
@@ -770,7 +763,7 @@ def emit_agent_instructions(prompt: str, chain_result: dict) -> str:
         "FINAL STEP: Persist results to Pieces LTM.",
         "  Primary: Use the PiecesLTM Service (inside opencode runtime):",
         "    PiecesLTM.Service.persist({ chainName: '...', taskDescription: '...', outcome: 'success' })",
-        "  Fallback: Run: python3 .opencode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
+        "  Fallback: Run: python3 .dreamcode/skills/pieces-ltm/scripts/pieces_persist.py persist \\",
         f"    --chain \"{', '.join(chain)}\" --task \"{prompt[:80]}\" --outcome success",
         "",
         "After ALL steps complete, respond to the user with:",
@@ -850,9 +843,7 @@ def run_gate(prompt: str) -> dict:
 
     # Social greeting bypass
     if _is_social_greeting(prompt):
-        output = f"{intent_block}\n\n{skill_block}"
-        print(output)
-        return {"is_social_greeting": True, "response": "Hey! What can I help you with?", "output": output}
+        return {"is_social_greeting": True, "response": "Hey! What can I help you with?"}
 
     # Stage 2.7: Dynamic Persona Generation
     persona_block = generate_personas(chain_result, prompt)
@@ -909,22 +900,22 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="SENSOR Gate — Codex-Compatible Runtime")
     parser.add_argument("--prompt", default=None, help="User prompt (or pipe via stdin with --stdin)")
+    parser.add_argument("--prompt-file", default=None, help="Read prompt from file")
     parser.add_argument("--stdin", action="store_true", help="Read prompt from stdin")
-    parser.add_argument("--prompt-file", default=None, help="Read prompt from a file (avoids stdin pipe issues in compiled binaries)")
     parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("--skills-dir", default=None, help="Override skills directory path")
     args = parser.parse_args()
 
+    if args.skills_dir:
+        SKILLS_DIR = Path(args.skills_dir)
     if args.prompt_file:
-        try:
-            prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
-        except Exception as e:
-            parser.error(f"Failed to read prompt file: {e}")
+        prompt = Path(args.prompt_file).read_text().strip()
     elif args.stdin:
         prompt = sys.stdin.read().strip()
     elif args.prompt:
         prompt = args.prompt
     else:
-        parser.error("Either --prompt, --stdin, or --prompt-file is required")
+        parser.error("Either --prompt, --prompt-file, or --stdin is required")
 
     result = run_gate(prompt)
     if args.json:

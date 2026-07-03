@@ -176,6 +176,14 @@ const PERSONA_PROFILES: PersonaProfile[] = [
     tags: ["architecture", "integration", "api", "system"],
     minComplexity: 3,
   },
+  {
+    name: "Bill Gates",
+    role: "Windows Platform Expert",
+    focus: "Windows-specific issues: PowerShell, paths, registry, COM, Win32 API, WSL, MSI installers, .NET, Windows services, ACLs, UAC, etc.",
+    skills: ["windows", "platform", "compatibility"],
+    tags: ["windows", "win32", "powershell", "cmd", ".net", "registry", "wsl", "msi", "com", "uac", "acl"],
+    minComplexity: 1,
+  },
 ]
 
 function dynamicTaskFor(persona: { name: string; role: string; focus: string }, intent: string): string {
@@ -194,6 +202,7 @@ function dynamicTaskFor(persona: { name: string; role: string; focus: string }, 
     "The Sculptor": `Identify refactoring opportunities, dead code, simplification, and technical debt for: ${intent}. Focus on code duplication, complex logic that needs decomposition, and cleanup candidates.`,
     "The Strategist": `Explore novel approaches, alternative solutions, and creative improvements for: ${intent}. Focus on breakthrough ideas, technology choices, architectural pivots, and innovation opportunities.`,
     "The Integrator": `Evaluate cross-module integration, data flow, and compatibility for: ${intent}. Focus on interface contracts, data format consistency, error propagation across boundaries, and system cohesion.`,
+    "Bill Gates": `Analyze Windows-specific aspects of: ${intent}. Focus on platform compatibility, PowerShell/cmd scripting, file path handling, registry, UAC, Windows services, .NET integration, WSL, installer design, ACLs, and Windows API usage. Provide Windows-native solutions and warn about cross-platform pitfalls.`,
   }
   return t[persona.name] ?? `Analyze from ${persona.role} perspective for: ${intent}.`
 }
@@ -211,6 +220,10 @@ function dynamicGoalsFor(persona: { name: string; role: string; focus: string },
 
 function dynamicSynthesisFor(persona: { name: string; role: string; focus: string }): string {
   return `When synthesizing, include ${persona.name}'s findings on ${persona.focus}. Prioritize actionable ${persona.role} recommendations, flag any blocking issues, and note confidence levels for each finding.`
+}
+
+function dynamicTaskForPersona(p: PersonaProfile, intent: string): string {
+  return dynamicTaskFor({ name: p.name, role: p.role, focus: p.focus }, intent)
 }
 
 function overlapCheck(personas: Persona[]): Persona[] {
@@ -387,7 +400,50 @@ export function depthScore(result: SensorGateResult): number {
   return Math.max(0, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
 }
 
-export function selectPersonas(result: SensorGateResult): Persona[] {
+// ─── Windows Detection ──────────────────────────────────────────────
+// 60 example questions/patterns that indicate a Windows-related task.
+// If ANY of these patterns match the prompt, Bill Gates persona fires
+// as an ADDITIONAL persona alongside whatever selectPersonas() returns.
+
+const WINDOWS_QUESTIONS = [
+  "install", "setup", "windows", "win32", "win64", "powershell", "cmd",
+  "batch", ".bat", ".ps1", "registry", "regedit", "COM object", "comctl",
+  "winapi", "kernel32", "user32", "gdi32", "msi", "installer", "msix",
+  "appx", "sxs", "side-by-side", "manifest", "UAC", "admin", "elevate",
+  "ACL", "permission", "NTFS", "FAT32", "drive letter", "C:\\", "D:\\",
+  "backslash", "path separator", "environment variable", "%PATH%",
+  "Windows Service", "SCM", "SERVICE", "wmic", "wmi", "cim",
+  ".NET", "dotnet", "CLR", "AppDomain", "PInvoke", "DllImport",
+  "WSL", "wsl2", "linux subsystem", "microsoft store", "store app",
+  "Hyper-V", "virtualization", "DirectX", "d3d", "winrt", "WinRT",
+  "Windows Forms", "WinForms", "WPF", "UWP", "WinUI", "MAUI",
+  "MFC", "ATL", "C++/CLI", "C++/WinRT", "Rust windows crate",
+  "system32", "syswow64", "program files", "appdata", "localappdata",
+  "temp", "temporary files", "Windows Update", "SFC", "DISM",
+  "chkdsk", "defrag", "mstsc", "rdp", "remote desktop", "task manager",
+  "performance monitor", "event viewer", "event log", "Application log",
+  "security log", "system log", "Windows Firewall", "netsh", "ipconfig",
+  "ping windows", "tracert", "nslookup windows", "Get-WmiObject",
+  "Get-ChildItem", "New-Item", "Remove-Item", "Set-ExecutionPolicy",
+  "Windows Terminal", "conhost", "console host", "codepage", "chcp",
+  "ANSI", "UTF-8 windows", "CRLF", "line ending", "carriage return",
+  "Windows CRLF", "windows-1252", "code page", "SMB", "network share",
+  "UNC path", "mapped drive", "symbolic link windows", "junction",
+  "hard link windows", "reparse point", "sparse file", "encrypted file",
+  "BitLocker", "TPM", "secure boot", "Windows Hello", "credential manager",
+]
+
+function isWindowsRelated(prompt: string): boolean {
+  const lower = prompt.toLowerCase()
+  // Check each pattern — if any match, it's Windows-related
+  for (const q of WINDOWS_QUESTIONS) {
+    if (lower.includes(q.toLowerCase())) return true
+  }
+  // Also check for backslash paths (Windows-style paths)
+  if (/[a-zA-Z]:\\/.test(prompt)) return true
+  return false
+}
+export function selectPersonas(result: SensorGateResult, prompt?: string): Persona[] {
   // Workflow skills (deep-research) manage their own subagents internally.
   // Skip persona selection entirely when a workflow skill is present — otherwise
   // both systems spawn subagents simultaneously, causing infinite spawn loops.
@@ -450,9 +506,9 @@ export function selectPersonas(result: SensorGateResult): Persona[] {
   }
   count = Math.min(count, deduped.length)
 
-  if (count < 1) return []
+  if (count < 1 && !(prompt && isWindowsRelated(prompt))) return []
 
-  return overlapCheck(deduped.slice(0, count).map((s) => ({
+  const selected = overlapCheck(deduped.slice(0, count).map((s) => ({
     name: s.profile.name,
     role: s.profile.role,
     focus: s.profile.focus,
@@ -461,6 +517,24 @@ export function selectPersonas(result: SensorGateResult): Persona[] {
     goals: dynamicGoalsFor(s.profile, result.intent),
     synthesisGuide: dynamicSynthesisFor(s.profile),
   })))
+
+  // Append Bill Gates if Windows-related
+  if (prompt && isWindowsRelated(prompt) && !selected.find((p) => p.name === "Bill Gates")) {
+    const billProfile = PERSONA_PROFILES.find((p) => p.name === "Bill Gates")
+    if (billProfile) {
+      selected.push({
+        name: billProfile.name,
+        role: billProfile.role,
+        focus: billProfile.focus,
+        skills: billProfile.skills,
+        task: dynamicTaskFor(billProfile, result.intent),
+        goals: dynamicGoalsFor(billProfile, result.intent),
+        synthesisGuide: dynamicSynthesisFor(billProfile),
+      })
+    }
+  }
+
+  return selected
 }
 
 export interface SensorGateResult {
@@ -877,7 +951,7 @@ export const layer = Layer.effect(
 
         // Generate personas from TypeScript when Python script doesn't output them
         if (result.personas.length === 0) {
-          result.personas = selectPersonas(result)
+          result.personas = selectPersonas(result, prompt)
           // Fallback: when Python script fails (empty domain_tags = default result),
           // selectPersonas() returns [] because there are no tags to match.
           // Generate fallback personas so natural prompts can still trigger spawning.
@@ -945,6 +1019,25 @@ export const layer = Layer.effect(
               goals: dynamicGoalsFor(d, result.intent),
               synthesisGuide: dynamicSynthesisFor(d),
             })
+          }
+        }
+
+        // ─── Bill Gates: Windows-specific persona ────────────────────
+        // If the prompt matches Windows-related patterns, inject Bill Gates
+        // as an ADDITIONAL persona regardless of what selectPersonas() returned.
+        if (isWindowsRelated(prompt)) {
+          const billProfile = PERSONA_PROFILES.find((p) => p.name === "Bill Gates")
+          if (billProfile && !result.personas.some((p) => p.name === "Bill Gates")) {
+            result.personas.push({
+              name: billProfile.name,
+              role: billProfile.role,
+              focus: billProfile.focus,
+              skills: billProfile.skills,
+              task: dynamicTaskFor(billProfile, result.intent || prompt.slice(0, 200)),
+              goals: dynamicGoalsFor(billProfile, result.intent || prompt.slice(0, 200)),
+              synthesisGuide: dynamicSynthesisFor(billProfile),
+            })
+            debugLog("[sensor-gate] Windows-related prompt detected — appended Bill Gates persona")
           }
         }
 

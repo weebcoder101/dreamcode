@@ -84,3 +84,52 @@ The skill inline renderer shows `…` while loading and `✓` when complete, mat
 ### Deprecated skill tool (tool/skill.ts:238-246)
 Fixed to return actual skill content from `Skill.Service.require()` instead of the stub
 message `"[SKILL TOOL: deprecated — delegated to core skill system]"`.
+
+## Self-Evolution System (self-evolve.ts)
+
+### Evolution file paths (CWD-independent)
+All evolution files are under `~/.dreamcode/evolution/` (homedir-relative, not CWD):
+- `knowledge.jsonl` — local learning signals for `<learned-knowledge>` injection
+- `run_log.jsonl` — execution trace with whatWorked/whatFailed/whatToChange
+- `pieces_writes.jsonl` — audit trail for Pieces LTM persistence
+- `agent_score.json` — gamification scoring from sensor_gate.py
+
+### learnings() reads from TWO sources (in order):
+1. `knowledge.jsonl` (local file, always available) — last 50 entries
+2. Pieces LTM (optional, requires Pieces OS) — via `ltm.query()`
+
+### capture() writes to TWO backends:
+1. Local `knowledge.jsonl` + `run_log.jsonl` (non-blocking)
+2. Pieces LTM `persist()` (non-blocking, catches errors)
+
+`knowledge.jsonl` is the source of truth for `<learned-knowledge>` system prompt injection.
+
+## Windows Detection (sensor-gate.ts)
+
+### WINDOWS_QUESTIONS array
+Contains 60 Windows-specific terms/patterns checked by `isWindowsRelated()`:
+- Installation: install, setup, msi, installer, msix, appx
+- Platform: windows, win32, win64, .NET, dotnet, CLR
+- Scripting: powershell, cmd, batch, .bat, .ps1
+- Paths: C:\, backslash, path separator, UNC, NTFS, FAT32
+- System: registry, UAC, ACL, service, SCM, WMI, wmic
+- APIs: winapi, kernel32, user32, PInvoke, DllImport, COM
+- Virtualization: WSL, wsl2, Hyper-V, DirectX, WinRT
+- UI: WinForms, WPF, UWP, WinUI, MAUI, MFC, ATL
+- Diagnostics: event viewer, performance monitor, DISM, SFC
+- Networking: SMB, network share, Windows Firewall, netsh
+- Development: Windows Terminal, codepage, CRLF, ANSI
+
+### Bill Gates Persona
+- `minComplexity: 1` — fires on ANY task with Windows relevance
+- Tags: windows, win32, powershell, cmd, .net, registry, wsl, msi, com, uac, acl
+- Fires as ADDITIONAL persona — never replaces existing ones
+- Deduplication: name-based (overlapCheck prevents duplicates)
+
+## Build System (build.ts)
+
+### .exe Extension for Windows
+```typescript
+const outExt = item.os === "win32" ? ".exe" : ""
+outfile: `dist/${name}/bin/dreamcode${outExt}`
+```

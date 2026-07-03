@@ -119,3 +119,55 @@ The spawn necessity algorithm was significantly rewritten:
 - Use `Layer.mock` for dependency injection in tests
 - Mock services at the layer level, not at the function level
 - Enables testing without external dependencies
+
+## Self-Evolution / Knowledge Persistence
+
+### Evolution Directory Files
+- `~/.dreamcode/evolution/knowledge.jsonl` — local knowledge base for `<learned-knowledge>` block
+- `~/.dreamcode/evolution/run_log.jsonl` — execution trace log with `whatWorked`/`whatFailed`/`whatToChange`
+- `~/.dreamcode/evolution/pieces_writes.jsonl` — audit trail for Pieces LTM persistence calls
+- `~/.dreamcode/evolution/agent_score.json` — gamification scoring (from sensor_gate.py)
+
+### SelfEvolve.capture() writes to TWO backends:
+1. **Local file** (`knowledge.jsonl` + `run_log.jsonl`) — always works, no dependencies
+2. **Pieces LTM** — optional, requires Pieces OS running at `localhost:39302`
+
+### `injectChainGapDetection` return type (prompt.ts:156-162)
+Must be `Generator<Effect<void, never, never>, void, any>` (not `Effect.Effect<void>`) because `function*` returns a Generator, not an Effect. TypeScript 7+ catches this mismatch.
+
+## CWD-Independent Path Resolution
+
+### python-resolver.ts rules:
+- `resolveSkillsDir()` must NOT use `process.cwd()` — skills are resolved from:
+  1. Binary-adjacent `skills/` dir
+  2. `~/.config/dreamcode/skills/`
+  3. `~/.dreamcode/.dreamcode/skills/` (install dir)
+  4. `~/.dreamcode/skills/`
+- `resolveScript()` only uses resolved skills dir, never CWD
+- `validateScriptPath()` uses HOME-based paths, not CWD
+
+### tool/skill.ts rules:
+- `findSensorGate()` only uses resolved `SKILLS_DIR` — no `process.cwd()` fallback
+
+## Windows Build
+
+### .exe extension
+- `build.ts` outputs `dreamcode.exe` for `win32` targets (via `outExt` variable)
+- `install.ps1` checks for `dreamcode.exe` and falls back to `dreamcode` (no extension)
+- Bun's `--compile` on Windows may or may not auto-add `.exe` — the code handles both
+
+## Bill Gates Persona
+
+### Trigger criteria
+- `WINDOWS_QUESTIONS` array contains 60 Windows-related terms/patterns
+- `isWindowsRelated(prompt)` checks prompt against all patterns + backslash-path regex
+- Fires as ADDITIONAL persona in `selectPersonas()` and `classify()` fallback
+- Bill Gates never replaces other personas — always appended
+
+### Sensor_gate.py deploy sync
+- Source of truth: `packages/opencode/src/skill/dreamcode/skills/.../sensor_gate.py`
+- Must be MANUALLY synced to deployed copies:
+  - `~/.config/dreamcode/skills/...` (runtime)
+  - `~/.dreamcode/.dreamcode/skills/...` (install dir first-run sync source)
+  - `~/.dreamcode/.opencode/skills/...` (legacy)
+- The `emit_plan` function uses `chain_result.get("mode", "DREAM_INNOVATION")` — NOT `detected_tasks`

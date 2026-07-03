@@ -159,7 +159,7 @@ function* injectChainGapDetection(
   chainResults: ChainResult[],
   userText: string,
   chainExecutor: any,
-): Effect.Effect<void> {
+): Generator<Effect.Effect<void, never, never>, void, any> {
   const missingSkills = gateResult.chain.filter(
     (name: string) => !chainResults.some(
       (r: ChainResult) => r.name === name && r.status === "ok",
