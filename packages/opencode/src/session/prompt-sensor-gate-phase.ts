@@ -5,6 +5,7 @@ import * as PersonaTracker from "./persona-tracker"
 import { extractSubagentContext, buildSubagentContextPrompt } from "./subagent-context"
 import { sanitizeForSystemPrompt, normalizeTokens, injectChainGapDetection, injectSkillLoadingGap, injectSkillChainObligation } from "./prompt-utils"
 import { storedGateResultMap, storedScriptResultsMap, storedContentResultsMap, checkRateLimit, recordSpawn, RATE_MAX_SPAWNS } from "./prompt-state"
+import { recordTaste } from "./prompt-taste"
 import { debugLog } from "@/skill/python-resolver"
 import { MessageID, PartID } from "./schema"
 import { TaskTool } from "@/tool/task"
@@ -125,15 +126,33 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
 
   if (!evaluation.shouldSpawn) {
     debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
+    recordTaste({
+      timestamp: Date.now(), sessionID, domain: gateResult?.mode ?? "unknown",
+      spawnDecision: "skipped", suggestedCount: 0, actualCount: 0, personaNames: [],
+      gateMode: gateResult?.mode ?? "unknown", chainCount: gateResult?.chain?.length ?? 0,
+      skipReason: evaluation.reason,
+    })
   }
   let personas: Persona[] = []
   const rateCheck = checkRateLimit(sessionID)
   if (evaluation.shouldSpawn && gateResult?.personas?.length > 0 && rateCheck.allowed) {
     personas = gateResult.personas.slice(0, Math.min(evaluation.suggestedCount, rateCheck.remaining))
     recordSpawn(sessionID, personas.length)
+    recordTaste({
+      timestamp: Date.now(), sessionID, domain: gateResult?.mode ?? "unknown",
+      spawnDecision: "spawned", suggestedCount: evaluation.suggestedCount, actualCount: personas.length,
+      personaNames: personas.map(p => p.name), gateMode: gateResult?.mode ?? "unknown",
+      chainCount: gateResult?.chain?.length ?? 0,
+    })
   } else if (explicitSpawnCount > 0 && rateCheck.allowed) {
     const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
     recordSpawn(sessionID, spawnCount)
+    recordTaste({
+      timestamp: Date.now(), sessionID, domain: gateResult?.mode ?? "unknown",
+      spawnDecision: "explicit-spawn", suggestedCount: explicitSpawnCount, actualCount: spawnCount,
+      personaNames: [], gateMode: gateResult?.mode ?? "unknown",
+      chainCount: gateResult?.chain?.length ?? 0,
+    })
     personas = Array.from({ length: spawnCount }, (_, i): Persona => ({
       name: `Specialist ${i + 1}`,
       role: "Analysis Specialist",

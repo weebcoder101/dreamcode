@@ -29,8 +29,9 @@ from pathlib import Path
 import httpx
 
 PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
-EVOLUTION_DIR = PROJECT_ROOT / "evolution"
-RESEARCH_DIR = EVOLUTION_DIR / "research"
+EVOLUTION_DIR = Path.home() / ".dreamcode" / "evolution"
+
+
 
 sys.path.insert(0, str(PROJECT_ROOT / ".opencode" / "automations"))
 from timezone import format_duration, now_ist_iso, now_ist_time

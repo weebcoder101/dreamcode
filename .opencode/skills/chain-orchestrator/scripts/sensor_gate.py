@@ -36,8 +36,9 @@ def _find_project_root() -> Path:
     return current
 
 PROJECT_ROOT = _find_project_root()
+EVOLUTION_DIR = Path.home() / ".dreamcode" / "evolution"
 SKILLS_DIR = PROJECT_ROOT / ".dreamcode" / "skills"
-EVOLUTION_DIR = PROJECT_ROOT / "evolution"
+
 CONFIG_PATH = PROJECT_ROOT / ".dreamcode" / "config" / "opencode.yaml"
 SCRIPTS_DIR = PROJECT_ROOT / ".dreamcode" / "scripts"
 

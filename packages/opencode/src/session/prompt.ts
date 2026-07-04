@@ -112,6 +112,7 @@ import {
   parseExplicitSpawnCount,
   RATE_MAX_SPAWNS,
 } from "./prompt-state"
+import { summarizeTaste, refreshProfile } from "./prompt-taste"
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
 
@@ -410,6 +411,8 @@ Before every response, verify your reasoning:
               providerID: lastUser.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
+            // Refresh codebase profile on first turn (background, non-blocking)
+            yield* Effect.sync(() => refreshProfile(process.cwd())).pipe(Effect.ignore, Effect.forkIn(scope))
           }
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const task = tasks.pop()
@@ -554,7 +557,7 @@ Before every response, verify your reasoning:
               }
             }
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-            const [skills, env, knowledge, instructions, modelMsgs] = yield* Effect.all([
+            const [skills, env, knowledge, instructions, taste, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               // Always return a <learned-knowledge> block — even on LTM failure.
@@ -562,9 +565,10 @@ Before every response, verify your reasoning:
               // KV cache misses (40x cost multiplier: $0.001 → $0.04).
               sys.knowledge().pipe(Effect.catch(() => Effect.succeed(DEFAULT_KNOWLEDGE_BLOCK))),
               instruction.system().pipe(Effect.orDie),
+              Effect.sync(() => summarizeTaste()).pipe(Effect.catch(() => Effect.succeed(""))),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), SELF_CHECK]
+            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), ...(taste ? [taste] : []), SELF_CHECK]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
@@ -588,8 +592,15 @@ Before every response, verify your reasoning:
               // Skip sensor gate for slash commands — commands handle their own flow.
               const isSlashCommand = userText.trim().startsWith("/")
               // Skip sensor gate if session has active subagents running.
-              const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
-              const isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+              // At step=1 the session is always briefly busy (just set at loop start),
+              // so we bypass that check — every new user message must get classified.
+              let isSessionBusy = false
+              if (step !== 1) {
+                const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
+                isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+              } else {
+                yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=1 bypassed isSessionBusy check — fire gate for every new user message`)
+              }
               yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy}`)
               if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
 
-VIOLATIONS_FILE = Path(__file__).parent.parent / "evolution" / "automation_violations.jsonl"
+VIOLATIONS_FILE = Path.home() / ".dreamcode" / "evolution" / "automation_violations.jsonl"
 
 
 def log_violation(
