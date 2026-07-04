@@ -2008,11 +2008,18 @@ Before every response, verify your reasoning:
               // Skip sensor gate for slash commands — commands handle their own flow.
               // Without this, `/research` triggers persona spawning before the command runs.
               const isSlashCommand = userText.trim().startsWith("/")
-              // Skip sensor gate if session already has active subagents running.
-              // Prevents duplicate spawns when user sends follow-up messages (e.g. "alive?")
-              // while personas are still processing.
-              const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
-              const isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+               // Skip sensor gate if session already has active subagents running.
+                // Prevents duplicate spawns when user sends follow-up messages (e.g. "alive?")
+                // while personas are still processing. BUT always allow at step 1 — the
+                // session is busy because the initial system prompt is loading, but the
+                // gate must fire before the main response.
+                let isSessionBusy = false
+                if (step !== 1) {
+                  const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
+                  isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+                } else {
+                  yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=1 bypassed isSessionBusy check — gate must fire before main response`)
+                }
               yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} sensorGateFired=${currentSensorGateFired} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy}`)
               if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
