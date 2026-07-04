@@ -72,206 +72,43 @@ import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
+import {
+  DEFAULT_KNOWLEDGE_BLOCK,
+  sanitizeForSystemPrompt,
+  normalizeTokens,
+  isOrphanedInterruptedTool,
+  injectChainGapDetection,
+  injectSkillLoadingGap,
+  injectSkillChainObligation,
+} from "./prompt-utils"
+import {
+  ModelRef,
+  PromptInput,
+  LoopInput,
+  ShellInput,
+  CommandInput,
+  createStructuredOutputTool,
+  bashRegex,
+  argsRegex,
+  placeholderRegex,
+  quoteTrimRegex,
+  STRUCTURED_OUTPUT_SYSTEM_PROMPT,
+} from "./prompt-schemas"
+import {
+  storedGateResultMap,
+  storedScriptResultsMap,
+  storedContentResultsMap,
+  sensorGateFiredMap,
+  personaRoundMap,
+  spawnHistory,
+  checkRateLimit,
+  recordSpawn,
+  parseExplicitSpawnCount,
+  RATE_MAX_SPAWNS,
+} from "./prompt-state"
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
-const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
-IMPORTANT:
-- You MUST call this tool exactly once at the end of your response
-- The input must be valid JSON matching the required schema
-- Complete all necessary research and tool calls BEFORE calling this tool
-- This tool provides your final answer - no further actions are taken after calling it`
-const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
-// Default knowledge block returned when Pieces LTM is unreachable.
-// Ensures the <learned-knowledge> system prompt section is ALWAYS
-// present so the KV prefix cache doesn't miss on block absence.
-const DEFAULT_KNOWLEDGE_BLOCK = `<learned-knowledge>
-Cross-session Effect v4 API rules (persistent across sessions):
-- Effect.catchAll does NOT exist in Effect v4 beta — use Effect.catch instead
-- Effect.fork and Effect.forkDaemon do NOT exist in Effect v4 — use Effect.forkIn(scope)
-- Effect.catch catches all errors including defects; use Effect.catchTag for tagged errors
-- Use Effect.gen(function* () { ... }) for composition
-- Use Effect.fn('Domain.method') for named/traced effects
-- Use Schema.Class for multi-field data; Schema.TaggedErrorClass for typed errors
-- Use Bun.spawn() wrapped in Effect.tryPromise for subprocesses in compiled binaries
-- Use Layer.mock(Service, { method1, method2 }) for test stubs
-</learned-knowledge>`
-function sanitizeForSystemPrompt(text: string): string {
-  // Strip ALL closing tags (</tag>) and self-closing tags (<tag/>) before
-  // HTML/XML escaping to prevent prompt injection via fake system tags.
-  // An allowlist approach is used: the system only injects opening tags with
-  // content (e.g. <chain-enforcement>...</chain-enforcement>), so stripping
-  // closing/self-closing tags prevents attackers from closing system blocks
-  // or injecting fake blocks — without needing a blocklist that goes stale.
-  // Order: escape metacharacters FIRST so any remaining angle brackets are
-  // harmless HTML entities. The tag stripping after is defensive (already
-  // escaped). Also strip opening tags that look like known system blocks
-  // by catching <tag-name...> patterns.
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/<[a-zA-Z][^>]*\/>/g, "")      // self-closing tags (defensive, already escaped)
-    .replace(/<\/[a-zA-Z][^>]*>/g, "")       // closing tags (defensive, already escaped)
-    .replace(/<[a-zA-Z][^>]*>/g, "")         // opening tags that survived escaping
-}
-/**
- * Normalize raw subtask cost tokens from TaskTool result into the
- * StepFinishPart schema shape. Extracted to module scope because it's
- * used both in handleSubtask (cost propagation) and processSensorGatePhase
- * (persona cost attribution).
- */
-function normalizeTokens(t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] {
-  const cache = t?.cache as Record<string, unknown> | undefined
-  return {
-    input: (t?.input as number) ?? 0,
-    output: (t?.output as number) ?? 0,
-    reasoning: (t?.reasoning as number) ?? 0,
-    cache: {
-      read: (cache?.read as number) ?? 0,
-      write: (cache?.write as number) ?? 0,
-    },
-  }
-}
-
-function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
-  // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
-  // They are not pending work and must not trigger an assistant-prefill request.
-  return part.state.status === "error" && part.state.metadata?.interrupted === true
-}
-
-// ─── Per-Turn Skill Chain Enforcement ─────────────────────────
-// These maps persist the sensor gate result across turns so the
-// chain enforcement (gap detection, skill-loading check, obligation)
-// can be re-injected on EVERY turn, not just the first gate-fire turn.
-const storedGateResultMap = new Map<SessionID, any>()
-const storedScriptResultsMap = new Map<SessionID, ChainResult[]>()
-const storedContentResultsMap = new Map<SessionID, ChainResult[]>()
-
-/**
- * Re-execute mandated skills that failed on first attempt, then inject
- * chain-gap warnings for any skills still missing.
- */
-function* injectChainGapDetection(
-  system: string[],
-  gateResult: any,
-  chainResults: ChainResult[],
-  userText: string,
-  chainExecutor: any,
-): Generator<Effect.Effect<void, never, never>, void, any> {
-  const missingSkills = gateResult.chain.filter(
-    (name: string) => !chainResults.some(
-      (r: ChainResult) => r.name === name && r.status === "ok",
-    ),
-  )
-  const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
-  const missingMandated = missingSkills.filter((s: string) => MANDATED_SKILLS.has(s))
-
-  if (missingMandated.length > 0) {
-    debugLog("[prompt] Re-executing mandated skills:", missingMandated)
-    const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
-      Effect.catch(() => Effect.succeed([] as Array<ChainResult>)),
-    )
-    chainResults.push(...(reExecuteResult as ChainResult[]))
-    for (const result of reExecuteResult as ChainResult[]) {
-      if (result.status === "ok" && result.output) {
-        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" source="mandated-rerun">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
-      }
-    }
-    const stillMissing = gateResult.chain.filter(
-      (name: string) => !chainResults.some(
-        (r: ChainResult) => r.name === name && r.status === "ok",
-      ),
-    )
-    if (stillMissing.length > 0) {
-      system.push(
-        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(stillMissing.join(", "))}. ` +
-        `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
-        `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
-      )
-    }
-  } else if (missingSkills.length > 0) {
-    system.push(
-      `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(missingSkills.join(", "))}. ` +
-      `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
-      `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
-    )
-  }
-}
-
-/**
- * Scan past messages for `skill` tool calls. If any chain skills
- * remain unloaded, inject a warning. This runs on EVERY turn so
- * the agent cannot "forget" to load skills after the first turn.
- */
-function injectSkillLoadingGap(
-  system: string[],
-  gateResult: any,
-  msgs: any[],
-): void {
-  const skillToolCalls = new Set<string>()
-  for (const msg of msgs) {
-    if (msg.info.role !== "assistant") continue
-    for (const part of msg.parts) {
-      if (part.type !== "tool") continue
-      if (part.tool !== "skill") continue
-      if (part.state.status === "completed") {
-        skillToolCalls.add(part.state.input.name ?? "")
-      }
-    }
-  }
-  const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
-  if (unloadedChainSkills.length > 0) {
-    system.push(
-      `\n<skill-loading-gap mode="blocking">CRITICAL: The following required chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
-      `You CANNOT proceed with the user's request until EVERY chain skill is loaded. ` +
-      `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" NOW to load the first missing skill. ` +
-      `Only respond with a plan to load skills — do NOT attempt to answer the user's question until [SKILLS LOADED] is acknowledged.` +
-      `\nSubagents spawned from this session must also load chain skills.</skill-loading-gap>`,
-    )
-  }
-}
-
-/**
- * Inject the mandatory skill chain obligation block listing every
- * chain skill with its load status (MUST-LOAD vs EXECUTED).
- */
-function injectSkillChainObligation(
-  system: string[],
-  gateResult: any,
-  scriptResults: ChainResult[],
-  contentResults: ChainResult[],
-): void {
-  const scriptSkillNames = scriptResults.map(r => r.name)
-  const contentSkillNames = contentResults.map(r => r.name)
-  const chainItems = gateResult.chain.map((name: string) => {
-    if (contentSkillNames.includes(name)) {
-      return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — content NOT injected, REQUIRED to load via tool`
-    }
-    if (scriptSkillNames.includes(name)) {
-      return `  [EXECUTED] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — script pre-executed, load SKILL.md for workflow instructions`
-    }
-    return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — REQUIRED to load via tool`
-  })
-  system.push([
-    "",
-    "<skill-chain-obligation mode=\"strict\">",
-    "The sensor gate has classified this prompt and produced a mandatory skill chain.",
-    "Every skill in this chain MUST be loaded via the `skill` tool:",
-    "",
-    ...chainItems,
-    "",
-    "Rules:",
-    "  1. [MUST-LOAD] skills were NOT pre-injected — you MUST call the `skill` tool to load their content",
-    "  2. [EXECUTED] skills had their automation script pre-run; load SKILL.md via `skill` tool for workflow instructions",
-    "  3. Follow each skill's workflow instructions after loading",
-    "  4. Any subagent you spawn MUST also load the same chain skills",
-    "  5. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
-    "  6. FAILURE to load all chain skills will produce INCOMPLETE results",
-    "</skill-chain-obligation>",
-  ].join("\n"))
-}
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -332,39 +169,6 @@ export const layer = Layer.effect(
       spawnHistory.delete(sessionID)
       yield* state.cancel(sessionID)
     })
-    const sensorGateFiredMap = new Map<SessionID, boolean>()
-    const personaRoundMap = new Map<SessionID, number>()
-    // ─── Rolling-Window Rate Limiter ─────────────────────────────────
-    // Max 5 persona spawns per 5-minute window per session.
-    // This is the SOLE cost-control mechanism. The task tool is always
-    // available — the sensor gate's evaluateSpawnNecessity() decides
-    // when actually to use it.
-    // Prevents compute cost explosion from rapid-fire specialist requests.
-    const RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
-    const RATE_MAX_SPAWNS = 5
-    const spawnHistory = new Map<SessionID, Array<{ timestamp: number; count: number }>>()
-    function checkRateLimit(sessionID: SessionID): { allowed: boolean; remaining: number; resetMs: number } {
-      const now = Date.now()
-      const history = spawnHistory.get(sessionID) ?? []
-      const valid = history.filter((e) => now - e.timestamp < RATE_WINDOW_MS)
-      spawnHistory.set(sessionID, valid)
-      const totalSpawns = valid.reduce((sum, e) => sum + e.count, 0)
-      if (totalSpawns >= RATE_MAX_SPAWNS) {
-        const oldestInWindow = valid[0]
-        const resetMs = oldestInWindow ? RATE_WINDOW_MS - (now - oldestInWindow.timestamp) : RATE_WINDOW_MS
-        return { allowed: false, remaining: 0, resetMs }
-      }
-      return { allowed: true, remaining: RATE_MAX_SPAWNS - totalSpawns, resetMs: RATE_WINDOW_MS }
-    }
-    function recordSpawn(sessionID: SessionID, count: number) {
-      const history = spawnHistory.get(sessionID) ?? []
-      history.push({ timestamp: Date.now(), count })
-      spawnHistory.set(sessionID, history)
-    }
-    function parseExplicitSpawnCount(text: string): number {
-      const match = text.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
-      return match ? Math.min(parseInt(match[1], 10), RATE_MAX_SPAWNS) : 0
-    }
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
       const parts: Types.DeepMutable<PromptInput["parts"]> = [{ type: "text", text: template }]
@@ -2305,103 +2109,7 @@ export const defaultLayer = Layer.suspend(() =>
     ),
   ),
 )
-const ModelRef = Schema.Struct({
-  providerID: ProviderV2.ID,
-  modelID: ModelV2.ID,
-})
-export const PromptInput = Schema.Struct({
-  sessionID: SessionID,
-  messageID: Schema.optional(MessageID),
-  model: Schema.optional(ModelRef),
-  agent: Schema.optional(Schema.String),
-  noReply: Schema.optional(Schema.Boolean),
-  tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)).annotate({
-    description:
-      "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
-  }),
-  format: Schema.optional(SessionV1.Format),
-  system: Schema.optional(Schema.String),
-  variant: Schema.optional(Schema.String),
-  parts: Schema.Array(
-    Schema.Union([
-      SessionV1.TextPartInput,
-      SessionV1.FilePartInput,
-      SessionV1.AgentPartInput,
-      SessionV1.SubtaskPartInput,
-    ]).annotate({ discriminator: "type" }),
-  ),
-})
-export type PromptInput = Schema.Schema.Type<typeof PromptInput>
-export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
-  sessionID: SessionID,
-}) {}
-export const ShellInput = Schema.Struct({
-  sessionID: SessionID,
-  messageID: Schema.optional(MessageID),
-  agent: Schema.String,
-  model: Schema.optional(ModelRef),
-  command: Schema.String,
-})
-export type ShellInput = Schema.Schema.Type<typeof ShellInput>
-export const CommandInput = Schema.Struct({
-  messageID: Schema.optional(MessageID),
-  sessionID: SessionID,
-  agent: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.String),
-  arguments: Schema.String,
-  command: Schema.String,
-  variant: Schema.optional(Schema.String),
-  // Inlined (no identifier annotation) to keep the original SDK output — the
-  // PromptInput call site below references FilePartInput by ref via the
-  // Schema export in message-v2.ts.
-  parts: Schema.optional(
-    Schema.Array(
-      Schema.Union([
-        Schema.Struct({
-          id: Schema.optional(PartID),
-          type: Schema.Literal("file"),
-          mime: Schema.String,
-          filename: Schema.optional(Schema.String),
-          url: Schema.String,
-          source: Schema.optional(SessionV1.FilePartSource),
-        }),
-      ]).annotate({ discriminator: "type" }),
-    ),
-  ),
-})
-export type CommandInput = Schema.Schema.Type<typeof CommandInput>
-/** @internal Exported for testing */
-export function createStructuredOutputTool(input: {
-  schema: Record<string, any>
-  onSuccess: (output: unknown) => void
-}): AITool {
-  // Remove $schema property if present (not needed for tool input)
-  const { $schema: _, ...toolSchema } = input.schema
-  return tool({
-    description: STRUCTURED_OUTPUT_DESCRIPTION,
-    inputSchema: jsonSchema(toolSchema as JSONSchema7),
-    async execute(args) {
-      // AI SDK validates args against inputSchema before calling execute()
-      input.onSuccess(args)
-      return {
-        output: "Structured output captured successfully.",
-        title: "Structured Output",
-        metadata: { valid: true },
-      }
-    },
-    toModelOutput({ output }) {
-      return {
-        type: "text",
-        value: output.output,
-      }
-    },
-  })
-}
-const bashRegex = /!`([^`]+)`/g
-// Match [Image N] as single token, quoted strings, or non-space sequences
-const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
-const placeholderRegex = /\$(\d+)/g
-const quoteTrimRegex = /^["']|["']$/g
+
 const sensorGateNode = LayerNode.make(SensorGate.defaultLayer, [])
 const chainExecutorNode = LayerNode.make(ChainExecutor.defaultLayer, [])
 export const node = (LayerNode.make as any)(layer, [
@@ -2434,4 +2142,5 @@ export const node = (LayerNode.make as any)(layer, [
   sensorGateNode,
   chainExecutorNode,
 ])
+export { ModelRef, PromptInput, LoopInput, ShellInput, CommandInput, createStructuredOutputTool }
 export * as SessionPrompt from "./prompt"
