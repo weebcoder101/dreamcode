@@ -299,10 +299,14 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
   const allowedGlobal = skillsDir ? resolve(skillsDir) : null
   const allowedHome = resolve(HOME, ".dreamcode", "skills")
   const allowedInstall = resolve(HOME, ".dreamcode", ".dreamcode", "skills")
+  // Allow project-local skills at <cwd>/.dreamcode/skills/...
+  // (used by integration tests and project-local skill installations)
+  const allowedCwd = cwd ? resolve(cwd, ".dreamcode", "skills") : null
   return (
     (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
     isUnderPrefix(realpath, allowedHome) ||
-    isUnderPrefix(realpath, allowedInstall)
+    isUnderPrefix(realpath, allowedInstall) ||
+    (allowedCwd !== null && isUnderPrefix(realpath, allowedCwd))
   )
 }
 

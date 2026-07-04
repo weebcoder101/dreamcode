@@ -34,7 +34,7 @@ UTC = timezone.utc
 
 PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = Path.home() / ".dreamcode" / "evolution"
-
+QUESTION_LOG = EVOLUTION_DIR / "question_log.jsonl"
 
 MAX_LOG_ENTRIES = 500
 MAX_RETRIES = 5

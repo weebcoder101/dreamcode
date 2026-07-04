@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - dev
+      - main
+      - ci
   pull_request:
   workflow_dispatch:
 

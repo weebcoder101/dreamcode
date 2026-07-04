@@ -34,7 +34,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = Path.home() / ".dreamcode" / "evolution"
-
+GUARDIAN_LOG = EVOLUTION_DIR / "guardian_log.jsonl"
 
 
 # Load NEURO API config
