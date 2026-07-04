@@ -85,6 +85,7 @@ import { ensureTitle } from "./prompt-title"
 import { handleSubtask as handleSubtaskFn } from "./prompt-subtask"
 import { shellImpl as shellImplFn } from "./prompt-shell"
 import { processSensorGatePhase as processSensorGatePhaseFn } from "./prompt-sensor-gate-phase"
+import { command as commandFn } from "./prompt-command"
 import {
   ModelRef,
   PromptInput,
@@ -1157,120 +1158,21 @@ Before every response, verify your reasoning:
       const ready = yield* Latch.make()
       return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready) as unknown as Effect.Effect<SessionV1.WithParts, never>, ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
     })
-    const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
-      yield* Effect.logInfo("command", {
-        "session.id": input.sessionID,
-        command: input.command,
-        agent: input.agent,
-      })
-      const cmd = yield* commands.get(input.command)
-      if (!cmd) {
-        const available = (yield* commands.list()).map((c) => c.name)
-        const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
-        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
-        throw error
-      }
-      const agentName = cmd.agent ?? input.agent
-      const raw = input.arguments.match(argsRegex) ?? []
-      const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
-      const templateCommand = yield* Effect.promise(async () => cmd.template)
-      const placeholders = templateCommand.match(placeholderRegex) ?? []
-      let last = 0
-      for (const item of placeholders) {
-        const value = Number(item.slice(1))
-        if (value > last) last = value
-      }
-      const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
-        const position = Number(index)
-        const argIndex = position - 1
-        if (argIndex >= args.length) return ""
-        if (position === last) return args.slice(argIndex).join(" ")
-        return args[argIndex]
-      })
-      const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
-      let template = withArgs.replaceAll("$ARGUMENTS", input.arguments)
-      if (placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()) {
-        template = template + "\n\n" + input.arguments
-      }
-      const shellMatches = ConfigMarkdown.shell(template)
-      if (shellMatches.length > 0) {
-        const cfg = yield* config.get()
-        const sh = Shell.preferred(cfg.shell)
-        const results = yield* Effect.promise(() =>
-          Promise.all(
-            shellMatches.map(async ([, cmd]) => (await Process.text([cmd], { shell: sh, nothrow: true })).text),
-          ),
-        )
-        let index = 0
-        template = template.replace(bashRegex, () => results[index++])
-      }
-      template = template.trim()
-      const taskModel = yield* Effect.gen(function* () {
-        if (cmd.model) return Provider.parseModel(cmd.model)
-        if (cmd.agent) {
-          const cmdAgent = yield* agents.get(cmd.agent)
-          if (cmdAgent?.model) return cmdAgent.model
-        }
-        if (input.model) return Provider.parseModel(input.model)
-        return yield* currentModel(input.sessionID)
-      })
-      yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
-      const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
-      if (!agent) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
-        throw error
-      }
-      const templateParts = yield* resolvePromptParts(template)
-      const inputFiles = new Set(
-        input.parts?.filter((part) => new URL(part.url).protocol === "file:").map((part) => fileURLToPath(part.url)),
-      )
-      const uniqueTemplateParts = templateParts.filter(
-        (part) => part.type !== "file" || !inputFiles.has(fileURLToPath(part.url)),
-      )
-      const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
-      const parts = isSubtask
-        ? [
-            {
-              type: "subtask" as const,
-              agent: agent.name,
-              description: cmd.description ?? "",
-              command: input.command,
-              model: { providerID: taskModel.providerID, modelID: taskModel.modelID },
-              prompt: templateParts.find((y) => y.type === "text")?.text ?? "",
-            },
-          ]
-        : [...uniqueTemplateParts, ...(input.parts ?? [])]
-      const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultInfo()).name) : agent.name
-      const userModel = isSubtask
-        ? input.model
-          ? Provider.parseModel(input.model)
-          : yield* currentModel(input.sessionID)
-        : taskModel
-      yield* plugin.trigger(
-        "command.execute.before",
-        { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
-        { parts },
-      )
-      const result = yield* prompt({
-        sessionID: input.sessionID,
-        messageID: input.messageID,
-        model: userModel,
-        agent: userAgent,
-        parts,
-        variant: input.variant,
-      })
-      yield* dieSyncError(events.publish(Command.Event.Executed, {
-        name: input.command,
-        sessionID: input.sessionID,
-        arguments: input.arguments,
-        messageID: result.info.id,
-      }))
-      return result
-    })
+    const command = (input: CommandInput): Effect.Effect<SessionV1.WithParts, Image.Error> =>
+      commandFn({
+        ...input,
+        sessions,
+        agents,
+        commands,
+        config,
+        plugin,
+        events,
+        provider,
+        getModel,
+        currentModel,
+        resolvePromptParts,
+        prompt,
+      }) as unknown as Effect.Effect<SessionV1.WithParts, Image.Error>
     return Service.of({
       cancel,
       prompt,
