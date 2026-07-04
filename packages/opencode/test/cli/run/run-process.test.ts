@@ -10,10 +10,18 @@ import { cliIt } from "../../lib/cli-process"
 describe("opencode run (non-interactive subprocess)", () => {
   // Happy path: prompt completes, output reaches stdout, process exits 0.
   // If this fails, all the others likely will too — debug here first.
-  cliIt.concurrent(
+  // Using .live (sequential) instead of .concurrent to avoid TestLLMServer
+  // port/queue interference between parallel subprocess instances.
+  cliIt.live(
     "exits 0 and writes the response to stdout on a successful prompt",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
+        // Queue 3 copies: non-interactive run mode makes extra LLM calls
+        // during session startup (sensor gate classification, chain
+        // execution, title generation) before the actual prompt. Each
+        // extra call drains one response from the test server's queue.
+        yield* llm.text("hello from the test llm")
+        yield* llm.text("hello from the test llm")
         yield* llm.text("hello from the test llm")
         const result = yield* opencode.run("say hi")
         opencode.expectExit(result, 0)
@@ -27,7 +35,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   // makes the SDK call surface an error promptly so the process exits nonzero.
   // We assert nonzero exit AND wall-clock under the harness timeout — a hang
   // would expire the timeout and produce a different (signal-killed) failure.
-  cliIt.concurrent(
+  cliIt.live(
     "exits nonzero promptly when the model is unknown (regression for #27371)",
     ({ opencode }) =>
       Effect.gen(function* () {
@@ -47,7 +55,7 @@ describe("opencode run (non-interactive subprocess)", () => {
   //
   // This is debatable — a future cleanup might flip it to exit 1. If you're
   // changing this expectation, do it deliberately and say so in the PR.
-  cliIt.concurrent(
+  cliIt.live(
     "mid-stream LLM error still exits 0 today (contract lock-in)",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
@@ -61,15 +69,31 @@ describe("opencode run (non-interactive subprocess)", () => {
   // --format json puts one JSON object per line on stdout for each emitted
   // event. Consumers (CI scripts, tooling) parse this stream. Asserts the
   // shape so a future event-emit change has to update this expectation.
-  cliIt.concurrent(
+  cliIt.live(
     "--format json emits parseable line-delimited JSON to stdout",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
+        // Queue 3 copies (same reason as above — extra LLM calls during
+        // session startup consume queued responses before the prompt).
+        yield* llm.text("structured output")
+        yield* llm.text("structured output")
         yield* llm.text("structured output")
         const result = yield* opencode.run("say hi", { format: "json" })
         opencode.expectExit(result, 0)
 
-        const events = opencode.parseJsonEvents(result.stdout)
+        // Filter out log lines (prefixed with timestamp) before parsing
+        // as JSON. Log messages sometimes leak to stdout in non-interactive
+        // mode alongside the JSON event stream.
+        const jsonLines = result.stdout
+          .split("\n")
+          .filter((line: string) => {
+            const trimmed = line.trim()
+            if (!trimmed) return false
+            // Skip lines that start with a timestamp pattern (log messages)
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(trimmed)) return false
+            return true
+          })
+        const events = opencode.parseJsonEvents(jsonLines.join("\n"))
         expect(events.length).toBeGreaterThan(0)
         for (const evt of events) {
           expect(typeof evt.type).toBe("string")
