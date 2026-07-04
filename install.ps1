@@ -61,8 +61,8 @@ if (-not $BuildFromSource) {
     $tag = $release.tag_name
     Write-Color "Latest release: $tag" $MUTED
   } catch {
-    Write-Color "WARN: Could not fetch latest release. Using v1.3.5." $ORANGE
-    $tag = "v1.3.5"
+    Write-Color "WARN: Could not fetch latest release. Using v1.3.6." $ORANGE
+    $tag = "v1.3.6"
   }
 
   # Find the windows-x64 asset (build system produces .zip for Windows)

@@ -71,10 +71,10 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 20
-        # Scope to opencode#test only — `bun turbo test` runs ALL workspace
+        # Scope to dreamcode#test only — `bun turbo test` runs ALL workspace
         # test tasks including sub-packages that require native compilation
         # (node-gyp, VS Build Tools) and fail on Windows.
-        run: bun turbo opencode#test --output-logs=errors-only --log-order=grouped --log-prefix=task
+        run: bun turbo dreamcode#test --output-logs=errors-only --log-order=grouped --log-prefix=task
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
