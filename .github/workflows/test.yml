@@ -71,10 +71,19 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 20
-        # Scope to dreamcode#test only — `bun turbo test` runs ALL workspace
-        # test tasks including sub-packages that require native compilation
-        # (node-gyp, VS Build Tools) and fail on Windows.
-        run: bun turbo dreamcode#test --output-logs=errors-only --log-order=grouped --log-prefix=task
+        # Scope to dreamcode#test:unit only — excludes integration tests
+        # (test/cli/run/, test/cli/serve/, test/cli/smokes/) that spawn real
+        # subprocesses and use sequential execution with 60s per-test timeouts.
+        # Those run separately in the integration step below.
+        # No ^build dependency — tests run from TypeScript source directly.
+        run: bun turbo dreamcode#test:unit --output-logs=errors-only --log-order=grouped --log-prefix=task
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
+
+      - name: Run integration tests
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        run: bun turbo dreamcode#test:integration --output-logs=errors-only --log-order=grouped --log-prefix=task
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 

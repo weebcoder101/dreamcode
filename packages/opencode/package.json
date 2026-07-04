@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.3.6",
+  "version": "1.3.test",
   "name": "dreamcode",
   "type": "module",
   "license": "MIT",
@@ -9,6 +9,7 @@
     "typecheck": "tsgo --noEmit",
     "test": "bun test --timeout 30000",
     "test:failures": "bun test --timeout 30000 --only-failures",
+    "test:unit": "bun test --timeout 30000 --path-ignore-patterns '*/cli/run/*' --path-ignore-patterns '*/cli/serve/*' --path-ignore-patterns '*/cli/smokes/*'",
     "test:integration": "bun test --timeout 30000 --preload ./test/preload.ts test/cli/smokes/ test/cli/run/ test/cli/serve/",
     "test:httpapi": "bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode auth --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode effect --fail-on-missing --fail-on-skip",
     "bench:test": "bun run script/bench-test-suite.ts",
