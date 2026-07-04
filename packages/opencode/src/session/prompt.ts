@@ -312,7 +312,7 @@ export const layer = Layer.effect(
                   msgs: any[]; system: string[]; model: any; ctx: any;
                   handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
                   sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
-                  sensorGateFiredMap: Map<SessionID, boolean>; personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
+                  personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
                   chainExecutor: any;
                 }) {
                   return yield* processSensorGatePhaseFn({ ...input, sys })
@@ -356,7 +356,7 @@ Before every response, verify your reasoning:
         let synthesisText: string | undefined
         let prevUserMessageID: string | undefined
         let titleGenerated = false
-        let sensorGateFired = sensorGateFiredMap.get(sessionID) ?? false
+
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
         while (true) {
           synthesisText = undefined
@@ -568,16 +568,10 @@ Before every response, verify your reasoning:
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
-            // Runs classification + skill chain selection on every user message.
+            // Runs classification + skill chain selection on EVERY user message.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
-            // Also skip when the agent itself is a subagent (mode === "subagent").
             // Skip after synthesis — synthesis should NOT auto-spawn subagents.
-            // Reload sensorGateFired from map on every iteration — the map
-            // is updated by processSensorGatePhase and subsequent user messages
-            // should NOT re-fire the gate for the same session. Capturing it
-            // once before the while(true) loop would cause stale reads.
-            const currentSensorGateFired = sensorGateFiredMap.get(sessionID) ?? false
-            if (step === 1 && !session.parentID && !currentSensorGateFired) {
+            if (!session.parentID) {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
@@ -592,21 +586,11 @@ Before every response, verify your reasoning:
                 (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
               ) ?? false
               // Skip sensor gate for slash commands — commands handle their own flow.
-              // Without this, `/research` triggers persona spawning before the command runs.
               const isSlashCommand = userText.trim().startsWith("/")
-               // Skip sensor gate if session already has active subagents running.
-                // Prevents duplicate spawns when user sends follow-up messages (e.g. "alive?")
-                // while personas are still processing. BUT always allow at step 1 — the
-                // session is busy because the initial system prompt is loading, but the
-                // gate must fire before the main response.
-                let isSessionBusy = false
-                if (step !== 1) {
-                  const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
-                  isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
-                } else {
-                  yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=1 bypassed isSessionBusy check — gate must fire before main response`)
-                }
-              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} sensorGateFired=${currentSensorGateFired} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy}`)
+              // Skip sensor gate if session has active subagents running.
+              const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
+              const isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy}`)
               if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>
@@ -619,8 +603,7 @@ Before every response, verify your reasoning:
                     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
                     handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
-                    sensorGateFiredMap, personaRoundMap, spawnHistory, compaction,
-                    chainExecutor,
+                    personaRoundMap, spawnHistory, compaction, chainExecutor,
                   })
                   synthesisText = sgpResult.synthesisText
                 }

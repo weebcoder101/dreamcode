@@ -3,12 +3,18 @@
 ## Persona System
 
 ### Configuration
-- `MAX_PERSONA_ROUNDS = 3` (prompt.ts) - Maximum rounds of specialist analysis
 - `RATE_MAX_SPAWNS = 5` — Max persona spawns per 5-minute rolling window
 - `RATE_WINDOW_MS = 5 * 60 * 1000` — 5-minute rate limit window
-- `personaRoundMap` tracks rounds per session
-- `sensorGateFiredMap` persists across messages
+- `personaRoundMap` tracks spawn rounds per session
 - `spawnHistory` tracks spawn timestamps for rolling-window rate limiting
+
+### Per-Message Sensor Gate
+- The sensor gate fires on **every user message** in root sessions (not subagents)
+- `sensorGate.classify()` is called each time — evaluates if specialists are needed
+- Simple messages (high confidence, low risk, single domain) → agent handles directly
+- Complex messages (multi-domain, high-risk, chain tasks) → specialists spawned
+- Gate is **not consumed** — each new message gets a fresh classification
+- Guards prevent re-firing: synthesis responses, slash commands, busy sessions
 
 ### Spawn Necessity Evaluation
 - `evaluateSpawnNecessity()` in sensor-gate.ts checks BEFORE spawning:

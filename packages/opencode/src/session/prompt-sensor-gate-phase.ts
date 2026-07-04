@@ -16,20 +16,18 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
   msgs: any[]; system: string[]; model: any; ctx: any;
   handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
   sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
-  sensorGateFiredMap: Map<SessionID, boolean>; personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
+  personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
   chainExecutor: any; sys: any;
 }) {
   const {
     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
     handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
-    sensorGateFiredMap, personaRoundMap, spawnHistory, compaction, chainExecutor, sys,
+    personaRoundMap, spawnHistory, compaction, chainExecutor, sys,
   } = input
 
   yield* Effect.logWarning(`[SENSOR-GATE-DIAG] processSensorGatePhase entered gateResult.chain=${gateResult?.chain?.length ?? 0} personas=${gateResult?.personas?.length ?? 0} mode=${gateResult?.mode ?? "N/A"} explicitUserCount=${explicitSpawnCount}`)
 
-  // ─── Mark sensor gate fired ───────────────────────────
-  sensorGateFiredMap.set(sessionID, true)
   const currentRound = (personaRoundMap.get(sessionID) ?? 0)
 
   // ─── Skill Chain Execution ──────────────────────────────
