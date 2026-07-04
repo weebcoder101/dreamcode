@@ -81,6 +81,9 @@ import {
   injectSkillLoadingGap,
   injectSkillChainObligation,
 } from "./prompt-utils"
+import { ensureTitle } from "./prompt-title"
+import { handleSubtask as handleSubtaskFn } from "./prompt-subtask"
+import { shellImpl as shellImplFn } from "./prompt-shell"
 import {
   ModelRef,
   PromptInput,
@@ -208,56 +211,7 @@ export const layer = Layer.effect(
       providerID: ProviderV2.ID
       modelID: ModelV2.ID
     }) {
-      if (input.session.parentID) return
-      if (!Session.isDefaultTitle(input.session.title)) return
-      const real = (m: SessionV1.WithParts) =>
-        m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic)
-      const idx = input.history.findIndex(real)
-      if (idx === -1) return
-      if (input.history.filter(real).length !== 1) return
-      const context = input.history.slice(0, idx + 1)
-      const firstUser = context[idx]
-      if (!firstUser || firstUser.info.role !== "user") return
-      const firstInfo = firstUser.info
-      const subtasks = firstUser.parts.filter((p): p is SessionV1.SubtaskPart => p.type === "subtask")
-      const onlySubtasks = subtasks.length > 0 && firstUser.parts.every((p) => p.type === "subtask")
-      const ag = yield* agents.get("title")
-      if (!ag) return
-      const mdl = ag.model
-        ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
-        : ((yield* provider.getSmallModel(input.providerID)) ??
-          (yield* provider.getModel(input.providerID, input.modelID)))
-      const msgs = onlySubtasks
-        ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
-        : yield* MessageV2.toModelMessagesEffect(context, mdl)
-      const text = yield* llm
-        .stream({
-          agent: ag,
-          user: firstInfo,
-          system: [],
-          small: true,
-          tools: {},
-          model: mdl,
-          sessionID: input.session.id,
-          retries: 2,
-          messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
-        })
-        .pipe(
-          Stream.filter(LLMEvent.is.textDelta),
-          Stream.map((e) => e.text),
-          Stream.mkString,
-          Effect.orDie,
-        )
-      const cleaned = text
-        .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
-        .split("\n")
-        .map((line) => line.trim())
-        .find((line) => line.length > 0)
-      if (!cleaned) return
-      const t = cleaned.length > 100 ? cleaned.substring(0, 97) + "..." : cleaned
-      yield* sessions
-        .setTitle({ sessionID: input.session.id, title: t })
-        .pipe(Effect.catchCause((cause) => Effect.logError("failed to generate title", { error: Cause.squash(cause) })))
+      return yield* ensureTitle({ ...input, agents, provider, llm, sessions })
     })
     const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
       task: SessionV1.SubtaskPart
@@ -267,360 +221,31 @@ export const layer = Layer.effect(
       session: Session.Info
       msgs: SessionV1.WithParts[]
     }) {
-      const { task, model, lastUser, sessionID, session, msgs } = input
-      const ctx = yield* InstanceState.context
-      const promptOps = yield* ops()
-      const { task: taskTool } = yield* registry.named()
-      const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
-      const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
-        id: MessageID.ascending(),
-        role: "assistant",
-        parentID: lastUser.id,
-        sessionID,
-        mode: task.agent,
-        agent: task.agent,
-        variant: lastUser.model.variant,
-        path: { cwd: ctx.directory, root: ctx.worktree },
-        cost: 0,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        modelID: taskModel.id,
-        providerID: taskModel.providerID,
-        time: { created: Date.now() },
+      return yield* handleSubtaskFn({
+        ...input,
+        sessions,
+        agents,
+        plugin,
+        permission,
+        registry,
+        events,
+        ops,
+        getModel,
       })
-      let part: SessionV1.ToolPart = yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: assistantMessage.id,
-        sessionID: assistantMessage.sessionID,
-        type: "tool",
-        callID: ulid(),
-        tool: TaskTool.id,
-        state: {
-          status: "running",
-          input: {
-            prompt: task.prompt,
-            description: task.description,
-            subagent_type: task.agent,
-            command: task.command,
-          },
-          time: { start: Date.now() },
-        },
-      })
-      const taskArgs = {
-        prompt: task.prompt,
-        description: task.description,
-        subagent_type: task.agent,
-        command: task.command,
-      }
-      yield* plugin.trigger(
-        "tool.execute.before",
-        { tool: TaskTool.id, sessionID, callID: part.id },
-        { args: taskArgs },
-      )
-      const taskAgent = yield* agents.get(task.agent)
-      if (!taskAgent) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
-        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: error.toObject() }))
-        throw error
-      }
-      let error: Error | undefined
-      const taskAbort = new AbortController()
-      const result = yield* taskTool
-        .execute(taskArgs, {
-          agent: task.agent,
-          messageID: assistantMessage.id,
-          sessionID,
-          abort: taskAbort.signal,
-          callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
-          messages: msgs,
-          metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
-            Effect.gen(function* () {
-              part = yield* sessions.updatePart({
-                ...part,
-                type: "tool",
-                state: { ...part.state, ...val },
-              } satisfies SessionV1.ToolPart)
-            }),
-          ask: (req: any) =>
-            permission
-              .ask({
-                ...req,
-                sessionID,
-                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
-              })
-              .pipe(Effect.orDie),
-        })
-        .pipe(
-          Effect.catchCause((cause) => {
-            const defect = Cause.squash(cause)
-            error = defect instanceof Error ? defect : new Error(String(defect))
-            return Effect.logError("subtask execution failed", {
-              error,
-              agent: task.agent,
-              description: task.description,
-            })
-          }),
-          Effect.onInterrupt(() =>
-            Effect.gen(function* () {
-              taskAbort.abort()
-              assistantMessage.finish = "tool-calls"
-              assistantMessage.time.completed = Date.now()
-              yield* sessions.updateMessage(assistantMessage)
-              if (part.state.status === "running") {
-                yield* sessions.updatePart({
-                  ...part,
-                  state: {
-                    status: "error",
-                    error: "Cancelled",
-                    time: { start: part.state.time.start, end: Date.now() },
-                    metadata: part.state.metadata,
-                    input: part.state.input,
-                  },
-                } satisfies SessionV1.ToolPart)
-              }
-            }),
-          ),
-        )
-      const attachments = result?.attachments?.map((attachment) => ({
-        ...attachment,
-        id: PartID.ascending(),
-        sessionID,
-        messageID: assistantMessage.id,
-      }))
-      yield* plugin.trigger(
-        "tool.execute.after",
-        { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
-        result,
-      )
-      yield* sessions.updateMessage(assistantMessage)
-      // ── Subagent Cost Propagation ───────────────────────────────────
-      // Two channels, no double-counting:
-      // 1. Step-finish part  → projector's applyUsage  → session.cost (DB)
-      // 2. msg.cost update   → TUI totalCost display   → msg.cost (UI)
-      // The projector only reacts to PartUpdated (step-finish), never to
-      // MessageUpdated. So updating assistantMessage.cost is safe and
-      // necessary — without it, the web app's totalCost sum misses all
-      // subagent spend.
-      // (normalizeTokens is defined at module scope, shared with processSensorGatePhase)
-      const subagentCost_ = Number((result as any)?.subagentCost)
-      const subagentTokens_ = (result as any)?.subagentTokens
-      if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
-        yield* sessions.updatePart({
-          id: PartID.ascending(),
-          messageID: assistantMessage.id,
-          sessionID: assistantMessage.sessionID,
-          type: "step-finish",
-          reason: "completed",
-          cost: subagentCost_,
-          tokens: normalizeTokens(subagentTokens_),
-        } satisfies SessionV1.StepFinishPart)
-        // Also update msg.cost so the TUI's totalCost sum sees it
-        yield* sessions.updateMessage({
-          ...assistantMessage,
-          cost: (assistantMessage.cost ?? 0) + subagentCost_,
-        })
-      }
-      if (result && part.state.status === "running") {
-        yield* sessions.updatePart({
-          ...part,
-          state: {
-            status: "completed",
-            input: part.state.input,
-            title: result.title,
-            metadata: result.metadata,
-            output: result.output,
-            attachments,
-            time: { ...part.state.time, end: Date.now() },
-          },
-        } satisfies SessionV1.ToolPart)
-      }
-      if (!result) {
-        yield* sessions.updatePart({
-          ...part,
-          state: {
-            status: "error",
-            error: error ? `Tool execution failed: ${error.message}` : "Tool execution failed",
-            time: {
-              start: part.state.status === "running" ? part.state.time.start : Date.now(),
-              end: Date.now(),
-            },
-            metadata: part.state.status === "pending" ? undefined : part.state.metadata,
-            input: part.state.input,
-          },
-        } satisfies SessionV1.ToolPart)
-      }
-      if (!task.command) return
-      const summaryUserMsg: SessionV1.User = {
-        id: MessageID.ascending(),
-        sessionID,
-        role: "user",
-        time: { created: Date.now() },
-        agent: lastUser.agent,
-        model: lastUser.model,
-      }
-      yield* sessions.updateMessage(summaryUserMsg)
-      yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: summaryUserMsg.id,
-        sessionID,
-        type: "text",
-        text: "Summarize the task tool output above and continue with your task.",
-        synthetic: true,
-      } satisfies SessionV1.TextPart)
     })
     const shellImpl = Effect.fn("SessionPrompt.shellImpl")(function* (input: ShellInput, ready?: Latch.Latch) {
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const markReady = ready ? ready.open.pipe(Effect.asVoid) : Effect.void
-          const { msg, part, cwd } = yield* Effect.gen(function* () {
-            const ctx = yield* InstanceState.context
-            const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-            if (session.revert) {
-              yield* revert.cleanup(session)
-            }
-            const agent = yield* agents.get(input.agent)
-            if (!agent) {
-              const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-              const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-              const error = new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
-              yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
-              throw error
-            }
-            const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
-            const userMsg: SessionV1.User = {
-              id: input.messageID ?? MessageID.ascending(),
-              sessionID: input.sessionID,
-              time: { created: Date.now() },
-              role: "user",
-              agent: input.agent,
-              model: { providerID: model.providerID, modelID: model.modelID },
-            }
-            yield* sessions.updateMessage(userMsg)
-            const userPart: SessionV1.Part = {
-              type: "text",
-              id: PartID.ascending(),
-              messageID: userMsg.id,
-              sessionID: input.sessionID,
-              text: "The following tool was executed by the user",
-              synthetic: true,
-            }
-            yield* sessions.updatePart(userPart)
-            const msg: SessionV1.Assistant = {
-              id: MessageID.ascending(),
-              sessionID: input.sessionID,
-              parentID: userMsg.id,
-              mode: input.agent,
-              agent: input.agent,
-              cost: 0,
-              path: { cwd: ctx.directory, root: ctx.worktree },
-              time: { created: Date.now() },
-              role: "assistant",
-              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-              modelID: model.modelID,
-              providerID: model.providerID,
-            }
-            yield* sessions.updateMessage(msg)
-            const started = Date.now()
-            const part: SessionV1.ToolPart = {
-              type: "tool",
-              id: PartID.ascending(),
-              messageID: msg.id,
-              sessionID: input.sessionID,
-              tool: ShellID.ToolID,
-              callID: ulid(),
-              state: {
-                status: "running",
-                time: { start: started },
-                input: { command: input.command },
-              },
-            }
-            yield* sessions.updatePart(part)
-            if (flags.experimentalEventSystem) {
-              yield* dieSyncError(events.publish(SessionEvent.Shell.Started, {
-                sessionID: input.sessionID,
-                messageID: SessionMessage.ID.create(),
-                timestamp: DateTime.makeUnsafe(started),
-                callID: part.callID,
-                command: input.command,
-              }))
-            }
-            return { msg, part, cwd: ctx.directory }
-          }).pipe(Effect.ensuring(markReady))
-          const cfg = yield* config.get()
-          const sh = Shell.preferred(cfg.shell)
-          const args = Shell.args(sh, input.command, cwd)
-          let output = ""
-          let aborted = false
-          const finish = Effect.uninterruptible(
-            Effect.gen(function* () {
-              if (aborted) {
-                output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
-              }
-              const completed = Date.now()
-              if (flags.experimentalEventSystem) {
-                yield* dieSyncError(events.publish(SessionEvent.Shell.Ended, {
-                  sessionID: input.sessionID,
-                  timestamp: DateTime.makeUnsafe(completed),
-                  callID: part.callID,
-                  output,
-                }))
-              }
-              if (!msg.time.completed) {
-                msg.time.completed = completed
-                yield* sessions.updateMessage(msg)
-              }
-              if (part.state.status === "running") {
-                part.state = {
-                  status: "completed",
-                  time: { ...part.state.time, end: completed },
-                  input: part.state.input,
-                  title: "",
-                  metadata: { output, description: "" },
-                  output,
-                }
-                yield* sessions.updatePart(part)
-              }
-            }),
-          )
-          const exit = yield* restore(
-            Effect.gen(function* () {
-              const shellEnv = yield* plugin.trigger(
-                "shell.env",
-                { cwd, sessionID: input.sessionID, callID: part.callID },
-                { env: {} },
-              )
-              const cmd = ChildProcess.make(sh, args, {
-                cwd,
-                extendEnv: true,
-                env: { ...shellEnv.env, TERM: "dumb" },
-                stdin: "ignore",
-                forceKillAfter: "3 seconds",
-              })
-              const handle = yield* spawner.spawn(cmd)
-              yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
-                Effect.gen(function* () {
-                  output += chunk
-                  if (part.state.status === "running") {
-                    part.state.metadata = { output, description: "" }
-                    yield* sessions.updatePart(part)
-                  }
-                }),
-              )
-              yield* handle.exitCode
-            }).pipe(Effect.scoped, Effect.orDie),
-          ).pipe(Effect.exit)
-          if (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause) && !Cause.hasDies(exit.cause)) {
-            aborted = true
-          }
-          yield* finish
-          if (Exit.isFailure(exit) && !aborted && !Cause.hasInterruptsOnly(exit.cause)) {
-            return yield* Effect.failCause(exit.cause)
-          }
-          return { info: msg, parts: [part] }
-        }),
-      )
+      return yield* shellImplFn({
+        ...input,
+        sessions,
+        agents,
+        config,
+        plugin,
+        spawner,
+        flags,
+        revert,
+        events,
+        currentModel,
+      }, ready)
     })
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
       providerID: ProviderV2.ID,
@@ -1943,7 +1568,7 @@ Before every response, verify your reasoning:
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
-      return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
+      return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready) as unknown as Effect.Effect<SessionV1.WithParts, never>, ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
     })
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       yield* Effect.logInfo("command", {
