@@ -91,24 +91,66 @@ function* injectChainGapDetection(
   }
 }
 
+/**
+ * Scan conversation history for completed `skill` tool calls and
+ * the `[SKILLS LOADED]` acknowledgment token.
+ */
+function scanForSkillToolCalls(msgs: any[]): { loaded: Set<string>; acknowledged: boolean } {
+  const loaded = new Set<string>()
+  let acknowledged = false
+  for (const msg of msgs) {
+    if (msg.info.role !== "assistant") continue
+    for (const part of msg.parts) {
+      if (part.type === "tool" && part.tool === "skill" && part.state.status === "completed") {
+        loaded.add(part.state.input.name ?? "")
+      }
+      if (part.type === "text" && part.text?.includes("[SKILLS LOADED]")) {
+        acknowledged = true
+      }
+    }
+  }
+  return { loaded, acknowledged }
+}
+
+/**
+ * Return the list of chain skills that have NOT been loaded via the `skill` tool
+ * in the given message history.
+ */
+function getUnloadedChainSkills(gateResult: any, msgs: any[]): string[] {
+  const { loaded } = scanForSkillToolCalls(msgs)
+  return gateResult.chain.filter((name: string) => !loaded.has(name))
+}
+
+/**
+ * Build a hard-block assistant message that tells the LLM to load skills.
+ * Used by the pre-turn enforcement gate to skip the LLM turn.
+ */
+function buildUnloadedChainBlockMessage(unloaded: string[]): string {
+  return [
+    `<hard-block>`,
+    `⚠️ Skill Loading Enforced: ${unloaded.length} chain skill(s) must be loaded before proceeding.`,
+    ``,
+    `The sensor gate's skill chain requires these skills to be loaded via the \`skill\` tool:`,
+    ...unloaded.map((s) => `  - \`skill\` name="${sanitizeForSystemPrompt(s)}"`),
+    ``,
+    `Call the \`skill\` tool for EACH skill above NOW.`,
+    `Do NOT attempt any other work until ALL are loaded.`,
+    `After every skill is loaded, acknowledge with: [SKILLS LOADED]`,
+    `</hard-block>`,
+  ].join("\n")
+}
+
 function injectSkillLoadingGap(
   system: string[],
   gateResult: any,
   msgs: any[],
 ): void {
-  const skillToolCalls = new Set<string>()
-  for (const msg of msgs) {
-    if (msg.info.role !== "assistant") continue
-    for (const part of msg.parts) {
-      if (part.type !== "tool") continue
-      if (part.tool !== "skill") continue
-      if (part.state.status === "completed") {
-        skillToolCalls.add(part.state.input.name ?? "")
-      }
-    }
-  }
-  const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
-  if (unloadedChainSkills.length > 0) {
+  const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
+  const unloadedChainSkills = gateResult.chain.filter((name: string) => !loaded.has(name))
+  // If the agent has already acknowledged [SKILLS LOADED] but some skills
+  // are still missing from tool calls, trust the acknowledgment — the agent
+  // may have loaded them in a prior turn's tool call batch.
+  if (unloadedChainSkills.length > 0 && !acknowledged) {
     system.push(
       `\n<skill-loading-gap mode="blocking">CRITICAL: The following required chain skills were NOT loaded via the \`skill\` tool: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
       `You CANNOT proceed with the user's request until EVERY chain skill is loaded. ` +
@@ -163,4 +205,7 @@ export {
   injectChainGapDetection,
   injectSkillLoadingGap,
   injectSkillChainObligation,
+  getUnloadedChainSkills,
+  buildUnloadedChainBlockMessage,
+  scanForSkillToolCalls,
 }

@@ -80,6 +80,9 @@ import {
   injectChainGapDetection,
   injectSkillLoadingGap,
   injectSkillChainObligation,
+  getUnloadedChainSkills,
+  buildUnloadedChainBlockMessage,
+  scanForSkillToolCalls,
 } from "./prompt-utils"
 import { ensureTitle } from "./prompt-title"
 import { handleSubtask as handleSubtaskFn } from "./prompt-subtask"
@@ -634,9 +637,36 @@ Before every response, verify your reasoning:
                 injectSkillChainObligation(system, storedGate, storedScripts, storedContent)
               }
             }
+            // ─── Pre-Turn Hard Block: unloaded chain skills ──────────
+            // If the sensor gate produced a skill chain and the agent has
+            // NOT yet loaded all skills via the `skill` tool, inject a
+            // hard-block assistant message and skip the LLM turn. The
+            // agent MUST call the `skill` tool before the LLM runs.
+            // Note: must be a boolean flag, NOT `continue` — we're inside
+            // an inner function* and cannot use loop-control statements.
+            let preTurnBlocked = false
+            const skillEnforcerGate = storedGateResultMap.get(sessionID)
+            if (skillEnforcerGate && skillEnforcerGate.chain.length > 0) {
+              const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
+              const unloaded = skillEnforcerGate.chain.filter((name: string) => !loaded.has(name))
+              if (unloaded.length > 0 && !acknowledged) {
+                yield* Effect.logWarning(`[SKILL-ENFORCER] Pre-turn block: ${unloaded.length} unloaded chain skills: ${unloaded.join(", ")}`)
+                modelMsgs.push({
+                  role: "assistant" as const,
+                  content: buildUnloadedChainBlockMessage(unloaded),
+                })
+                preTurnBlocked = true
+              }
+            }
             const extraMsgs = synthesisText
               ? [{ role: "user" as const, content: synthesisText }]
               : []
+            // When the pre-turn skill enforcer blocked this turn, skip the
+            // LLM call entirely. The hard-block assistant message was already
+            // injected above — the agent must load skills before the next turn.
+            if (preTurnBlocked) {
+              return "continue" as const
+            }
             // Task tool is ALWAYS available. Cost control is handled by the
             // rolling-window rate limiter (5 spawns/5 min) + sensor gate's
             // evaluateSpawnNecessity().
@@ -686,6 +716,22 @@ Before every response, verify your reasoning:
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
+              }
+            }
+            // ─── Post-Turn Skill Loading Validation ───────────────────
+            // After the LLM responds, check if chain skills were loaded
+            // in the current turn. If the agent finished without loading
+            // them, log a warning for diagnostics.
+            if (storedGateResultMap.has(sessionID)) {
+              const storedGate = storedGateResultMap.get(sessionID)!
+              if (storedGate.chain.length > 0 && handle.message.finish !== "tool-calls") {
+                const { loaded } = scanForSkillToolCalls(msgs)
+                const unloaded = storedGate.chain.filter((name: string) => !loaded.has(name))
+                if (unloaded.length > 0) {
+                  yield* Effect.logWarning(
+                    `[SKILL-ENFORCER] Post-turn: agent finished without loading ${unloaded.length} chain skills: ${unloaded.join(", ")}`
+                  )
+                }
               }
             }
             if (result === "stop") return "break" as const

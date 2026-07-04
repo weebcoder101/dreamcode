@@ -3,7 +3,7 @@ import { SensorGate, evaluateSpawnNecessity, type Persona } from "@/skill/sensor
 import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
 import * as PersonaTracker from "./persona-tracker"
 import { extractSubagentContext, buildSubagentContextPrompt } from "./subagent-context"
-import { sanitizeForSystemPrompt, normalizeTokens, injectChainGapDetection, injectSkillLoadingGap, injectSkillChainObligation } from "./prompt-utils"
+import { sanitizeForSystemPrompt, normalizeTokens, injectChainGapDetection, injectSkillLoadingGap, injectSkillChainObligation, buildUnloadedChainBlockMessage } from "./prompt-utils"
 import { storedGateResultMap, storedScriptResultsMap, storedContentResultsMap, checkRateLimit, recordSpawn, RATE_MAX_SPAWNS } from "./prompt-state"
 import { recordTaste } from "./prompt-taste"
 import { debugLog } from "@/skill/python-resolver"
@@ -263,6 +263,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
     }
 
     const subagentCtx = extractSubagentContext(msgs)
+    subagentCtx.requiredSkillChain = gateResult?.chain ?? []
     const contextBlock = buildSubagentContextPrompt(subagentCtx)
 
     const tracker = yield* PersonaTracker.create(sessionID, personaTeam.length)
@@ -275,6 +276,25 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
           ? "\nOther specialist agents are analyzing related aspects. Do NOT duplicate work.\n"
           : ""
 
+        const chainObligation = (gateResult?.chain?.length > 0)
+          ? [
+              "",
+              "## Required Skill Chain (Parent Sensor Gate)",
+              "The parent session's sensor gate requires these chain skills. You MUST load",
+              "each one via the `skill` tool before starting your analysis:",
+              ...gateResult.chain.map((s: string) =>
+                `- \`skill\` name="${sanitizeForSystemPrompt(s)}" — MUST load via tool`
+              ),
+              "",
+              "Rules:",
+              "  1. Call the `skill` tool for EACH skill listed above",
+              "  2. Follow each skill's workflow instructions after loading",
+              "  3. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
+              "  4. FAILURE to load all chain skills will produce INCOMPLETE results",
+              "",
+            ].join("\n")
+          : ""
+
         const personaPrompt = [
           "## Output Requirements",
           "Provide your findings as a STRUCTURED ANALYSIS with:",
@@ -284,6 +304,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
           "4. **Confidence**: High/Medium/Low for each finding",
           "",
           "Be CONCISE. Focus on ACTIONABLE items only.",
+          chainObligation,
           otherCtx,
           "## Synthesis Guide",
           persona.synthesisGuide,
