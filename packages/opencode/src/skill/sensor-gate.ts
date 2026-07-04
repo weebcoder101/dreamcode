@@ -961,10 +961,10 @@ export const layer = Layer.effect(
         const directory = ctx.directory
         const resolveSkillsDirResult = resolveSkillsDir()
         const sensorGateScript = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
-        yield* Effect.logWarning(`[SENSOR-GATE-DIAG] classify called directory=${directory} promptLen=${prompt.length} resolveSkillsDir=${resolveSkillsDirResult} sensorGateScript=${sensorGateScript ?? "NULL"} python=${resolvePythonCommand()}`)
+        yield* Effect.logDebug(`[SENSOR-GATE-DIAG] classify called directory=${directory} promptLen=${prompt.length} resolveSkillsDir=${resolveSkillsDirResult} sensorGateScript=${sensorGateScript ?? "NULL"} python=${resolvePythonCommand()}`)
 
         const result = yield* runSensorGateEffect(prompt, directory)
-        yield* Effect.logWarning(`[SENSOR-GATE-DIAG] classify result=${result ? "OK" : "NULL"} personas=${result?.personas?.length ?? 0} mode=${result?.mode ?? "N/A"} domain_tags=${(result?.domain_tags ?? []).join(",")}`)
+        yield* Effect.logDebug(`[SENSOR-GATE-DIAG] classify result=${result ? "OK" : "NULL"} personas=${result?.personas?.length ?? 0} mode=${result?.mode ?? "N/A"} domain_tags=${(result?.domain_tags ?? []).join(",")}`)
         if (!result) return null
 
         // Generate personas from TypeScript when Python script doesn't output them

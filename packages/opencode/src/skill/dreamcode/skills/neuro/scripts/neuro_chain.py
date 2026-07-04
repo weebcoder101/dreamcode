@@ -40,10 +40,18 @@ ITERATION_FOCUS = {
 
 def run_harness(task: str, files: list[str], phase: str, context: str = "",
                 max_tokens: int = 8192) -> dict:
-    """Run the neuro harness once and return parsed result."""
+    """Run the neuro harness once and return parsed result.
+    Uses --task-file to avoid leaking prompt in process listings.
+    """
+    import tempfile, atexit, os
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, prefix="neuro_task_")
+    tmp.write(task)
+    tmp.close()
+    atexit.register(lambda: os.unlink(tmp.name) if os.path.exists(tmp.name) else None)
+
     cmd = [
         sys.executable, str(NEUROHarness),
-        "--task", task,
+        "--task-file", tmp.name,
         "--phase", phase,
         "--max-tokens", str(max_tokens),
     ]

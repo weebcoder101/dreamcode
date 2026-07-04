@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync } from "fs"
+import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename } from "path"
 import { homedir } from "os"
 
@@ -114,7 +114,7 @@ function detectCodebase(projectRoot: string): CodebaseProfile {
 export function refreshProfile(projectRoot: string) {
   const profile = detectCodebase(projectRoot)
   ensureDir()
-  try { appendFileSync(PROFILE_FILE, JSON.stringify(profile)) } catch { }
+  try { writeFileSync(PROFILE_FILE, JSON.stringify(profile)) } catch { }
   return profile
 }
 
