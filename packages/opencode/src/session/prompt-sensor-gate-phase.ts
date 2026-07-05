@@ -229,6 +229,14 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
       parentID: lastUserMsg?.info?.id,
       sessionID,
       mode: "tool_call",
+      // CRITICAL: finish MUST be set so the prompt runner's loop break
+      // check can succeed. The loop at prompt.ts evaluates
+      // `lastAssistant?.finish && ...` — without this field, the persona
+      // message has the highest ID (monotonic ascending) and becomes
+      // `lastAssistant`, but finish is undefined, so the condition is
+      // ALWAYS false and the loop NEVER breaks → infinite turns.
+      // See prompt.ts lines 388-406 for the loop-termination guard.
+      finish: "tool-calls",
       agent: "general",
       variant: lastUser?.model?.variant,
       path: { cwd: ctx.directory, root: ctx.worktree },
@@ -433,10 +441,34 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
 
     synthesisText = PersonaTracker.buildSynthesisPrompt(allResults)
 
-    yield* Effect.tryPromise({
-      try: () => PersonaTracker.injectSynthesis(sessionID, allResults, sessions, model.providerID, model.id),
-      catch: (e) => Effect.logWarning("injectSynthesis failed", { error: e }),
-    })
+    // FIX: Use Effect-based synthesis injection instead of async+Effect.runPromise.
+    // The old approach via PersonaTracker.injectSynthesis() used Effect.runPromise
+    // internally which could fail silently when lacking service context.
+    // By running the injection directly in the generator context, all services
+    // (Database, EventV2, etc.) are properly provided.
+    const synthesisMessage: any = {
+      id: MessageID.ascending(),
+      sessionID,
+      role: "user",
+      agent: "general",
+      model: {
+        providerID: model.providerID,
+        modelID: model.id,
+        variant: undefined,
+      },
+      time: { created: Date.now() },
+    }
+    yield* sessions.updateMessage(synthesisMessage)
+
+    const synthesisPart: any = {
+      id: PartID.ascending(),
+      messageID: synthesisMessage.id,
+      sessionID,
+      type: "text",
+      text: synthesisText,
+      synthetic: true,
+    }
+    yield* sessions.updatePart(synthesisPart)
   }
 
   return {
