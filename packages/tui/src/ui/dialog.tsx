@@ -118,9 +118,11 @@ function init() {
         desc: "Close dialog",
         group: "Dialog",
         cmd: () => {
-          if (renderer.getSelection()) {
-            renderer.clearSelection()
-          }
+          // hasTextSelection detects stale selections (object exists but
+          // all referenced nodes are destroyed), clears them internally,
+          // and returns false. If a VALID text selection exists, return
+          // early so the user can press escape again to dismiss.
+          if (hasTextSelection(renderer)) return
           const current = store.stack.at(-1)
           current?.onClose?.()
           setStore("stack", store.stack.slice(0, -1))
@@ -132,9 +134,7 @@ function init() {
         desc: "Close dialog",
         group: "Dialog",
         cmd: () => {
-          if (renderer.getSelection()) {
-            renderer.clearSelection()
-          }
+          if (hasTextSelection(renderer)) return
           const current = store.stack.at(-1)
           current?.onClose?.()
           setStore("stack", store.stack.slice(0, -1))
