@@ -386,14 +386,13 @@ export const layer = Layer.effect(
       if (globalHasSkills) return
 
       // Find best source: prefers directories that actually have SKILL.md files
+      // Package source is canonical (43 skills); .dreamcode/skills is stale (39 skills)
+      const pkgDir = path.join(global.home, "dreamcode", "packages", "opencode", "src", "skill", "dreamcode", "skills")
       const candidates = [
+        { dir: pkgDir, name: "package" },
         { dir: installSkillsDir, name: "install" },
         { dir: repoSkillsDir, name: "repo" },
       ]
-
-      // Also try the package source as fallback
-      const pkgDir = path.join(global.home, "dreamcode", "packages", "opencode", "src", "skill", "dreamcode", "skills")
-      candidates.push({ dir: pkgDir, name: "package" })
 
       let source: string | undefined
       for (const c of candidates) {
