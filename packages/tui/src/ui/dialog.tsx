@@ -29,19 +29,17 @@ export function Dialog(
     <box
       onMouseDown={() => {
         dismiss = !!renderer.getSelection()
+        // If the selection references only destroyed renderables (stale),
+        // getSelectedText() returns "". Clear it immediately so dismiss
+        // can proceed in a single click.
+        if (dismiss && !renderer.getSelection()?.getSelectedText()) {
+          renderer.clearSelection()
+          dismiss = false
+        }
       }}
       onMouseUp={(e: { stopPropagation(): void }) => {
         e.stopPropagation()
         if (dismiss) {
-          // Stale selection (from destroyed dialog content) makes dismiss
-          // truthy on every click, permanently trapping the dialog open.
-          // Clear the selection so the next click can dismiss normally.
-          const sel = renderer.getSelection()
-          const text = sel?.getSelectedText()
-          if (text) {
-            const len = text.length
-            console.error("[dialog] dismiss blocked by selection=" + len + "ch (stale? " + (sel ? "sel exists" : "null") + ")")
-          }
           renderer.clearSelection()
           dismiss = false
           return
