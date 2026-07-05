@@ -30,7 +30,8 @@ export function Dialog(
       onMouseDown={() => {
         dismiss = !!renderer.getSelection()
       }}
-      onMouseUp={() => {
+      onMouseUp={(e: { stopPropagation(): void }) => {
+        e.stopPropagation()
         if (dismiss) {
           dismiss = false
           return
@@ -145,6 +146,12 @@ function init() {
       if (clearing) return
       clearing = true
       try {
+        // Clear any stale selection first — destroyed dialog nodes leave the
+        // Selection object with references to dead renderables, whose
+        // getSelectedText() still returns cached text. This permanently blocks
+        // the InlineToolRow guard (session/index.tsx:1903) on every future
+        // mouse interaction until another selection event clears it naturally.
+        renderer.clearSelection()
         for (const item of store.stack) {
           if (item.onClose) item.onClose()
         }
@@ -158,6 +165,9 @@ function init() {
       }
     },
     replace(input: any, onClose?: () => void) {
+      // Clear selection before replacing — old dialog content is destroyed
+      // and any selection referencing it would become stale.
+      renderer.clearSelection()
       if (store.stack.length === 0) {
         focus = renderer.currentFocusedRenderable
         focus?.blur()
@@ -226,7 +236,11 @@ export function DialogProvider(props: ParentProps) {
           evt.preventDefault()
           evt.stopPropagation()
         }}
-        onMouseUp={!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? copySelection : undefined}
+        onMouseUp={!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? () => {
+          // Skip copy selection while dialog is clearing or already gone
+          if (value.clearing || value.stack.length === 0) return
+          copySelection()
+        } : undefined}
       >
         <Show when={value.stack.length}>
           <Dialog onClose={() => value.clear()} size={value.size}>
