@@ -701,9 +701,14 @@ export function snapshotSelectedSubagentData(
   data: SubagentData,
   selectedSessionID: string | undefined,
 ): FooterSubagentState {
-  const detail = selectedSessionID ? data.details.get(selectedSessionID) : undefined
+  // Always include ALL details so reconcile doesn't annihilate data for
+  // completed subagents when the user switches back to composer.
+  const details: FooterSubagentState["details"] = {}
+  for (const [sessionID, detail] of data.details) {
+    details[sessionID] = snapshotDetail(detail)
+  }
 
-  return snapshotState(data, detail ? { [detail.sessionID]: snapshotDetail(detail) } : {})
+  return snapshotState(data, details)
 }
 
 export function bootstrapSubagentData(input: BootstrapSubagentInput) {

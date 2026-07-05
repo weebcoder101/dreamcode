@@ -226,47 +226,54 @@ export function resolveSavedSubagentModel(): RunInput["model"] | undefined {
   }
 }
 
+// ─── model.json serialized write queue ──────────────────────────────────
+// All writers go through a single serialized queue to prevent TOCTOU races
+// between the four independent write paths (see AGENTS.md for full analysis).
+const modelWriteQueue: Array<() => Promise<void>> = []
+let modelWriteDraining = false
+
+function enqueueModelWrite(fn: () => Promise<void>): void {
+  modelWriteQueue.push(fn)
+  if (modelWriteDraining) return
+  modelWriteDraining = true
+  void (async () => {
+    while (modelWriteQueue.length > 0) {
+      const next = modelWriteQueue.shift()!
+      try { await next() } catch { /* swallow per-write failures */ }
+    }
+    modelWriteDraining = false
+  })()
+}
+
 export function saveSubagentModel(model: NonNullable<RunInput["model"]>): void {
-  try {
+  enqueueModelWrite(async () => {
     let data: ModelState = {}
     try {
-      const raw = fs.readFileSync(MODEL_FILE, "utf-8")
+      const raw = await fs.promises.readFile(MODEL_FILE, "utf-8")
       data = state(JSON.parse(raw))
-    } catch {
-      // start fresh
-    }
+    } catch { /* start fresh */ }
+    data.subagentModel = { providerID: model.providerID, modelID: model.modelID }
     const dir = path.dirname(MODEL_FILE)
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true })
-    }
-    // Atomic write: write to tmp, then rename
+    if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }) }
     const tmp = MODEL_FILE + ".tmp"
-    fs.writeFileSync(tmp, JSON.stringify({ ...data, subagentModel: { providerID: model.providerID, modelID: model.modelID } }, null, 2))
-    fs.renameSync(tmp, MODEL_FILE)
-  } catch {
-    console.warn("Failed to save subagent model")
-  }
+    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2))
+    await fs.promises.rename(tmp, MODEL_FILE)
+  })
 }
 
 export function clearSubagentModel(): void {
-  try {
+  enqueueModelWrite(async () => {
     let data: ModelState = {}
     try {
-      const raw = fs.readFileSync(MODEL_FILE, "utf-8")
+      const raw = await fs.promises.readFile(MODEL_FILE, "utf-8")
       data = state(JSON.parse(raw))
-    } catch {
-      return // nothing to clear
-    }
-    if (!data.subagentModel) return // already cleared
+    } catch { return }
+    if (!data.subagentModel) return
     delete data.subagentModel
     const dir = path.dirname(MODEL_FILE)
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true })
-    }
+    if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }) }
     const tmp = MODEL_FILE + ".tmp"
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
-    fs.renameSync(tmp, MODEL_FILE)
-  } catch {
-    console.warn("Failed to clear subagent model")
-  }
+    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2))
+    await fs.promises.rename(tmp, MODEL_FILE)
+  })
 }

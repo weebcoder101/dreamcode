@@ -126,10 +126,13 @@ export function handleSelectionKey(
     return
   }
 
+  // Do NOT clear selection on arbitrary keypresses — doing so on Linux
+  // breaks terminal-native mouse selection (primary buffer copy). The
+  // stale-selection defense is handled by hasTextSelection() /
+  // clearStaleSelection() at mouse-event boundaries and by the dialog
+  // Esc handler.
   const focus = renderer.currentFocusedRenderable
   if (focus?.hasSelection() && selection.selectedRenderables.includes(focus)) return
-
-  renderer.clearSelection()
 }
 
 export * as Selection from "./selection"

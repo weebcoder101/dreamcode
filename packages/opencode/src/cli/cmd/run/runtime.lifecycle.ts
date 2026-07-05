@@ -185,7 +185,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       stdin: source.stdin,
       targetFps: 30,
       maxFps: 60,
-      useMouse: false,
+      // Enable SGR mouse mode for subagent tab clicking, model selection, etc.
+      // On Linux terminals, hold Shift while dragging to select/copy text.
+      useMouse: true,
       autoFocus: false,
       openConsoleOnError: false,
       exitOnCtrlC: false,

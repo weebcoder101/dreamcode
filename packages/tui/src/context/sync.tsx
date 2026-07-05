@@ -390,10 +390,30 @@ export const {
         }
 
         case "message.part.delta": {
-          const parts = store.part[event.properties.messageID]
-          if (!parts) break
+          let parts = store.part[event.properties.messageID]
+          if (!parts) {
+            // Delta arrived before part.updated — create a stub part so the
+            // delta text isn't permanently lost. A subsequent part.updated
+            // will reconcile over this stub via reconcile() in the
+            // message.part.updated handler below.
+            const stub: Part = {
+              id: event.properties.partID,
+              messageID: event.properties.messageID,
+              type: "text",
+              sessionID: event.properties.sessionID,
+              text: "",
+            } as Part
+            setStore("part", event.properties.messageID, [stub])
+            parts = store.part[event.properties.messageID]
+          }
           const result = search(parts, event.properties.partID, (p) => p.id)
-          if (!result.found) break
+          if (!result.found) {
+            // Race: part still not in store even after creating stub.
+            // This can happen if store mutation is still propagating.
+            // The delta is lost in this edge case but the server fetch
+            // in session.sync() will recover the final text.
+            break
+          }
           touchPart(event.properties.sessionID, event.properties.partID)
           setStore(
             "part",
@@ -617,7 +637,14 @@ export const {
                   const currentParts = draft.part[message.info.id] ?? []
                   const parts = message.parts.flatMap((part) => {
                     const current = currentParts.find((item) => item.id === part.id)
-                    if (tracker.parts.has(part.id)) return current ? [current] : []
+                    if (tracker.parts.has(part.id)) {
+                      // Part was touched by a delta/update event during sync.
+                      // If we have a current version, prefer it (more up-to-date).
+                      // If we DON'T have a current version (part.delta arrived
+                      // before part.updated, race in the delta handler), use
+                      // the server version instead of dropping the part.
+                      return current ? [current] : [part]
+                    }
                     if (
                       current &&
                       (part.type === "text" || part.type === "reasoning") &&

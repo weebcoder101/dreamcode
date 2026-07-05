@@ -453,6 +453,7 @@ function createLayer(input: StreamInput) {
         }
         let booting = true
         let replaying = false
+        let draining = false
         let replayDisabled = false
         let replayPending: SessionResizeReplayInput | undefined
         const buffered: Event[] = []
@@ -951,6 +952,7 @@ function createLayer(input: StreamInput) {
         })
 
         const drainBuffered = Effect.fn("RunStreamTransport.drainBuffered")(function* () {
+          draining = true
           let pending = buffered.splice(0)
           while (pending.length > 0) {
             const next: Event[] = []
@@ -968,11 +970,13 @@ function createLayer(input: StreamInput) {
             const arrived = buffered.splice(0)
             if (!changed && arrived.length === 0) {
               buffered.push(...next)
+              draining = false
               return
             }
 
             pending = [...next, ...arrived]
           }
+          draining = false
         })
 
         const replayOnResize: (next: SessionResizeReplayInput) => Effect.Effect<boolean> = Effect.fn(
@@ -1148,7 +1152,7 @@ function createLayer(input: StreamInput) {
                 }
 
                 const sessionID = sid(event)
-                if (booting || replaying) {
+                if (booting || replaying || draining) {
                   if (sessionID) {
                     input.trace?.write("recv.event", event)
                     buffered.push(event)

@@ -585,13 +585,35 @@ Before every response, verify your reasoning:
                 .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
                 .map((p) => p.text)
                 .join("\n")
-              // Detect synthesis response — skip auto-spawn after synthesis
+              // Detect synthesis response — skip auto-spawn after synthesis.
+              // Check ALL user messages, not just the last one, because on
+              // subsequent prompts the synthesis from a PRIOR gate firing is
+              // deeper in the conversation but still proves the gate already
+              // ran. Without this check, every new user message re-fires the
+              // gate, creating duplicate personaAssistantMsg entries with zero
+              // tokens and corrupting the session.
+              const hasSynthesisInConversation = msgs.some(
+                (m) => m.info.role === "user" && m.parts.some(
+                  (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
+                ),
+              )
               const lastUserMsg = msgs.findLast(
                 (m) => m.info.role === "user" && m.info.id === lastUser.id,
               )
-              const isSynthesis = lastUserMsg?.parts.some(
+              const lastUserMsgIsSynthetic = lastUserMsg?.parts.some(
                 (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
               ) ?? false
+              const isSynthesis = hasSynthesisInConversation || lastUserMsgIsSynthetic
+              // Diagnostic: when synthesis is found in a PRIOR message (not the
+              // last one), log it so we can verify the cross-message scan is
+              // working and the gate is being correctly suppressed.
+              if (hasSynthesisInConversation && !lastUserMsgIsSynthetic) {
+                // This branch means the last user message is NOT synthetic but
+                // a prior one was — the exact scenario that caused the bug.
+                yield* Effect.logWarning(
+                  `[SENSOR-GATE-SKIP] Suppressed re-fire: synthesis found in PRIOR message (not last user msg) — sessionID=${sessionID}`,
+                )
+              }
               // Skip sensor gate for slash commands — commands handle their own flow.
               const isSlashCommand = userText.trim().startsWith("/")
               // Skip sensor gate if session has active subagents running.
