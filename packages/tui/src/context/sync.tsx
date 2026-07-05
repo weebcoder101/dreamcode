@@ -162,16 +162,22 @@ export const {
     event.subscribe((event, { workspace }) => {
       switch (event.type) {
         case "server.instance.disposed": {
-          // Don't re-bootstrap if any session is actively generating.
-          // server.instance.disposed fires when the server recycles an
-          // instance (config reload, cache expiry, etc.) during normal
-          // operation. Running bootstrap() replaces the entire session
-          // list via reconcile(), which can remove the active session
-          // if it hasn't been persisted yet — causing session() to
-          // return undefined and the entire UI to disappear (black screen).
+          // Don't re-bootstrap if any session is actively generating OR
+          // has content. server.instance.disposed fires when the server
+          // recycles an instance (config reload, cache expiry, etc.)
+          // during normal operation. Running bootstrap() replaces the
+          // entire session list via reconcile(), which can remove the
+          // active session if it hasn't been persisted yet — causing
+          // session() to return undefined and the entire UI to disappear
+          // (black screen). This is especially harmful when all persona
+          // subagents just completed (sessions become "idle") — the guard
+          // below must ALSO check for existing session content.
           const hasActiveGeneration = Object.values(store.session_status)
             .some((s) => s.type === "busy" || s.type === "retry")
-          if (hasActiveGeneration) break
+          // Don't replace existing session messages — prevents the active
+          // session from being reconciled out when personas complete.
+          const hasSessionMessages = Object.keys(store.message).length > 0
+          if (hasActiveGeneration || hasSessionMessages) break
           void bootstrap()
           break
         }

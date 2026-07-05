@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Ref } from "effect"
 import { SensorGate, evaluateSpawnNecessity, type Persona } from "@/skill/sensor-gate"
 import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
 import * as PersonaTracker from "./persona-tracker"
@@ -268,6 +268,12 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
 
     const tracker = yield* PersonaTracker.create(sessionID, personaTeam.length)
 
+    // Shared accumulators for concurrent-safe cost/token tracking.
+    // Each subagent writes via Ref.update (atomic); final values are
+    // written to the stored message after all personas complete.
+    const costRef = yield* Ref.make(0)
+    const tokensRef = yield* Ref.make({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+
     yield* Effect.forEach(
       personaTeam,
       Effect.fnUntraced(function* (persona: any, i: number) {
@@ -373,10 +379,22 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
                     cost: subagentCost_,
                     tokens: normalizeTokens(subagentTokens_),
                   })
-                  yield* sessions.updateMessage({
-                    ...personaAssistantMsg,
-                    cost: (personaAssistantMsg.cost ?? 0) + subagentCost_,
-                  })
+                  // Atomically accumulate cost/tokens via Ref for concurrent-safety.
+                  // Using Ref.update guarantees no lost updates when multiple
+                  // subagents complete simultaneously.
+                  yield* Ref.update(costRef, (c) => c + subagentCost_)
+                  const norm = normalizeTokens(subagentTokens_)
+                  if (norm) {
+                    yield* Ref.update(tokensRef, (t) => ({
+                      input: t.input + (norm.input ?? 0),
+                      output: t.output + (norm.output ?? 0),
+                      reasoning: t.reasoning + (norm.reasoning ?? 0),
+                      cache: {
+                        read: t.cache.read + (norm.cache?.read ?? 0),
+                        write: t.cache.write + (norm.cache?.write ?? 0),
+                      },
+                    }))
+                  }
                 }
               }),
               onFailure: (error) => {
@@ -401,6 +419,17 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
       Effect.timeout("30 seconds"),
       Effect.catch(() => tracker.getAll()),
     )
+
+    // Write accumulated cost and tokens to the persona assistant message now
+    // that all subagents have completed. This avoids the race condition of
+    // concurrent subagents overwriting each other's tokens with zero.
+    const totalCost = yield* Ref.get(costRef)
+    const totalTokens = yield* Ref.get(tokensRef)
+    yield* sessions.updateMessage({
+      ...personaAssistantMsg,
+      cost: totalCost,
+      tokens: totalTokens,
+    })
 
     synthesisText = PersonaTracker.buildSynthesisPrompt(allResults)
 
