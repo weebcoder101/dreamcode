@@ -211,13 +211,12 @@ export function resolveSkillsDir(): string {
     // Standard XDG/Unix paths
     join(HOME, ".config", "dreamcode", "skills"),
     join(HOME, ".dreamcode", "skills"),
+    // Install dir path (cloned repo at ~/.dreamcode)
+    join(HOME, ".dreamcode", ".dreamcode", "skills"),
+    join(HOME, ".dreamcode", ".opencode", "skills"),
+    // Global opencode fallbacks
     join(HOME, ".config", "opencode", "skills"),
     join(HOME, ".opencode", "skills"),
-    // Project-local paths
-    join(process.cwd(), ".dreamcode", "skills"),
-    join(process.cwd(), ".opencode", "skills"),
-    // Source tree path (for development / unbundled installs)
-    join(process.cwd(), "packages", "opencode", "src", "skill", "dreamcode", "skills"),
   ]
   for (const dir of candidates) {
     try {
@@ -245,8 +244,6 @@ export function resolveScript(relativePath: string): string | undefined {
   const skillsDir = resolveSkillsDir()
   const candidates = [
     ...(skillsDir ? [join(skillsDir, relativePath)] : []),
-    join(process.cwd(), ".dreamcode", "skills", relativePath),
-    join(process.cwd(), ".opencode", "skills", relativePath),
   ]
   for (const p of candidates) {
     try {
@@ -301,11 +298,15 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
   const skillsDir = resolveSkillsDir()
   const allowedGlobal = skillsDir ? resolve(skillsDir) : null
   const allowedHome = resolve(HOME, ".dreamcode", "skills")
-  const allowedProject = resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
+  const allowedInstall = resolve(HOME, ".dreamcode", ".dreamcode", "skills")
+  // Allow project-local skills at <cwd>/.dreamcode/skills/...
+  // (used by integration tests and project-local skill installations)
+  const allowedCwd = cwd ? resolve(cwd, ".dreamcode", "skills") : null
   return (
     (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
     isUnderPrefix(realpath, allowedHome) ||
-    isUnderPrefix(realpath, allowedProject)
+    isUnderPrefix(realpath, allowedInstall) ||
+    (allowedCwd !== null && isUnderPrefix(realpath, allowedCwd))
   )
 }
 

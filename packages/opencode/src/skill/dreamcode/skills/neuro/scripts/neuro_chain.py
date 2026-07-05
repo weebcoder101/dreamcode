@@ -40,10 +40,18 @@ ITERATION_FOCUS = {
 
 def run_harness(task: str, files: list[str], phase: str, context: str = "",
                 max_tokens: int = 8192) -> dict:
-    """Run the neuro harness once and return parsed result."""
+    """Run the neuro harness once and return parsed result.
+    Uses --task-file to avoid leaking prompt in process listings.
+    """
+    import tempfile, atexit, os
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, prefix="neuro_task_")
+    tmp.write(task)
+    tmp.close()
+    atexit.register(lambda: os.unlink(tmp.name) if os.path.exists(tmp.name) else None)
+
     cmd = [
         sys.executable, str(NEUROHarness),
-        "--task", task,
+        "--task-file", tmp.name,
         "--phase", phase,
         "--max-tokens", str(max_tokens),
     ]
@@ -158,16 +166,26 @@ def run_10_iterations(task: str, files: list[str], phase: str = "pre_patch") -> 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="NEURO 10-Iteration Chain")
-    parser.add_argument("--task", "-t", required=True, help="Task description")
+    parser.add_argument("--task", "-t", default="", help="Task description")
+    parser.add_argument("--prompt-file", default="", help="Read task from file")
     parser.add_argument("--file", "-f", action="append", default=[], help="Files to analyze")
     parser.add_argument("--phase", default="pre_patch", choices=["pre_patch", "post_patch"])
     args = parser.parse_args()
+
+    task = args.task
+    if args.prompt_file and not task:
+        with open(args.prompt_file) as f:
+            task = f.read()[:2000]
+
+    if not task:
+        print("ERROR: No task provided. Use --task or --prompt-file")
+        sys.exit(1)
 
     if not args.file:
         print("ERROR: No files provided. Use --file")
         sys.exit(1)
 
-    result = run_10_iterations(args.task, args.file, args.phase)
+    result = run_10_iterations(task, args.file, args.phase)
     print(json.dumps(result, indent=2)[:1000])
 
 

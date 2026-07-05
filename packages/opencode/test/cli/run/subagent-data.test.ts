@@ -244,6 +244,10 @@ describe("run subagent data", () => {
 
     expect(snapshot.tabs).toEqual([
       expect.objectContaining({
+        sessionID: "child-2",
+        status: "running",
+      }),
+      expect.objectContaining({
         sessionID: "child-1",
         label: "Explore",
         description: "Scan reducer paths",
@@ -255,6 +259,10 @@ describe("run subagent data", () => {
     expect(snapshot.details).toEqual({
       "child-1": {
         sessionID: "child-1",
+        commits: [],
+      },
+      "child-2": {
+        sessionID: "child-2",
         commits: [],
       },
     })

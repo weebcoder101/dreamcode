@@ -61,8 +61,8 @@ if (-not $BuildFromSource) {
     $tag = $release.tag_name
     Write-Color "Latest release: $tag" $MUTED
   } catch {
-    Write-Color "WARN: Could not fetch latest release. Using v1.3.5." $ORANGE
-    $tag = "v1.3.5"
+    Write-Color "WARN: Could not fetch latest release. Using v1.3.6." $ORANGE
+    $tag = "v1.3.6"
   }
 
   # Find the windows-x64 asset (build system produces .zip for Windows)
@@ -173,10 +173,16 @@ if ($BuildFromSource) {
   bun run build --single --skip-embed-web-ui --skip-install
 
   # Verify binary
+  # Try with .exe first (build.ts now adds it for win32), fall back to without
   $NATIVE_BIN = "dist\dreamcode-windows-x64\bin\dreamcode.exe"
+  $NATIVE_BIN_NOEXT = "dist\dreamcode-windows-x64\bin\dreamcode"
   if (-not (Test-Path $NATIVE_BIN)) {
-    Write-Color "ERROR: Build did not produce expected binary at $NATIVE_BIN" $RED
-    exit 1
+    if (Test-Path $NATIVE_BIN_NOEXT) {
+      $NATIVE_BIN = $NATIVE_BIN_NOEXT
+    } else {
+      Write-Color "ERROR: Build did not produce expected binary at $NATIVE_BIN" $RED
+      exit 1
+    }
   }
 
   # Copy binary

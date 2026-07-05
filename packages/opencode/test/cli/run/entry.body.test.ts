@@ -218,7 +218,8 @@ describe("run entry body", () => {
         }),
       ),
     ).toEqual({
-      type: "none",
+      type: "text",
+      content: "📋 Spawning: Inspect reducer",
     })
   })
 

@@ -339,12 +339,21 @@ export function RunFooterView(props: RunFooterViewProps) {
     setRoute({ type: "composer" })
   }
 
+  // Tracks the status of the currently viewed subagent tab at the time it was last
+  // opened by the user. The auto-close effect uses this to distinguish a deliberate
+  // selection of an already-completed tab from a running→completed transition that
+  // should auto-dismiss the inspector.
+  let openTabStatus: string | undefined
+
   const openTab = (sessionID: string) => {
+    const tab = tabs().find((item) => item.sessionID === sessionID)
+    openTabStatus = tab?.status
     setRoute({ type: "subagent", sessionID })
     props.onSubagentSelect?.(sessionID)
   }
 
   const closeTab = () => {
+    openTabStatus = undefined
     setRoute({ type: "composer" })
     props.onSubagentSelect?.(undefined)
   }
@@ -479,7 +488,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     if (queuedPrompts().length > 0 && queuedShortcut()) {
       items.push({ kind: "queued", key: queuedShortcut(), label: `${queue()} queued` })
     }
-    if (tabs().length > 0 && subagentShortcut()) {
+    if (tabs().length > 0 && subagentShortcut() && activeTabs().length > 0) {
       items.push({ kind: "subagents", key: subagentShortcut(), label: "subagents" })
     }
 
@@ -587,6 +596,26 @@ export function RunFooterView(props: RunFooterViewProps) {
     }
 
     closeTab()
+  })
+
+  // Auto-close subagent tab when the currently inspected subagent finishes.
+  // This returns focus to the composer so the user can type immediately
+  // without having to manually press Escape to dismiss the subagent view.
+  // Does NOT close if the user deliberately selected an already-completed tab
+  // (openTabStatus already reflects the terminal status at selection time).
+  createEffect(() => {
+    const current = route()
+    if (current.type !== "subagent") return
+    const tab = tabs().find((item) => item.sessionID === current.sessionID)
+    if (!tab) return
+    // If the tab was already in a terminal status when the user selected it,
+    // they deliberately chose to view a completed subagent — keep it open.
+    const wasTerminalOnOpen =
+      openTabStatus === "completed" || openTabStatus === "cancelled" || openTabStatus === "error"
+    if (wasTerminalOnOpen) return
+    if (tab.status === "completed" || tab.status === "cancelled" || tab.status === "error") {
+      closeTab()
+    }
   })
 
   createEffect(() => {

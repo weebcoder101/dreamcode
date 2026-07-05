@@ -72,74 +72,53 @@ import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
+import {
+  DEFAULT_KNOWLEDGE_BLOCK,
+  sanitizeForSystemPrompt,
+  normalizeTokens,
+  isOrphanedInterruptedTool,
+  injectChainGapDetection,
+  injectSkillLoadingGap,
+  injectSkillChainObligation,
+  getUnloadedChainSkills,
+  buildUnloadedChainBlockMessage,
+  scanForSkillToolCalls,
+} from "./prompt-utils"
+import { ensureTitle } from "./prompt-title"
+import { handleSubtask as handleSubtaskFn } from "./prompt-subtask"
+import { shellImpl as shellImplFn } from "./prompt-shell"
+import { processSensorGatePhase as processSensorGatePhaseFn } from "./prompt-sensor-gate-phase"
+import { command as commandFn } from "./prompt-command"
+import { createUserMessage as createUserMessageFn } from "./prompt-user-message"
+import {
+  ModelRef,
+  PromptInput,
+  LoopInput,
+  ShellInput,
+  CommandInput,
+  createStructuredOutputTool,
+  bashRegex,
+  argsRegex,
+  placeholderRegex,
+  quoteTrimRegex,
+  STRUCTURED_OUTPUT_SYSTEM_PROMPT,
+} from "./prompt-schemas"
+import {
+  storedGateResultMap,
+  storedScriptResultsMap,
+  storedContentResultsMap,
+  sensorGateFiredMap,
+  personaRoundMap,
+  spawnHistory,
+  checkRateLimit,
+  recordSpawn,
+  parseExplicitSpawnCount,
+  RATE_MAX_SPAWNS,
+} from "./prompt-state"
+import { summarizeTaste, refreshProfile } from "./prompt-taste"
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
-const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
-IMPORTANT:
-- You MUST call this tool exactly once at the end of your response
-- The input must be valid JSON matching the required schema
-- Complete all necessary research and tool calls BEFORE calling this tool
-- This tool provides your final answer - no further actions are taken after calling it`
-const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
-// Default knowledge block returned when Pieces LTM is unreachable.
-// Ensures the <learned-knowledge> system prompt section is ALWAYS
-// present so the KV prefix cache doesn't miss on block absence.
-const DEFAULT_KNOWLEDGE_BLOCK = `<learned-knowledge>
-Cross-session Effect v4 API rules (persistent across sessions):
-- Effect.catchAll does NOT exist in Effect v4 beta — use Effect.catch instead
-- Effect.fork and Effect.forkDaemon do NOT exist in Effect v4 — use Effect.forkIn(scope)
-- Effect.catch catches all errors including defects; use Effect.catchTag for tagged errors
-- Use Effect.gen(function* () { ... }) for composition
-- Use Effect.fn('Domain.method') for named/traced effects
-- Use Schema.Class for multi-field data; Schema.TaggedErrorClass for typed errors
-- Use Bun.spawn() wrapped in Effect.tryPromise for subprocesses in compiled binaries
-- Use Layer.mock(Service, { method1, method2 }) for test stubs
-</learned-knowledge>`
-function sanitizeForSystemPrompt(text: string): string {
-  // Strip ALL closing tags (</tag>) and self-closing tags (<tag/>) before
-  // HTML/XML escaping to prevent prompt injection via fake system tags.
-  // An allowlist approach is used: the system only injects opening tags with
-  // content (e.g. <chain-enforcement>...</chain-enforcement>), so stripping
-  // closing/self-closing tags prevents attackers from closing system blocks
-  // or injecting fake blocks — without needing a blocklist that goes stale.
-  // Order: escape metacharacters FIRST so any remaining angle brackets are
-  // harmless HTML entities. The tag stripping after is defensive (already
-  // escaped). Also strip opening tags that look like known system blocks
-  // by catching <tag-name...> patterns.
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/<[a-zA-Z][^>]*\/>/g, "")      // self-closing tags (defensive, already escaped)
-    .replace(/<\/[a-zA-Z][^>]*>/g, "")       // closing tags (defensive, already escaped)
-    .replace(/<[a-zA-Z][^>]*>/g, "")         // opening tags that survived escaping
-}
-/**
- * Normalize raw subtask cost tokens from TaskTool result into the
- * StepFinishPart schema shape. Extracted to module scope because it's
- * used both in handleSubtask (cost propagation) and processSensorGatePhase
- * (persona cost attribution).
- */
-function normalizeTokens(t: Record<string, unknown> | undefined): SessionV1.StepFinishPart["tokens"] {
-  const cache = t?.cache as Record<string, unknown> | undefined
-  return {
-    input: (t?.input as number) ?? 0,
-    output: (t?.output as number) ?? 0,
-    reasoning: (t?.reasoning as number) ?? 0,
-    cache: {
-      read: (cache?.read as number) ?? 0,
-      write: (cache?.write as number) ?? 0,
-    },
-  }
-}
-
-function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
-  // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
-  // They are not pending work and must not trigger an assistant-prefill request.
-  return part.state.status === "error" && part.state.metadata?.interrupted === true
-}
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -200,39 +179,6 @@ export const layer = Layer.effect(
       spawnHistory.delete(sessionID)
       yield* state.cancel(sessionID)
     })
-    const sensorGateFiredMap = new Map<SessionID, boolean>()
-    const personaRoundMap = new Map<SessionID, number>()
-    // ─── Rolling-Window Rate Limiter ─────────────────────────────────
-    // Max 5 persona spawns per 5-minute window per session.
-    // This is the SOLE cost-control mechanism. The task tool is always
-    // available — the sensor gate's evaluateSpawnNecessity() decides
-    // when actually to use it.
-    // Prevents compute cost explosion from rapid-fire specialist requests.
-    const RATE_WINDOW_MS = 5 * 60 * 1000 // 5 minutes
-    const RATE_MAX_SPAWNS = 5
-    const spawnHistory = new Map<SessionID, Array<{ timestamp: number; count: number }>>()
-    function checkRateLimit(sessionID: SessionID): { allowed: boolean; remaining: number; resetMs: number } {
-      const now = Date.now()
-      const history = spawnHistory.get(sessionID) ?? []
-      const valid = history.filter((e) => now - e.timestamp < RATE_WINDOW_MS)
-      spawnHistory.set(sessionID, valid)
-      const totalSpawns = valid.reduce((sum, e) => sum + e.count, 0)
-      if (totalSpawns >= RATE_MAX_SPAWNS) {
-        const oldestInWindow = valid[0]
-        const resetMs = oldestInWindow ? RATE_WINDOW_MS - (now - oldestInWindow.timestamp) : RATE_WINDOW_MS
-        return { allowed: false, remaining: 0, resetMs }
-      }
-      return { allowed: true, remaining: RATE_MAX_SPAWNS - totalSpawns, resetMs: RATE_WINDOW_MS }
-    }
-    function recordSpawn(sessionID: SessionID, count: number) {
-      const history = spawnHistory.get(sessionID) ?? []
-      history.push({ timestamp: Date.now(), count })
-      spawnHistory.set(sessionID, history)
-    }
-    function parseExplicitSpawnCount(text: string): number {
-      const match = text.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
-      return match ? Math.min(parseInt(match[1], 10), RATE_MAX_SPAWNS) : 0
-    }
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
       const parts: Types.DeepMutable<PromptInput["parts"]> = [{ type: "text", text: template }]
@@ -272,56 +218,7 @@ export const layer = Layer.effect(
       providerID: ProviderV2.ID
       modelID: ModelV2.ID
     }) {
-      if (input.session.parentID) return
-      if (!Session.isDefaultTitle(input.session.title)) return
-      const real = (m: SessionV1.WithParts) =>
-        m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic)
-      const idx = input.history.findIndex(real)
-      if (idx === -1) return
-      if (input.history.filter(real).length !== 1) return
-      const context = input.history.slice(0, idx + 1)
-      const firstUser = context[idx]
-      if (!firstUser || firstUser.info.role !== "user") return
-      const firstInfo = firstUser.info
-      const subtasks = firstUser.parts.filter((p): p is SessionV1.SubtaskPart => p.type === "subtask")
-      const onlySubtasks = subtasks.length > 0 && firstUser.parts.every((p) => p.type === "subtask")
-      const ag = yield* agents.get("title")
-      if (!ag) return
-      const mdl = ag.model
-        ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
-        : ((yield* provider.getSmallModel(input.providerID)) ??
-          (yield* provider.getModel(input.providerID, input.modelID)))
-      const msgs = onlySubtasks
-        ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
-        : yield* MessageV2.toModelMessagesEffect(context, mdl)
-      const text = yield* llm
-        .stream({
-          agent: ag,
-          user: firstInfo,
-          system: [],
-          small: true,
-          tools: {},
-          model: mdl,
-          sessionID: input.session.id,
-          retries: 2,
-          messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
-        })
-        .pipe(
-          Stream.filter(LLMEvent.is.textDelta),
-          Stream.map((e) => e.text),
-          Stream.mkString,
-          Effect.orDie,
-        )
-      const cleaned = text
-        .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
-        .split("\n")
-        .map((line) => line.trim())
-        .find((line) => line.length > 0)
-      if (!cleaned) return
-      const t = cleaned.length > 100 ? cleaned.substring(0, 97) + "..." : cleaned
-      yield* sessions
-        .setTitle({ sessionID: input.session.id, title: t })
-        .pipe(Effect.catchCause((cause) => Effect.logError("failed to generate title", { error: Cause.squash(cause) })))
+      return yield* ensureTitle({ ...input, agents, provider, llm, sessions })
     })
     const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
       task: SessionV1.SubtaskPart
@@ -331,360 +228,31 @@ export const layer = Layer.effect(
       session: Session.Info
       msgs: SessionV1.WithParts[]
     }) {
-      const { task, model, lastUser, sessionID, session, msgs } = input
-      const ctx = yield* InstanceState.context
-      const promptOps = yield* ops()
-      const { task: taskTool } = yield* registry.named()
-      const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
-      const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
-        id: MessageID.ascending(),
-        role: "assistant",
-        parentID: lastUser.id,
-        sessionID,
-        mode: task.agent,
-        agent: task.agent,
-        variant: lastUser.model.variant,
-        path: { cwd: ctx.directory, root: ctx.worktree },
-        cost: 0,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        modelID: taskModel.id,
-        providerID: taskModel.providerID,
-        time: { created: Date.now() },
+      return yield* handleSubtaskFn({
+        ...input,
+        sessions,
+        agents,
+        plugin,
+        permission,
+        registry,
+        events,
+        ops,
+        getModel,
       })
-      let part: SessionV1.ToolPart = yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: assistantMessage.id,
-        sessionID: assistantMessage.sessionID,
-        type: "tool",
-        callID: ulid(),
-        tool: TaskTool.id,
-        state: {
-          status: "running",
-          input: {
-            prompt: task.prompt,
-            description: task.description,
-            subagent_type: task.agent,
-            command: task.command,
-          },
-          time: { start: Date.now() },
-        },
-      })
-      const taskArgs = {
-        prompt: task.prompt,
-        description: task.description,
-        subagent_type: task.agent,
-        command: task.command,
-      }
-      yield* plugin.trigger(
-        "tool.execute.before",
-        { tool: TaskTool.id, sessionID, callID: part.id },
-        { args: taskArgs },
-      )
-      const taskAgent = yield* agents.get(task.agent)
-      if (!taskAgent) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
-        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID, error: error.toObject() }))
-        throw error
-      }
-      let error: Error | undefined
-      const taskAbort = new AbortController()
-      const result = yield* taskTool
-        .execute(taskArgs, {
-          agent: task.agent,
-          messageID: assistantMessage.id,
-          sessionID,
-          abort: taskAbort.signal,
-          callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
-          messages: msgs,
-          metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
-            Effect.gen(function* () {
-              part = yield* sessions.updatePart({
-                ...part,
-                type: "tool",
-                state: { ...part.state, ...val },
-              } satisfies SessionV1.ToolPart)
-            }),
-          ask: (req: any) =>
-            permission
-              .ask({
-                ...req,
-                sessionID,
-                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
-              })
-              .pipe(Effect.orDie),
-        })
-        .pipe(
-          Effect.catchCause((cause) => {
-            const defect = Cause.squash(cause)
-            error = defect instanceof Error ? defect : new Error(String(defect))
-            return Effect.logError("subtask execution failed", {
-              error,
-              agent: task.agent,
-              description: task.description,
-            })
-          }),
-          Effect.onInterrupt(() =>
-            Effect.gen(function* () {
-              taskAbort.abort()
-              assistantMessage.finish = "tool-calls"
-              assistantMessage.time.completed = Date.now()
-              yield* sessions.updateMessage(assistantMessage)
-              if (part.state.status === "running") {
-                yield* sessions.updatePart({
-                  ...part,
-                  state: {
-                    status: "error",
-                    error: "Cancelled",
-                    time: { start: part.state.time.start, end: Date.now() },
-                    metadata: part.state.metadata,
-                    input: part.state.input,
-                  },
-                } satisfies SessionV1.ToolPart)
-              }
-            }),
-          ),
-        )
-      const attachments = result?.attachments?.map((attachment) => ({
-        ...attachment,
-        id: PartID.ascending(),
-        sessionID,
-        messageID: assistantMessage.id,
-      }))
-      yield* plugin.trigger(
-        "tool.execute.after",
-        { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
-        result,
-      )
-      yield* sessions.updateMessage(assistantMessage)
-      // ── Subagent Cost Propagation ───────────────────────────────────
-      // Two channels, no double-counting:
-      // 1. Step-finish part  → projector's applyUsage  → session.cost (DB)
-      // 2. msg.cost update   → TUI totalCost display   → msg.cost (UI)
-      // The projector only reacts to PartUpdated (step-finish), never to
-      // MessageUpdated. So updating assistantMessage.cost is safe and
-      // necessary — without it, the web app's totalCost sum misses all
-      // subagent spend.
-      // (normalizeTokens is defined at module scope, shared with processSensorGatePhase)
-      const subagentCost_ = Number((result as any)?.subagentCost)
-      const subagentTokens_ = (result as any)?.subagentTokens
-      if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
-        yield* sessions.updatePart({
-          id: PartID.ascending(),
-          messageID: assistantMessage.id,
-          sessionID: assistantMessage.sessionID,
-          type: "step-finish",
-          reason: "completed",
-          cost: subagentCost_,
-          tokens: normalizeTokens(subagentTokens_),
-        } satisfies SessionV1.StepFinishPart)
-        // Also update msg.cost so the TUI's totalCost sum sees it
-        yield* sessions.updateMessage({
-          ...assistantMessage,
-          cost: (assistantMessage.cost ?? 0) + subagentCost_,
-        })
-      }
-      if (result && part.state.status === "running") {
-        yield* sessions.updatePart({
-          ...part,
-          state: {
-            status: "completed",
-            input: part.state.input,
-            title: result.title,
-            metadata: result.metadata,
-            output: result.output,
-            attachments,
-            time: { ...part.state.time, end: Date.now() },
-          },
-        } satisfies SessionV1.ToolPart)
-      }
-      if (!result) {
-        yield* sessions.updatePart({
-          ...part,
-          state: {
-            status: "error",
-            error: error ? `Tool execution failed: ${error.message}` : "Tool execution failed",
-            time: {
-              start: part.state.status === "running" ? part.state.time.start : Date.now(),
-              end: Date.now(),
-            },
-            metadata: part.state.status === "pending" ? undefined : part.state.metadata,
-            input: part.state.input,
-          },
-        } satisfies SessionV1.ToolPart)
-      }
-      if (!task.command) return
-      const summaryUserMsg: SessionV1.User = {
-        id: MessageID.ascending(),
-        sessionID,
-        role: "user",
-        time: { created: Date.now() },
-        agent: lastUser.agent,
-        model: lastUser.model,
-      }
-      yield* sessions.updateMessage(summaryUserMsg)
-      yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: summaryUserMsg.id,
-        sessionID,
-        type: "text",
-        text: "Summarize the task tool output above and continue with your task.",
-        synthetic: true,
-      } satisfies SessionV1.TextPart)
     })
     const shellImpl = Effect.fn("SessionPrompt.shellImpl")(function* (input: ShellInput, ready?: Latch.Latch) {
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const markReady = ready ? ready.open.pipe(Effect.asVoid) : Effect.void
-          const { msg, part, cwd } = yield* Effect.gen(function* () {
-            const ctx = yield* InstanceState.context
-            const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-            if (session.revert) {
-              yield* revert.cleanup(session)
-            }
-            const agent = yield* agents.get(input.agent)
-            if (!agent) {
-              const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-              const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-              const error = new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
-              yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
-              throw error
-            }
-            const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
-            const userMsg: SessionV1.User = {
-              id: input.messageID ?? MessageID.ascending(),
-              sessionID: input.sessionID,
-              time: { created: Date.now() },
-              role: "user",
-              agent: input.agent,
-              model: { providerID: model.providerID, modelID: model.modelID },
-            }
-            yield* sessions.updateMessage(userMsg)
-            const userPart: SessionV1.Part = {
-              type: "text",
-              id: PartID.ascending(),
-              messageID: userMsg.id,
-              sessionID: input.sessionID,
-              text: "The following tool was executed by the user",
-              synthetic: true,
-            }
-            yield* sessions.updatePart(userPart)
-            const msg: SessionV1.Assistant = {
-              id: MessageID.ascending(),
-              sessionID: input.sessionID,
-              parentID: userMsg.id,
-              mode: input.agent,
-              agent: input.agent,
-              cost: 0,
-              path: { cwd: ctx.directory, root: ctx.worktree },
-              time: { created: Date.now() },
-              role: "assistant",
-              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-              modelID: model.modelID,
-              providerID: model.providerID,
-            }
-            yield* sessions.updateMessage(msg)
-            const started = Date.now()
-            const part: SessionV1.ToolPart = {
-              type: "tool",
-              id: PartID.ascending(),
-              messageID: msg.id,
-              sessionID: input.sessionID,
-              tool: ShellID.ToolID,
-              callID: ulid(),
-              state: {
-                status: "running",
-                time: { start: started },
-                input: { command: input.command },
-              },
-            }
-            yield* sessions.updatePart(part)
-            if (flags.experimentalEventSystem) {
-              yield* dieSyncError(events.publish(SessionEvent.Shell.Started, {
-                sessionID: input.sessionID,
-                messageID: SessionMessage.ID.create(),
-                timestamp: DateTime.makeUnsafe(started),
-                callID: part.callID,
-                command: input.command,
-              }))
-            }
-            return { msg, part, cwd: ctx.directory }
-          }).pipe(Effect.ensuring(markReady))
-          const cfg = yield* config.get()
-          const sh = Shell.preferred(cfg.shell)
-          const args = Shell.args(sh, input.command, cwd)
-          let output = ""
-          let aborted = false
-          const finish = Effect.uninterruptible(
-            Effect.gen(function* () {
-              if (aborted) {
-                output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
-              }
-              const completed = Date.now()
-              if (flags.experimentalEventSystem) {
-                yield* dieSyncError(events.publish(SessionEvent.Shell.Ended, {
-                  sessionID: input.sessionID,
-                  timestamp: DateTime.makeUnsafe(completed),
-                  callID: part.callID,
-                  output,
-                }))
-              }
-              if (!msg.time.completed) {
-                msg.time.completed = completed
-                yield* sessions.updateMessage(msg)
-              }
-              if (part.state.status === "running") {
-                part.state = {
-                  status: "completed",
-                  time: { ...part.state.time, end: completed },
-                  input: part.state.input,
-                  title: "",
-                  metadata: { output, description: "" },
-                  output,
-                }
-                yield* sessions.updatePart(part)
-              }
-            }),
-          )
-          const exit = yield* restore(
-            Effect.gen(function* () {
-              const shellEnv = yield* plugin.trigger(
-                "shell.env",
-                { cwd, sessionID: input.sessionID, callID: part.callID },
-                { env: {} },
-              )
-              const cmd = ChildProcess.make(sh, args, {
-                cwd,
-                extendEnv: true,
-                env: { ...shellEnv.env, TERM: "dumb" },
-                stdin: "ignore",
-                forceKillAfter: "3 seconds",
-              })
-              const handle = yield* spawner.spawn(cmd)
-              yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
-                Effect.gen(function* () {
-                  output += chunk
-                  if (part.state.status === "running") {
-                    part.state.metadata = { output, description: "" }
-                    yield* sessions.updatePart(part)
-                  }
-                }),
-              )
-              yield* handle.exitCode
-            }).pipe(Effect.scoped, Effect.orDie),
-          ).pipe(Effect.exit)
-          if (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause) && !Cause.hasDies(exit.cause)) {
-            aborted = true
-          }
-          yield* finish
-          if (Exit.isFailure(exit) && !aborted && !Cause.hasInterruptsOnly(exit.cause)) {
-            return yield* Effect.failCause(exit.cause)
-          }
-          return { info: msg, parts: [part] }
-        }),
-      )
+      return yield* shellImplFn({
+        ...input,
+        sessions,
+        agents,
+        config,
+        plugin,
+        spawner,
+        flags,
+        revert,
+        events,
+        currentModel,
+      }, ready)
     })
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
       providerID: ProviderV2.ID,
@@ -725,936 +293,33 @@ export const layer = Layer.effect(
       if (Option.isSome(match) && match.value.info.role === "user") return match.value.info.model
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
-      const agentName = input.agent
-      const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
-      if (!ag) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
-        throw error
-      }
-      const current = yield* db
-        .select({ agent: SessionTable.agent, model: SessionTable.model })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, input.sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      const model = input.model ?? ag.model ?? (yield* currentModel(input.sessionID))
-      const same = ag.model && model.providerID === ag.model.providerID && model.modelID === ag.model.modelID
-      const full =
-        !input.variant && ag.variant && same
-          ? yield* provider
-              .getModel(model.providerID, model.modelID)
-              .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
-          : undefined
-      const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
-      const info: SessionV1.User = {
-        id: input.messageID ?? MessageID.ascending(),
-        role: "user",
-        sessionID: input.sessionID,
-        time: { created: Date.now() },
-        tools: input.tools,
-        agent: ag.name,
-        model: {
-          providerID: model.providerID,
-          modelID: model.modelID,
-          variant,
-        },
-        system: input.system,
-        format: input.format,
-      }
-      if (current?.agent !== info.agent) {
-        yield* dieSyncError(events.publish(SessionEvent.AgentSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          agent: info.agent,
-        }))
-      }
-      if (
-        current?.model?.providerID !== info.model.providerID ||
-        current.model.id !== info.model.modelID ||
-        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
-      ) {
-        yield* dieSyncError(events.publish(SessionEvent.ModelSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          model: {
-            id: ModelV2.ID.make(info.model.modelID),
-            providerID: ProviderV2.ID.make(info.model.providerID),
-            variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
-          },
-        }))
-      }
-      yield* Effect.addFinalizer(() => instruction.clear(info.id))
-      type Draft<T> = T extends SessionV1.Part ? Omit<T, "id"> & { id?: string } : never
-      const assign = (part: Draft<SessionV1.Part>): SessionV1.Part => ({
-        ...part,
-        id: part.id ? PartID.make(part.id) : PartID.ascending(),
-      })
-      const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
-        "SessionPrompt.resolveUserPart",
-      )(function* (part) {
-        if (part.type === "file") {
-          if (part.source?.type === "resource") {
-            const { clientName, uri } = part.source
-            yield* Effect.logInfo("mcp resource", { clientName, uri, mime: part.mime })
-            const pieces: Draft<SessionV1.Part>[] = [
-              {
-                messageID: info.id,
-                sessionID: input.sessionID,
-                type: "text",
-                synthetic: true,
-                text: `Reading MCP resource: ${part.filename} (${uri})`,
-              },
-            ]
-            const exit = yield* mcp.readResource(clientName, uri).pipe(Effect.exit)
-            if (Exit.isSuccess(exit)) {
-              const content = exit.value
-              if (!content) throw new Error(`Resource not found: ${clientName}/${uri}`)
-              const items = Array.isArray(content.contents) ? content.contents : [content.contents]
-              for (const c of items) {
-                if ("text" in c && c.text) {
-                  pieces.push({
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: c.text,
-                  })
-                } else if ("blob" in c && c.blob) {
-                  const mime = "mimeType" in c ? c.mimeType : part.mime
-                  pieces.push({
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: `[Binary content: ${mime}]`,
-                  })
-                }
-              }
-              pieces.push({ ...part, messageID: info.id, sessionID: input.sessionID })
-            } else {
-              const error = Cause.squash(exit.cause)
-              yield* Effect.logError("failed to read MCP resource", { error, clientName, uri })
-              const message = error instanceof Error ? error.message : String(error)
-              pieces.push({
-                messageID: info.id,
-                sessionID: input.sessionID,
-                type: "text",
-                synthetic: true,
-                text: `Failed to read MCP resource ${part.filename}: ${message}`,
-              })
-            }
-            return pieces
-          }
-          const url = new URL(part.url)
-          switch (url.protocol) {
-            case "data:":
-              if (part.mime === "text/plain") {
-                return [
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: `Called the Read tool with the following input: ${JSON.stringify({ filePath: part.filename })}`,
-                  },
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: decodeDataUrl(part.url),
-                  },
-                  { ...part, messageID: info.id, sessionID: input.sessionID },
-                ]
-              }
-              break
-            case "file:": {
-              yield* Effect.logInfo("file", { mime: part.mime })
-              const filepath = fileURLToPath(part.url)
-              const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
-              const { read } = yield* registry.named()
-              const execRead = (args: Parameters<typeof read.execute>[0], extra?: Tool.Context["extra"]) => {
-                const controller = new AbortController()
-                return read
-                  .execute(args, {
-                    sessionID: input.sessionID,
-                    abort: controller.signal,
-                    agent: input.agent!,
-                    messageID: info.id,
-                    extra: { bypassCwdCheck: true, ...extra },
-                    messages: [],
-                    metadata: () => Effect.void,
-                    ask: () => Effect.void,
-                  })
-                  .pipe(Effect.onInterrupt(() => Effect.sync(() => controller.abort())))
-              }
-              if (mime === "text/plain") {
-                let offset: number | undefined
-                let limit: number | undefined
-                const range = { start: url.searchParams.get("start"), end: url.searchParams.get("end") }
-                if (range.start != null) {
-                  const filePathURI = part.url.split("?")[0]
-                  let start = parseInt(range.start)
-                  let end = range.end ? parseInt(range.end) : undefined
-                  if (start === end) {
-                    const symbols = yield* lsp.documentSymbol(filePathURI).pipe(Effect.catch(() => Effect.succeed([])))
-                    for (const symbol of symbols) {
-                      let r: LSP.Range | undefined
-                      if ("range" in symbol) r = symbol.range
-                      else if ("location" in symbol) r = symbol.location.range
-                      if (r?.start?.line && r?.start?.line === start) {
-                        start = r.start.line
-                        end = r?.end?.line ?? start
-                        break
-                      }
-                    }
-                  }
-                  offset = Math.max(start, 1)
-                  if (end) limit = end - (offset - 1)
-                }
-                const args = { filePath: filepath, offset, limit }
-                const pieces: Draft<SessionV1.Part>[] = [
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: `Called the Read tool with the following input: ${JSON.stringify(args)}`,
-                  },
-                ]
-                const exit = yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(
-                  Effect.flatMap((mdl) => execRead(args, { model: mdl })),
-                  Effect.exit,
-                )
-                if (Exit.isSuccess(exit)) {
-                  const result = exit.value
-                  pieces.push({
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: result.output,
-                  })
-                  if (result.attachments?.length) {
-                    pieces.push(
-                      ...result.attachments.map((a) => ({
-                        ...a,
-                        synthetic: true,
-                        filename: a.filename ?? part.filename,
-                        messageID: info.id,
-                        sessionID: input.sessionID,
-                      })),
-                    )
-                  } else {
-                    pieces.push({ ...part, mime, messageID: info.id, sessionID: input.sessionID })
-                  }
-                } else {
-                  const error = Cause.squash(exit.cause)
-                  yield* Effect.logError("failed to read file", { error, filepath })
-                  const message = error instanceof Error ? error.message : String(error)
-                  yield* dieSyncError(events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  }))
-                  pieces.push({
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: `Read tool failed to read ${filepath} with the following error: ${message}`,
-                  })
-                }
-                return pieces
-              }
-              if (mime === "application/x-directory") {
-                const args = { filePath: filepath }
-                const exit = yield* execRead(args).pipe(Effect.exit)
-                if (Exit.isFailure(exit)) {
-                  const error = Cause.squash(exit.cause)
-                  yield* Effect.logError("failed to read directory", { error, filepath })
-                  const message = error instanceof Error ? error.message : String(error)
-                  yield* dieSyncError(events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  }))
-                  return [
-                    {
-                      messageID: info.id,
-                      sessionID: input.sessionID,
-                      type: "text",
-                      synthetic: true,
-                      text: `Read tool failed to read ${filepath} with the following error: ${message}`,
-                    },
-                  ]
-                }
-                return [
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: `Called the Read tool with the following input: ${JSON.stringify(args)}`,
-                  },
-                  {
-                    messageID: info.id,
-                    sessionID: input.sessionID,
-                    type: "text",
-                    synthetic: true,
-                    text: exit.value.output,
-                  },
-                  { ...part, mime, messageID: info.id, sessionID: input.sessionID },
-                ]
-              }
-              return [
-                {
-                  messageID: info.id,
-                  sessionID: input.sessionID,
-                  type: "text",
-                  synthetic: true,
-                  text: `Called the Read tool with the following input: {"filePath":"${filepath}"}`,
-                },
-                {
-                  id: part.id,
-                  messageID: info.id,
-                  sessionID: input.sessionID,
-                  type: "file",
-                  url:
-                    `data:${mime};base64,` +
-                    Buffer.from(yield* fsys.readFile(filepath).pipe(Effect.catch(Effect.die))).toString("base64"),
-                  mime,
-                  filename: part.filename!,
-                  source: part.source,
-                },
-              ]
-            }
-          }
-        }
-        if (part.type === "agent") {
-          const perm = Permission.evaluate("task", part.name, ag.permission)
-          const hint = perm.action === "deny" ? " . Invoked by user; guaranteed to exist." : ""
-          return [
-            { ...part, messageID: info.id, sessionID: input.sessionID },
-            {
-              messageID: info.id,
-              sessionID: input.sessionID,
-              type: "text",
-              synthetic: true,
-              text:
-                " Use the above message and context to generate a prompt and call the task tool with subagent: " +
-                part.name +
-                hint,
-            },
-          ]
-        }
-        return [{ ...part, messageID: info.id, sessionID: input.sessionID }]
-      })
-      const resolvedParts = yield* Effect.forEach(input.parts, resolvePart, { concurrency: "unbounded" }).pipe(
-        Effect.map((x) => x.flat().map(assign)),
-      )
-      yield* plugin.trigger(
-        "chat.message",
-        {
-          sessionID: input.sessionID,
-          agent: input.agent,
-          model: input.model,
-          messageID: input.messageID,
-          variant: input.variant,
-        },
-        { message: info, parts: resolvedParts },
-      )
-      const parts = yield* Effect.forEach(resolvedParts, (part) =>
-        part.type === "file" && part.mime.startsWith("image/")
-          ? image.normalize(part).pipe(
-              Effect.catchIf(
-                (error) => error instanceof Image.ResizerUnavailableError,
-                () => Effect.succeed(part),
-              ),
-            )
-          : Effect.succeed(part),
-      )
-      const parsed = decodeMessageInfo(info, { errors: "all", propertyOrder: "original" })
-      if (Exit.isFailure(parsed)) {
-        yield* Effect.logError("invalid user message before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          agent: info.agent,
-          model: info.model,
-          cause: Cause.pretty(parsed.cause),
-        })
-      }
-      for (const [index, part] of parts.entries()) {
-        const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
-        if (Exit.isSuccess(p)) continue
-        yield* Effect.logError("invalid user part before save", {
-          sessionID: input.sessionID,
-          messageID: info.id,
-          partID: part.id,
-          partType: part.type,
-          index,
-          cause: Cause.pretty(p.cause),
-          part,
-        })
-      }
-      yield* sessions.updateMessage(info)
-      for (const part of parts) yield* sessions.updatePart(part)
-      const nextPrompt = parts.reduce(
-        (result, part) => {
-          if (part.type === "text") {
-            if (part.synthetic) result.synthetic.push(part.text)
-            else result.text.push(part.text)
-          }
-          if (part.type === "file") {
-            result.files.push(
-              new FileAttachment({
-                uri: part.url,
-                mime: part.mime,
-                name: part.filename,
-                source: part.source
-                  ? new Source({
-                      start: part.source.text.start,
-                      end: part.source.text.end,
-                      text: part.source.text.value,
-                    })
-                  : undefined,
-              }),
-            )
-          }
-          if (part.type === "agent") {
-            result.agents.push(
-              new AgentAttachment({
-                name: part.name,
-                source: part.source
-                  ? new Source({
-                      start: part.source.start,
-                      end: part.source.end,
-                      text: part.source.value,
-                    })
-                  : undefined,
-              }),
-            )
-          }
-          return result
-        },
-        {
-          text: [] as string[],
-          files: [] as FileAttachment[],
-          agents: [] as AgentAttachment[],
-          synthetic: [] as string[],
-        },
-      )
-      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-      if (flags.experimentalEventSystem) {
-        yield* dieSyncError(events.publish(SessionEvent.Prompted, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          delivery: "steer",
-          prompt: new Prompt({
-            text: nextPrompt.text.join("\n"),
-            files: nextPrompt.files,
-            agents: nextPrompt.agents,
-          }),
-        }))
-      }
-      for (const text of nextPrompt.synthetic) {
-        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-        if (flags.experimentalEventSystem) {
-          yield* dieSyncError(events.publish(SessionEvent.Synthetic, {
-            sessionID: input.sessionID,
-            messageID: SessionMessage.ID.create(),
-            timestamp: DateTime.makeUnsafe(info.time.created),
-            text,
-          }))
-        }
-      }
-      return { info, parts }
-    }, Effect.scoped)
+    const createUserMessage = (input: PromptInput): Effect.Effect<SessionV1.WithParts, Image.Error> =>
+      createUserMessageFn({
+        ...input,
+        sessions,
+        agents,
+        provider,
+        plugin,
+        events,
+        instruction,
+        mcp,
+        fsys,
+        registry,
+        lsp,
+        image,
+        flags,
+        db,
+        currentModel,
+      }) as unknown as Effect.Effect<SessionV1.WithParts, Image.Error>
                 const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: {
                   gateResult: any; explicitSpawnCount: number; sessionID: SessionID;
                   msgs: any[]; system: string[]; model: any; ctx: any;
                   handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
                   sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
-                  sensorGateFiredMap: Map<SessionID, boolean>; personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
+                  personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
                   chainExecutor: any;
                 }) {
-                  const {
-                    gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
-                    handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
-                    sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
-                    sensorGateFiredMap, personaRoundMap, spawnHistory, compaction, chainExecutor,
-                  } = input
-
-                  // ─── Mark sensor gate fired ───────────────────────────
-                  sensorGateFiredMap.set(sessionID, true)
-                  const currentRound = (personaRoundMap.get(sessionID) ?? 0)
-                  // Round counter incremented below inside personas.length > 0 block
-
-                  // ─── Skill Chain Execution: Pre-run skill scripts ──────────
-                  // Execute the sensor gate's skill chain programmatically and inject
-                  // <script-result> blocks into the system prompt. This pre-runs Python
-                  // scripts (analysis, planning, debugging) BEFORE the LLM turn, so results
-                  // are available as context. Also handles chain-gap detection, mandated
-                  // skill re-execution, runtime enforcement, and LTM auto-persistence.
-                  if (gateResult?.chain?.length > 0) {
-                    const chainResults: ChainResult[] = yield* chainExecutor.execute(gateResult.chain, userText).pipe(
-                      Effect.catch((e) => {
-                        console.warn("[chain-executor] execute() failed:", e)
-                        return Effect.succeed([] as ChainResult[])
-                      }),
-                    )
-                    for (const result of chainResults) {
-                      if (result.status === "ok" && result.output) {
-                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
-                      } else if (result.status === "not_found") {
-                        system.push(`\n<skill-missing name="${sanitizeForSystemPrompt(result.name)}"/>`)
-                      } else {
-                        system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" status="error">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</script-result>`)
-                      }
-                    }
-
-                    // ─── Chain Enforcement: Sensor Gate Graph Must Be Followed ──
-                    // The sensor gate classified the prompt and produced a skill chain.
-                    // This chain is a MANDATORY execution graph. The model MUST visit
-                    // every skill in the chain using the `skill` tool to load its content
-                    // and execute its instructions. <script-result> blocks provide
-                    // pre-computed automation output; the model still MUST independently
-                    // load each skill's SKILL.md content via the skill tool and execute
-                    // its workflow instructions. This applies to ALL chain skills and
-                    // to any subagents spawned — they must also load the chain skills.
-
-                    // Run full pipeline + verify for complex tasks (high complexity or 2+ chain)
-                    // Guard: skip if execute() already covered all skills successfully (prevents
-                    // the orchestrator from re-executing the same Python scripts).
-                    const allExecOk = chainResults.length > 0 && chainResults.every(r => r.status === "ok")
-                    if (!allExecOk && (gateResult.complexity === "high" || gateResult.chain.length > 1)) {
-                      const pipelineResults = yield* chainExecutor.runFullPipeline().pipe(
-                        Effect.catch((e) => {
-                          console.warn("[chain-executor] runFullPipeline() failed:", e)
-                          return Effect.succeed([])
-                        }),
-                      )
-                      for (const result of pipelineResults) {
-                        if (result.status === "ok" && result.output) {
-                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</chain-executor-result>`)
-                        } else if (result.status === "error") {
-                          system.push(`\n<chain-executor-result name="${sanitizeForSystemPrompt(result.name)}" status="warning">\n${sanitizeForSystemPrompt(result.output.slice(0, 2000))}\n</chain-executor-result>`)
-                        }
-                      }
-
-                      const verifyResult = yield* chainExecutor.verify(chainResults).pipe(
-                        Effect.catch((e) => {
-                          console.warn("[chain-executor] verify() failed:", e)
-                          return Effect.succeed("")
-                        }),
-                      )
-                      if (verifyResult) {
-                        system.push(`\n<chain-verification>\n${sanitizeForSystemPrompt(verifyResult.slice(0, 2000))}\n</chain-verification>`)
-                      }
-                    }
-
-                    // ─── Chain-Gap Detection ──────────────────────────
-                    const missingSkills = gateResult.chain.filter(
-                      (name: string) => !chainResults.some(
-                        (r: ChainResult) => r.name === name && r.status === "ok",
-                      ),
-                    )
-                    const MANDATED_SKILLS = new Set(["breakthrough-overdrive-innovation"])
-                    const missingMandated = missingSkills.filter((s: string) => MANDATED_SKILLS.has(s))
-
-                    if (missingMandated.length > 0) {
-                      debugLog("[prompt] Re-executing mandated skills:", missingMandated)
-                      const reExecuteResult = yield* chainExecutor.execute(missingMandated, userText).pipe(
-                        Effect.catch(() => Effect.succeed([] as Array<ChainResult>)),
-                      )
-                      chainResults.push(...(reExecuteResult as ChainResult[]))
-                      for (const result of reExecuteResult as ChainResult[]) {
-                        if (result.status === "ok" && result.output) {
-                          system.push(`\n<script-result name="${sanitizeForSystemPrompt(result.name)}" source="mandated-rerun">\n${sanitizeForSystemPrompt(result.output.slice(0, 5000))}\n</script-result>`)
-                        }
-                      }
-                      const stillMissing = gateResult.chain.filter(
-                        (name: string) => !chainResults.some(
-                          (r: ChainResult) => r.name === name && r.status === "ok",
-                        ),
-                      )
-                      if (stillMissing.length > 0) {
-                        system.push(
-                          `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(stillMissing.join(", "))}. ` +
-                          `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
-                          `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
-                        )
-                      }
-                    } else if (missingSkills.length > 0) {
-                      system.push(
-                        `\n<chain-gap>WARNING: These skills in the sensor gate chain were NOT executed: ${sanitizeForSystemPrompt(missingSkills.join(", "))}. ` +
-                        `You MUST ensure each skill in the chain is loaded and its instructions followed before proceeding.` +
-                        `\nSkipped chain steps degrade the quality of the response.</chain-gap>`,
-                      )
-                    }
-
-                    // ─── Skill Loading Gap Detection ────────────────────────
-                    // Scan past messages to see if the model has already loaded skills
-                    // via the `skill` tool. This detects whether the model is actually
-                    // following the chain obligation from previous turns.
-                    const skillToolCalls = new Set<string>()
-                    for (const msg of msgs) {
-                      if (msg.info.role !== "assistant") continue
-                      for (const part of msg.parts) {
-                        if (part.type !== "tool") continue
-                        if (part.tool !== "skill") continue
-                        if (part.state.status === "completed") {
-                          skillToolCalls.add(part.state.input.name ?? "")
-                        }
-                      }
-                    }
-                    const unloadedChainSkills = gateResult.chain.filter((name: string) => !skillToolCalls.has(name))
-                    if (unloadedChainSkills.length > 0) {
-                      system.push(
-                        `\n<skill-loading-gap>WARNING: The following chain skills were NOT loaded via the \`skill\` tool in prior turns: ${sanitizeForSystemPrompt(unloadedChainSkills.join(", "))}. ` +
-                        `You MUST load each chain skill via the \`skill\` tool to get the full workflow instructions. ` +
-                        `Call the \`skill\` tool with name="${sanitizeForSystemPrompt(unloadedChainSkills[0])}" to load the first missing skill.` +
-                        `\nSubagents spawned from this session must also load chain skills.</skill-loading-gap>`,
-                      )
-                    }
-
-                    // ─── Mandatory Skill Chain Enforcement ──────────────────────
-                    // The sensor gate produced a dynamic skill graph. The model MUST
-                    // follow it by loading each skill via the `skill` tool. Pre-injected
-                    // <script-result> blocks contain automation output but NOT the skill's
-                    // workflow instructions — those come from loading SKILL.md via the tool.
-                    system.push([
-                      "",
-                      "<skill-chain-obligation mode=\"strict\">",
-                      "The sensor gate has classified this prompt and produced a mandatory skill chain.",
-                      "You MUST load EVERY skill in this chain using the `skill` tool:",
-                      "",
-                      ...gateResult.chain.map((name: string) => `  [MANDATORY] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — load content and follow instructions`),
-                      "",
-                      "Rules:",
-                      "  1. Load each skill's content via the `skill` tool — do NOT skip any",
-                      "  2. Execute the skill's workflow instructions and scripts",
-                      "  3. Any subagent you spawn MUST also load the same chain skills",
-                      "  4. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
-                      "  5. FAILURE to load all chain skills will produce INCOMPLETE results",
-                      "</skill-chain-obligation>",
-                    ].join("\n"))
-
-                    // ─── Persist chain execution results to self-evolve (best-effort) ──
-                    yield* selfEvolve.capture({
-                      chain: gateResult.chain,
-                      intent: gateResult.intent ?? "sensor-gate",
-                      outcome: chainResults.every(r => r.status === "ok") ? "success" : "partial",
-                      signals: chainResults.filter(r => r.status === "error").map(r => ({
-                        whatWorked: "",
-                        whatFailed: `Skill ${r.name} failed: ${r.output.slice(0, 200)}`,
-                        whatToChange: `Chain skill ${r.name} needs fixing`,
-                      })),
-                    }).pipe(Effect.catch(() => Effect.void))
-                    // Invalidate knowledge cache so next turn sees fresh learnings
-                    yield* sys.invalidateKnowledgeCache().pipe(Effect.catch(() => Effect.void))
-                  }
-
-                  // ─── Determine personas from gate result or explicit override ──
-                  // Run spawn necessity check FIRST — prevents unnecessary specialist
-                  // spawning for simple tasks, saving cost and token usage.
-                  let evaluation = evaluateSpawnNecessity(gateResult, userText)
-
-                  // Workflow skills (e.g. deep-research) manage their own subagents internally.
-                  // Override the evaluation to prevent persona spawning alongside the workflow's
-                  // own subagents — otherwise both systems spawn agents simultaneously causing
-                  // infinite spawn loops. This guard is defense-in-depth (selectPersonas() also
-                  // returns [] for workflow chains), but catching it at the execution layer
-                  // ensures persona subagents never get spawned regardless of other code paths.
-                  const WORKFLOW_SKILLS = new Set(["deep-research"])
-                  const hasWorkflowSkill = gateResult?.chain?.some((s: string) => WORKFLOW_SKILLS.has(s))
-                  if (hasWorkflowSkill) {
-                    evaluation = {
-                      shouldSpawn: false,
-                      reason: "Chain includes workflow-managed skill — workflow handles its own agents",
-                      suggestedCount: 0,
-                    }
-                    debugLog(`[sensor-gate] Workflow skill detected: ${evaluation.reason}`)
-                  }
-
-                  if (!evaluation.shouldSpawn) {
-                    debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
-                  }
-                  let personas: Persona[] = []
-                  const rateCheck = checkRateLimit(sessionID)
-                  if (evaluation.shouldSpawn && gateResult?.personas?.length > 0 && rateCheck.allowed) {
-                    personas = gateResult.personas.slice(0, Math.min(evaluation.suggestedCount, rateCheck.remaining))
-                    recordSpawn(sessionID, personas.length)
-                  } else if (explicitSpawnCount > 0 && rateCheck.allowed) {
-                    const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
-                    recordSpawn(sessionID, spawnCount)
-                    personas = Array.from({ length: spawnCount }, (_, i): Persona => ({
-                      name: `Specialist ${i + 1}`,
-                      role: "Analysis Specialist",
-                      focus: "Analyzing the user's request from a specialist perspective",
-                      skills: [],
-                      task: `Analyze the user's request from your specialist perspective: ${sanitizeForSystemPrompt(userText.slice(0, 200))}`,
-                      goals: [
-                        "Identify issues and opportunities in the codebase",
-                        "Provide specific, actionable findings with file references",
-                        "Flag any blocking issues or high-priority concerns",
-                      ],
-                      synthesisGuide: `Include Specialist ${i + 1}'s findings in the synthesis.`,
-                    }))
-                  }
-
-                  // ─── Increment round counter (only on actual spawn) ─────
-                  if (personas.length > 0) {
-                    personaRoundMap.set(sessionID, currentRound + 1)
-                  }
-
-                  // ─── Inject persona system prompt ────────────────────
-                  let synthesisText: string | undefined  // declared outside if for scope
-                  if (personas.length > 0) {
-                    const effectiveRound = (personaRoundMap.get(sessionID) ?? 0)
-                    const personaLines: string[] = [
-                      "<persona-system>",
-                      `You are the ARCHITECT. You have spawned ${personas.length} specialist agent${personas.length > 1 ? "s" : ""}:`,
-                      "",
-                    ]
-                    personas.forEach((p: any, i: number) => {
-                      personaLines.push(`${i + 1}. "${p.name}" (${p.role})`)
-                      const taskDisplay = p.task?.length > 120 ? p.task.slice(0, 117) + "..." : (p.task ?? "No task assigned")
-                      personaLines.push(`   Task: ${taskDisplay}`)
-                      personaLines.push("")
-                    })
-                    personaLines.push(`This is ROUND ${effectiveRound} of specialist analysis.`)
-                    personaLines.push("Each specialist provides findings asynchronously.")
-                    personaLines.push("Their results will arrive as user messages. Wait for them before acting.")
-                    personaLines.push("</persona-system>")
-                    const rateNow = checkRateLimit(sessionID)
-                    personaLines.push(`<rate-budget>${rateNow.remaining} of ${RATE_MAX_SPAWNS} specialist spawns remaining in this 5-minute window.</rate-budget>`)
-                    system.push(personaLines.join("\n"))
-
-                    // ─── Pieces LTM persist (best-effort) ──────────────
-                    yield* piecesLTM.persist({
-                      chainName: `sensor-gate-${gateResult?.intent ?? "explicit-override"}`,
-                      taskDescription: `${personas.length} persona(s) triggered in round ${currentRound + 1}: ${personas.map((p: any) => p.name).join(", ")}`,
-                      outcome: "success",
-                      keyDecisions: [`Gate classification: ${gateResult?.intent ?? "explicit-override"}`, `Round: ${currentRound + 1}`],
-                      memoryType: "standup",
-                    }).pipe(Effect.catch(() => Effect.void))
-
-                    // ─── Self-evolve log (best-effort) ─────────────────
-                    yield* Effect.gen(function* () {
-                      const named = personas.filter((p: any) => p.name && p.skills?.length > 0) as Array<{ name: string; skills: string[]; role: string; focus: string; task?: string; goals?: string[] }>
-                      if (named.length > 0) {
-                        yield* selfEvolve.capture({
-                          chain: named.map((p) => p.skills.join(",")),
-                          intent: `persona-spawn-round-${currentRound + 1}`,
-                          outcome: "success",
-                          signals: named.map((p) => ({
-                            whatWorked: `Spawning specialist ${p.name} for ${p.role}`,
-                            whatFailed: "",
-                            whatToChange: `Specialist ${p.name} (${p.focus}) was spawned in round ${currentRound + 1}`,
-                          })),
-                        })
-                      }
-                    }).pipe(Effect.catch(() => Effect.void))
-
-                    // ════════════════════════════════════════════════════
-                    // Spawn persona subagents via TaskTool
-                    // ════════════════════════════════════════════════════
-                    const personaTeam = personas.slice(0, Math.min(personas.length, RATE_MAX_SPAWNS))
-                    const subtaskOps = yield* ops({ disableTaskTool: true })
-                    const { task: taskTool } = yield* registry.named()
-                    const abortController = new AbortController()
-
-                    // 1. Create persona assistant message
-                    const personaAssistantMsg: SessionV1.Assistant = {
-                      id: MessageID.ascending(),
-                      role: "assistant" as const,
-                      parentID: lastUserMsg?.info?.id,
-                      sessionID,
-                      mode: "tool_call",
-                      agent: "general",
-                      variant: lastUser?.model?.variant,
-                      path: { cwd: ctx.directory, root: ctx.worktree },
-                      cost: 0,
-                      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-                      providerID: model.providerID,
-                      modelID: model.id,
-                      time: { created: Date.now() },
-                    }
-                    yield* sessions.updateMessage(personaAssistantMsg)
-
-                    // 2. Create tool parts for each persona
-                    const personaParts: SessionV1.ToolPart[] = yield* Effect.all(
-                      personaTeam.map((p: any) =>
-                        Effect.sync(() => ({
-                          id: PartID.ascending(),
-                          messageID: personaAssistantMsg.id,
-                          sessionID,
-                          type: "tool" as const,
-                          callID: ulid(),
-                          tool: TaskTool.id,
-                          state: {
-                            status: "running" as const,
-                            input: { prompt: p.focus, description: `persona:${p.name}`, subagent_type: "general" },
-                            metadata: {},
-                            time: { start: Date.now() },
-                          },
-                        } as SessionV1.ToolPart)),
-                      ),
-                    )
-                    for (const part of personaParts) {
-                      yield* sessions.updatePart(part)
-                    }
-
-                    // 3. Extract subagent context
-                    const subagentCtx = extractSubagentContext(msgs)
-                    const contextBlock = buildSubagentContextPrompt(subagentCtx)
-
-                    // 4. Execute TaskTool for each persona concurrently
-                    const tracker = yield* PersonaTracker.create(sessionID, personaTeam.length)
-
-                    yield* Effect.forEach(
-                      personaTeam,
-                      Effect.fnUntraced(function* (persona: any, i: number) {
-                        const part = personaParts[i]!
-                        const otherCtx = personaTeam.length > 1
-                          ? "\nOther specialist agents are analyzing related aspects. Do NOT duplicate work.\n"
-                          : ""
-
-                        const personaPrompt = [
-                          "## Output Requirements",
-                          "Provide your findings as a STRUCTURED ANALYSIS with:",
-                          "1. **Summary**: One paragraph overview",
-                          "2. **Key Issues**: Bullet list with file:line references",
-                          "3. **Recommendations**: Actionable fixes with code snippets",
-                          "4. **Confidence**: High/Medium/Low for each finding",
-                          "",
-                          "Be CONCISE. Focus on ACTIONABLE items only.",
-                          otherCtx,
-                          "## Synthesis Guide",
-                          persona.synthesisGuide,
-                          "",
-                          contextBlock,
-                          "## User Prompt",
-                          sanitizeForSystemPrompt(userText.trim()),
-                          "",
-                          `## Your Identity`,
-                          `You are "${persona.name}" — ${persona.role}.`,
-                          `Your focus area: ${persona.focus}.`,
-                          ...(personaTeam.length > 1
-                            ? ["", "## Other Specialists",
-                              ...personaTeam.filter((_: any, j: number) => j !== i).map((o: any) => `- "${o.name}" (${o.role}) — ${o.focus}`), ""]
-                            : []),
-                          "## Task",
-                          persona.task,
-                        ].join("\n")
-
-                        const updatePart = (status: "completed" | "error", output: string) =>
-                          Effect.gen(function* () {
-                            yield* tracker.complete(persona.name, persona.role, output, status, {
-                              task: persona.task, goals: persona.goals, synthesisGuide: persona.synthesisGuide,
-                            })
-                            const st = part.state as Record<string, any>
-                            yield* sessions.updatePart({
-                              ...part,
-                              state: status === "completed"
-                                ? { ...st, status: "completed", output, title: persona.name, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
-                                : { ...st, status: "error", error: output, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
-                            } as SessionV1.ToolPart)
-                          }).pipe(Effect.catchCause((cause) => Effect.logWarning("updatePart failed", { cause })))
-
-                        return yield* taskTool
-                          .execute(
-                            { prompt: personaPrompt, description: `persona:${persona.name}`, subagent_type: "general" },
-                            {
-                              agent: "general" as any,
-                              sessionID,
-                              messageID: personaAssistantMsg.id,
-                              messages: subagentCtx.recentMessages,
-                              abort: abortController.signal,
-                              callID: (part as SessionV1.ToolPart).callID,
-                              extra: { bypassAgentCheck: true, promptOps: subtaskOps },
-                              metadata: (meta: any) => Effect.gen(function* () {
-                                yield* sessions.updatePart({
-                                  ...part,
-                                  state: { ...(part.state as any), title: meta?.title ?? (part.state as any).title, metadata: { ...(part.state as any).metadata, ...meta?.metadata } },
-                                } as SessionV1.ToolPart)
-                              }),
-                            },
-                          )
-                          .pipe(
-                            Effect.matchEffect({
-                              onSuccess: (result: any) => Effect.gen(function* () {
-                                yield* updatePart("completed", result?.output)
-                                // ═══════════════════════════════════════════
-                                // PROPAGATE SUBAGENT COST TO PARENT SESSION
-                                // ═══════════════════════════════════════════
-                                // Creates a step-finish part so the projector
-                                // can add this cost to session.cost. Without
-                                // this, persona/subagent spend is invisible
-                                // in the spends tab and stats command.
-                                const subagentCost_ = Number(result?.subagentCost)
-                                const subagentTokens_ = result?.subagentTokens
-                                if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
-                                  yield* sessions.updatePart({
-                                    id: PartID.ascending(),
-                                    messageID: personaAssistantMsg.id,
-                                    sessionID,
-                                    type: "step-finish",
-                                    reason: "completed",
-                                    cost: subagentCost_,
-                                    tokens: normalizeTokens(subagentTokens_),
-                                  } satisfies SessionV1.StepFinishPart)
-                                  // Also update msg.cost so the TUI's totalCost sum sees it
-                                  yield* sessions.updateMessage({
-                                    ...personaAssistantMsg,
-                                    cost: (personaAssistantMsg.cost ?? 0) + subagentCost_,
-                                  })
-                                }
-                              }),
-                              onFailure: (error) => {
-                                abortController.abort()
-                                return updatePart("error", String(error))
-                              },
-                            }),
-                          )
-                      }),
-                      { concurrency: RATE_MAX_SPAWNS },
-                    )
-
-                    // 5. Poll until all personas complete
-                    const pollResults = (): Effect.Effect<PersonaTracker.PersonaResult[]> =>
-                      Effect.gen(function* () {
-                        const remaining = yield* tracker.remaining()
-                        if (remaining <= 0) return yield* tracker.getAll()
-                        yield* Effect.sleep("500 millis")
-                        return yield* pollResults()
-                      })
-
-                    const allResults = yield* pollResults().pipe(
-                      Effect.timeout("30 seconds"),
-                      Effect.catch(() => tracker.getAll()),
-                    )
-
-                    // 6. Build synthesis prompt from results
-                    synthesisText = PersonaTracker.buildSynthesisPrompt(allResults)
-
-                    // 7. Inject synthesis as synthetic user message
-                    yield* Effect.tryPromise({
-                      try: () => PersonaTracker.injectSynthesis(sessionID, allResults, sessions, model.providerID, model.id),
-                      catch: (e) => Effect.logWarning("injectSynthesis failed", { error: e }),
-                    })
-                  }
-
-                  return {
-                    synthesisText,
-                    sensorGateFired: true,
-                  }
+                  return yield* processSensorGatePhaseFn({ ...input, sys })
                 })
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
@@ -1695,7 +360,7 @@ Before every response, verify your reasoning:
         let synthesisText: string | undefined
         let prevUserMessageID: string | undefined
         let titleGenerated = false
-        let sensorGateFired = sensorGateFiredMap.get(sessionID) ?? false
+
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
         while (true) {
           synthesisText = undefined
@@ -1749,6 +414,8 @@ Before every response, verify your reasoning:
               providerID: lastUser.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
+            // Refresh codebase profile on first turn (background, non-blocking)
+            yield* Effect.sync(() => refreshProfile(process.cwd())).pipe(Effect.ignore, Effect.forkIn(scope))
           }
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const task = tasks.pop()
@@ -1893,7 +560,7 @@ Before every response, verify your reasoning:
               }
             }
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-            const [skills, env, knowledge, instructions, modelMsgs] = yield* Effect.all([
+            const [skills, env, knowledge, instructions, taste, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               // Always return a <learned-knowledge> block — even on LTM failure.
@@ -1901,17 +568,17 @@ Before every response, verify your reasoning:
               // KV cache misses (40x cost multiplier: $0.001 → $0.04).
               sys.knowledge().pipe(Effect.catch(() => Effect.succeed(DEFAULT_KNOWLEDGE_BLOCK))),
               instruction.system().pipe(Effect.orDie),
+              Effect.sync(() => summarizeTaste()).pipe(Effect.catch(() => Effect.succeed(""))),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), SELF_CHECK]
+            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), ...(taste ? [taste] : []), SELF_CHECK]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
-            // Runs classification + skill chain selection on every user message.
+            // Runs classification + skill chain selection on EVERY user message.
             // Only in root sessions — subagents must NOT re-enter persona spawning.
-            // Also skip when the agent itself is a subagent (mode === "subagent").
             // Skip after synthesis — synthesis should NOT auto-spawn subagents.
-            if (step === 1 && !session.parentID) {
+            if (!session.parentID) {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
@@ -1926,9 +593,19 @@ Before every response, verify your reasoning:
                 (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
               ) ?? false
               // Skip sensor gate for slash commands — commands handle their own flow.
-              // Without this, `/research` triggers persona spawning before the command runs.
               const isSlashCommand = userText.trim().startsWith("/")
-              if (userText.trim() && !isSynthesis && !isSlashCommand) {
+              // Skip sensor gate if session has active subagents running.
+              // At step=1 the session is always briefly busy (just set at loop start),
+              // so we bypass that check — every new user message must get classified.
+              let isSessionBusy = false
+              if (step !== 1) {
+                const sessionStatus = yield* status.get(sessionID).pipe(Effect.option)
+                isSessionBusy = sessionStatus._tag === "Some" && sessionStatus.value.type === "busy"
+              } else {
+                yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=1 bypassed isSessionBusy check — fire gate for every new user message`)
+              }
+              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy}`)
+              if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>
                     Effect.as(Effect.logError("Sensor gate unavailable", { cause }), null),
@@ -1940,17 +617,56 @@ Before every response, verify your reasoning:
                     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
                     handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
-                    sensorGateFiredMap, personaRoundMap, spawnHistory, compaction,
-                    chainExecutor,
+                    personaRoundMap, spawnHistory, compaction, chainExecutor,
                   })
                   synthesisText = sgpResult.synthesisText
                 }
               }
             }
             // ─── End Sensor Gate ────────────────────────────────────────
+            // ─── Per-Turn Chain Enforcement ────────────────────────────
+            // After the gate fires on the first turn, re-inject chain
+            // enforcement on EVERY turn so the agent is constantly reminded
+            // to load chain skills via the `skill` tool.
+            {
+              const storedGate = storedGateResultMap.get(sessionID)
+              if (storedGate) {
+                const storedScripts = storedScriptResultsMap.get(sessionID) ?? []
+                const storedContent = storedContentResultsMap.get(sessionID) ?? []
+                injectSkillLoadingGap(system, storedGate, msgs)
+                injectSkillChainObligation(system, storedGate, storedScripts, storedContent)
+              }
+            }
+            // ─── Pre-Turn Hard Block: unloaded chain skills ──────────
+            // If the sensor gate produced a skill chain and the agent has
+            // NOT yet loaded all skills via the `skill` tool, inject a
+            // hard-block assistant message and skip the LLM turn. The
+            // agent MUST call the `skill` tool before the LLM runs.
+            // Note: must be a boolean flag, NOT `continue` — we're inside
+            // an inner function* and cannot use loop-control statements.
+            let preTurnBlocked = false
+            const skillEnforcerGate = storedGateResultMap.get(sessionID)
+            if (skillEnforcerGate && skillEnforcerGate.chain.length > 0) {
+              const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
+              const unloaded = skillEnforcerGate.chain.filter((name: string) => !loaded.has(name))
+              if (unloaded.length > 0 && !acknowledged) {
+                yield* Effect.logWarning(`[SKILL-ENFORCER] Pre-turn block: ${unloaded.length} unloaded chain skills: ${unloaded.join(", ")}`)
+                modelMsgs.push({
+                  role: "assistant" as const,
+                  content: buildUnloadedChainBlockMessage(unloaded),
+                })
+                preTurnBlocked = true
+              }
+            }
             const extraMsgs = synthesisText
               ? [{ role: "user" as const, content: synthesisText }]
               : []
+            // When the pre-turn skill enforcer blocked this turn, skip the
+            // LLM call entirely. The hard-block assistant message was already
+            // injected above — the agent must load skills before the next turn.
+            if (preTurnBlocked) {
+              return "continue" as const
+            }
             // Task tool is ALWAYS available. Cost control is handled by the
             // rolling-window rate limiter (5 spawns/5 min) + sensor gate's
             // evaluateSpawnNecessity().
@@ -2002,6 +718,22 @@ Before every response, verify your reasoning:
                 return "break" as const
               }
             }
+            // ─── Post-Turn Skill Loading Validation ───────────────────
+            // After the LLM responds, check if chain skills were loaded
+            // in the current turn. If the agent finished without loading
+            // them, log a warning for diagnostics.
+            if (storedGateResultMap.has(sessionID)) {
+              const storedGate = storedGateResultMap.get(sessionID)!
+              if (storedGate.chain.length > 0 && handle.message.finish !== "tool-calls") {
+                const { loaded } = scanForSkillToolCalls(msgs)
+                const unloaded = storedGate.chain.filter((name: string) => !loaded.has(name))
+                if (unloaded.length > 0) {
+                  yield* Effect.logWarning(
+                    `[SKILL-ENFORCER] Post-turn: agent finished without loading ${unloaded.length} chain skills: ${unloaded.join(", ")}`
+                  )
+                }
+              }
+            }
             if (result === "stop") return "break" as const
             if (result === "compact") {
               yield* compaction.create({
@@ -2033,122 +765,23 @@ Before every response, verify your reasoning:
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
-      return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
+      return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready) as unknown as Effect.Effect<SessionV1.WithParts, never>, ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
     })
-    const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
-      yield* Effect.logInfo("command", {
-        "session.id": input.sessionID,
-        command: input.command,
-        agent: input.agent,
-      })
-      const cmd = yield* commands.get(input.command)
-      if (!cmd) {
-        const available = (yield* commands.list()).map((c) => c.name)
-        const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
-        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
-        throw error
-      }
-      const agentName = cmd.agent ?? input.agent
-      const raw = input.arguments.match(argsRegex) ?? []
-      const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
-      const templateCommand = yield* Effect.promise(async () => cmd.template)
-      const placeholders = templateCommand.match(placeholderRegex) ?? []
-      let last = 0
-      for (const item of placeholders) {
-        const value = Number(item.slice(1))
-        if (value > last) last = value
-      }
-      const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
-        const position = Number(index)
-        const argIndex = position - 1
-        if (argIndex >= args.length) return ""
-        if (position === last) return args.slice(argIndex).join(" ")
-        return args[argIndex]
-      })
-      const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
-      let template = withArgs.replaceAll("$ARGUMENTS", input.arguments)
-      if (placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()) {
-        template = template + "\n\n" + input.arguments
-      }
-      const shellMatches = ConfigMarkdown.shell(template)
-      if (shellMatches.length > 0) {
-        const cfg = yield* config.get()
-        const sh = Shell.preferred(cfg.shell)
-        const results = yield* Effect.promise(() =>
-          Promise.all(
-            shellMatches.map(async ([, cmd]) => (await Process.text([cmd], { shell: sh, nothrow: true })).text),
-          ),
-        )
-        let index = 0
-        template = template.replace(bashRegex, () => results[index++])
-      }
-      template = template.trim()
-      const taskModel = yield* Effect.gen(function* () {
-        if (cmd.model) return Provider.parseModel(cmd.model)
-        if (cmd.agent) {
-          const cmdAgent = yield* agents.get(cmd.agent)
-          if (cmdAgent?.model) return cmdAgent.model
-        }
-        if (input.model) return Provider.parseModel(input.model)
-        return yield* currentModel(input.sessionID)
-      })
-      yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
-      const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
-      if (!agent) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* dieSyncError(events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() }))
-        throw error
-      }
-      const templateParts = yield* resolvePromptParts(template)
-      const inputFiles = new Set(
-        input.parts?.filter((part) => new URL(part.url).protocol === "file:").map((part) => fileURLToPath(part.url)),
-      )
-      const uniqueTemplateParts = templateParts.filter(
-        (part) => part.type !== "file" || !inputFiles.has(fileURLToPath(part.url)),
-      )
-      const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
-      const parts = isSubtask
-        ? [
-            {
-              type: "subtask" as const,
-              agent: agent.name,
-              description: cmd.description ?? "",
-              command: input.command,
-              model: { providerID: taskModel.providerID, modelID: taskModel.modelID },
-              prompt: templateParts.find((y) => y.type === "text")?.text ?? "",
-            },
-          ]
-        : [...uniqueTemplateParts, ...(input.parts ?? [])]
-      const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultInfo()).name) : agent.name
-      const userModel = isSubtask
-        ? input.model
-          ? Provider.parseModel(input.model)
-          : yield* currentModel(input.sessionID)
-        : taskModel
-      yield* plugin.trigger(
-        "command.execute.before",
-        { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
-        { parts },
-      )
-      const result = yield* prompt({
-        sessionID: input.sessionID,
-        messageID: input.messageID,
-        model: userModel,
-        agent: userAgent,
-        parts,
-        variant: input.variant,
-      })
-      yield* dieSyncError(events.publish(Command.Event.Executed, {
-        name: input.command,
-        sessionID: input.sessionID,
-        arguments: input.arguments,
-        messageID: result.info.id,
-      }))
-      return result
-    })
+    const command = (input: CommandInput): Effect.Effect<SessionV1.WithParts, Image.Error> =>
+      commandFn({
+        ...input,
+        sessions,
+        agents,
+        commands,
+        config,
+        plugin,
+        events,
+        provider,
+        getModel,
+        currentModel,
+        resolvePromptParts,
+        prompt,
+      }) as unknown as Effect.Effect<SessionV1.WithParts, Image.Error>
     return Service.of({
       cancel,
       prompt,
@@ -2199,103 +832,7 @@ export const defaultLayer = Layer.suspend(() =>
     ),
   ),
 )
-const ModelRef = Schema.Struct({
-  providerID: ProviderV2.ID,
-  modelID: ModelV2.ID,
-})
-export const PromptInput = Schema.Struct({
-  sessionID: SessionID,
-  messageID: Schema.optional(MessageID),
-  model: Schema.optional(ModelRef),
-  agent: Schema.optional(Schema.String),
-  noReply: Schema.optional(Schema.Boolean),
-  tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)).annotate({
-    description:
-      "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
-  }),
-  format: Schema.optional(SessionV1.Format),
-  system: Schema.optional(Schema.String),
-  variant: Schema.optional(Schema.String),
-  parts: Schema.Array(
-    Schema.Union([
-      SessionV1.TextPartInput,
-      SessionV1.FilePartInput,
-      SessionV1.AgentPartInput,
-      SessionV1.SubtaskPartInput,
-    ]).annotate({ discriminator: "type" }),
-  ),
-})
-export type PromptInput = Schema.Schema.Type<typeof PromptInput>
-export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
-  sessionID: SessionID,
-}) {}
-export const ShellInput = Schema.Struct({
-  sessionID: SessionID,
-  messageID: Schema.optional(MessageID),
-  agent: Schema.String,
-  model: Schema.optional(ModelRef),
-  command: Schema.String,
-})
-export type ShellInput = Schema.Schema.Type<typeof ShellInput>
-export const CommandInput = Schema.Struct({
-  messageID: Schema.optional(MessageID),
-  sessionID: SessionID,
-  agent: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.String),
-  arguments: Schema.String,
-  command: Schema.String,
-  variant: Schema.optional(Schema.String),
-  // Inlined (no identifier annotation) to keep the original SDK output — the
-  // PromptInput call site below references FilePartInput by ref via the
-  // Schema export in message-v2.ts.
-  parts: Schema.optional(
-    Schema.Array(
-      Schema.Union([
-        Schema.Struct({
-          id: Schema.optional(PartID),
-          type: Schema.Literal("file"),
-          mime: Schema.String,
-          filename: Schema.optional(Schema.String),
-          url: Schema.String,
-          source: Schema.optional(SessionV1.FilePartSource),
-        }),
-      ]).annotate({ discriminator: "type" }),
-    ),
-  ),
-})
-export type CommandInput = Schema.Schema.Type<typeof CommandInput>
-/** @internal Exported for testing */
-export function createStructuredOutputTool(input: {
-  schema: Record<string, any>
-  onSuccess: (output: unknown) => void
-}): AITool {
-  // Remove $schema property if present (not needed for tool input)
-  const { $schema: _, ...toolSchema } = input.schema
-  return tool({
-    description: STRUCTURED_OUTPUT_DESCRIPTION,
-    inputSchema: jsonSchema(toolSchema as JSONSchema7),
-    async execute(args) {
-      // AI SDK validates args against inputSchema before calling execute()
-      input.onSuccess(args)
-      return {
-        output: "Structured output captured successfully.",
-        title: "Structured Output",
-        metadata: { valid: true },
-      }
-    },
-    toModelOutput({ output }) {
-      return {
-        type: "text",
-        value: output.output,
-      }
-    },
-  })
-}
-const bashRegex = /!`([^`]+)`/g
-// Match [Image N] as single token, quoted strings, or non-space sequences
-const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
-const placeholderRegex = /\$(\d+)/g
-const quoteTrimRegex = /^["']|["']$/g
+
 const sensorGateNode = LayerNode.make(SensorGate.defaultLayer, [])
 const chainExecutorNode = LayerNode.make(ChainExecutor.defaultLayer, [])
 export const node = (LayerNode.make as any)(layer, [
@@ -2328,4 +865,5 @@ export const node = (LayerNode.make as any)(layer, [
   sensorGateNode,
   chainExecutorNode,
 ])
+export { ModelRef, PromptInput, LoopInput, ShellInput, CommandInput, createStructuredOutputTool }
 export * as SessionPrompt from "./prompt"

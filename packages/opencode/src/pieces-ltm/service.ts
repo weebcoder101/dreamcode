@@ -57,7 +57,12 @@ function callMCP(mcpURL: string, toolName: string, arguments_: Record<string, un
       return res.json() as unknown
     }),
     Effect.retry({ times: 1, delay: "500 millis" }),
-    Effect.catch(() => Effect.succeed(null)),
+    Effect.catch((e) =>
+      Effect.sync(() => {
+        console.warn(`[PiecesLTM] MCP call to "${toolName}" failed after retry:`, String(e))
+        return null
+      }),
+    ),
   )
 }
 
@@ -133,9 +138,16 @@ export const defaultLayer = Layer.effect(
     })
 
     const health = Effect.fn("PiecesLTM.health")(function* () {
+      // Use JSON-RPC ping (tools/list) instead of plain GET to the SSE endpoint.
+      // The Pieces MCP endpoint expects POST with JSON-RPC messages, not HTTP GET.
       return yield* Effect.tryPromise({
         try: async () => {
-          const r = await fetch(cfg.mcpURL, { signal: AbortSignal.timeout(5_000) })
+          const r = await fetch(cfg.mcpURL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+            signal: AbortSignal.timeout(5_000),
+          })
           return { reachable: r.ok, mcpURL: cfg.mcpURL } as HealthStatus
         },
         catch: () => ({ reachable: false, mcpURL: cfg.mcpURL } as HealthStatus),

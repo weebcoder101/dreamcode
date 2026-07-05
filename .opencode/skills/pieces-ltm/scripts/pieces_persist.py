@@ -6,10 +6,12 @@ Auto-persists skill chain results to Pieces LTM via MCP.
 Provides structured memory creation with metadata.
 """
 
+from __future__ import annotations
 import json
 import os
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -20,8 +22,9 @@ PIECES_MCP_URL = os.environ.get(
     "PIECES_MCP_URL",
     "http://localhost:39302/model_context_protocol/2024-11-05",
 )
-PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", "$(pwd)"))
-METRICS_PATH = PROJECT_ROOT / "evolution" / "pieces_writes.jsonl"
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
+EVOLUTION_DIR = Path.home() / ".dreamcode" / "evolution"
+METRICS_PATH = EVOLUTION_DIR / "pieces_writes.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +290,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Pieces LTM Persistence")
+    parser.add_argument("--prompt-file", help="Read task from file (chain-executor mode)")
     sub = parser.add_subparsers(dest="command")
 
     # persist command
@@ -308,6 +312,16 @@ if __name__ == "__main__":
     sub.add_parser("stats", help="Show persistence stats")
 
     args = parser.parse_args()
+
+    # Handle --prompt-file: read content and default to persist
+    if args.prompt_file:
+        with open(args.prompt_file) as f:
+            prompt_content = f.read()
+        if not args.command:
+            args.command = "persist"
+            args.chain = "chain-executor"
+            args.task = prompt_content[:500]
+            args.outcome = "success"
 
     if args.command == "persist":
         result = persist_chain_result(

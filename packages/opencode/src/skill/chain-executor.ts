@@ -59,7 +59,7 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   cwd: string,
 ) {
   if (!validateScriptPath(path.resolve(script), cwd)) {
-    return { output: "[SKIPPED] Script path outside allowed skills directory", exitCode: 0 }
+    return { output: "[SKIPPED] Script path outside allowed skills directory", exitCode: -1 }
   }
   // Pass prompt via temp file + --prompt-file to avoid leaking it in process listings.
   // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
@@ -196,6 +196,17 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
     // Execute the first discovered script — prefer run.py as entry point
     const script = scripts.find((s) => path.basename(s) === "run.py") ?? scripts[0]
     const scriptResult = yield* runPythonScript(script, userPrompt, cwd)
+
+    // exitCode -1 means the script path was outside allowed dirs; fall back to skill content
+    if (scriptResult.exitCode === -1) {
+      results.push({
+        name: skillName,
+        output: skill.content,
+        status: "ok",
+        executionType: "content",
+      })
+      continue
+    }
 
     if (scriptResult.exitCode !== 0) {
       // Script crashed or was killed — propagate the error detail.

@@ -131,7 +131,7 @@ describe("subagent model functions", () => {
       yield* Effect.tryPromise(() => svc.saveVariant(model, "high"))
       const raw2 = yield* fs.readJson(file)
       const data = raw2 as Record<string, unknown>
-      expect(data.variant).toEqual({ "opencode/gpt-5": "high" })
+      expect(data.variant).toEqual({ "openai/gpt-5": "high" })
     }) as any,
   )
 })

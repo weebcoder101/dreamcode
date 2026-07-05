@@ -205,7 +205,7 @@ if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @ff-labs/fff-bun@${pkg.dependencies["@ff-labs/fff-bun"]}`
 }
 for (const item of targets) {
-  const name = [
+      const name = [
     pkg.name,
     item.os === "win32" ? "windows" : item.os,
     item.arch,
@@ -214,6 +214,7 @@ for (const item of targets) {
   ]
     .filter(Boolean)
     .join("-")
+  const outExt = item.os === "win32" ? ".exe" : ""
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
@@ -242,7 +243,7 @@ for (const item of targets) {
       autoloadTsconfig: true,
       autoloadPackageJson: true,
       target: name.replace(pkg.name, "bun") as any,
-      outfile: `dist/${name}/bin/dreamcode`,
+      outfile: `dist/${name}/bin/dreamcode${outExt}`,
       execArgv: [`--user-agent=dreamcode/${pkg.version}`, "--use-system-ca", "--"],
       windows: {},
     },
