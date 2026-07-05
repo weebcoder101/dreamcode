@@ -119,8 +119,10 @@ export function handleSelectionKey(
 
   if (event.name === "escape") {
     renderer.clearSelection()
+    // Do NOT stopPropagation — the dialog's own Esc binding needs to fire
+    // in the same keypress to actually dismiss the overlay. Stopping here
+    // forces a second Esc press.
     event.preventDefault()
-    event.stopPropagation()
     return
   }
 

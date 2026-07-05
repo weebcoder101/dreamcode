@@ -111,18 +111,17 @@ function init() {
   }
 
   useBindings(() => ({
-    enabled: store.stack.length > 0 && !hasTextSelection(renderer),
+    // Esc ALWAYS dismisses the dialog — selection management is the
+    // responsibility of handleSelectionKey (app.tsx) and mouse handlers.
+    enabled: store.stack.length > 0,
     bindings: [
       {
         key: "escape",
         desc: "Close dialog",
         group: "Dialog",
         cmd: () => {
-          // hasTextSelection detects stale selections (object exists but
-          // all referenced nodes are destroyed), clears them internally,
-          // and returns false. If a VALID text selection exists, return
-          // early so the user can press escape again to dismiss.
-          if (hasTextSelection(renderer)) return
+          // Clear any stale selection so subsequent interactions work.
+          renderer.clearSelection()
           const current = store.stack.at(-1)
           current?.onClose?.()
           setStore("stack", store.stack.slice(0, -1))
@@ -134,7 +133,8 @@ function init() {
         desc: "Close dialog",
         group: "Dialog",
         cmd: () => {
-          if (hasTextSelection(renderer)) return
+          // Clear any stale selection so subsequent interactions work.
+          renderer.clearSelection()
           const current = store.stack.at(-1)
           current?.onClose?.()
           setStore("stack", store.stack.slice(0, -1))

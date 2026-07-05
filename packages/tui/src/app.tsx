@@ -435,11 +435,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       setReady(true)
     })
 
-  // Let selection copy/dismiss win ahead of normal bindings when explicit copy is required.
+  // Selection copy/dismiss runs ahead of normal bindings on ALL platforms.
+  // On Linux the handleSelectionKey intercept was previously gated behind
+  // OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT (defaults false on Linux),
+  // which meant Esc never cleared stale selections — the primary trigger for
+  // the black-screen overlay trap.
   const offSelectionKeys = keymap.intercept(
     "key",
     ({ event }) => {
-      if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
       Selection.handleSelectionKey(renderer, toast, event, clipboard)
     },
     { priority: 1 },
