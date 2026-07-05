@@ -18,6 +18,7 @@ import { Dynamic } from "solid-js/web"
 import path from "node:path"
 import { mkdir, writeFile } from "node:fs/promises"
 import { useRoute, useRouteData } from "../../context/route"
+import { hasTextSelection } from "../../util/selection"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
@@ -1262,7 +1263,7 @@ export function Session() {
                         <UserMessage
                           index={index()}
                           onMouseUp={() => {
-                            if (renderer.getSelection()?.getSelectedText()) return
+                            if (hasTextSelection(renderer)) return
                             dialog.replace(() => (
                               <DialogMessage
                                 messageID={message.id}
@@ -1900,12 +1901,12 @@ function InlineTool(props: {
       onMouseOver={() => clickable() && setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseDown={() => {
-        if (renderer.getSelection()?.getSelectedText()) return
+        if (hasTextSelection(renderer)) return
         if (failed()) return
         props.onClick?.()
       }}
       onMouseUp={() => {
-        if (renderer.getSelection()?.getSelectedText()) return
+        if (hasTextSelection(renderer)) return
         if (failed()) {
           setErrorExpanded((value) => !value)
           return
@@ -2039,7 +2040,7 @@ function BlockTool(props: {
       onMouseOver={() => props.onClick && setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={() => {
-        if (renderer.getSelection()?.getSelectedText()) return
+        if (hasTextSelection(renderer)) return
         props.onClick?.()
       }}
     >

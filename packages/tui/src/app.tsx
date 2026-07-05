@@ -1096,6 +1096,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       flexDirection="column"
       backgroundColor={theme.background}
       onMouseDown={(evt) => {
+        // Clear stale selection at the outermost event boundary before any
+        // per-component handler sees getSelection(). This is the definitive
+        // defense against stale selection blocking future interactions.
+        Selection.clearStaleSelection(renderer)
+
         if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
         if (evt.button !== MouseButton.RIGHT) return
 

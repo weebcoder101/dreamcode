@@ -7,6 +7,7 @@ import { useToast } from "./toast"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { useBindings, useOpencodeModeStack } from "../keymap"
 import { useClipboard } from "../context/clipboard"
+import { hasTextSelection } from "../util/selection"
 
 export function Dialog(
   props: ParentProps<{
@@ -32,7 +33,7 @@ export function Dialog(
         // If the selection references only destroyed renderables (stale),
         // getSelectedText() returns "". Clear it immediately so dismiss
         // can proceed in a single click.
-        if (dismiss && !renderer.getSelection()?.getSelectedText()) {
+        if (dismiss && !hasTextSelection(renderer)) {
           renderer.clearSelection()
           dismiss = false
         }
@@ -110,7 +111,7 @@ function init() {
   }
 
   useBindings(() => ({
-    enabled: store.stack.length > 0 && !renderer.getSelection()?.getSelectedText(),
+    enabled: store.stack.length > 0 && !hasTextSelection(renderer),
     bindings: [
       {
         key: "escape",

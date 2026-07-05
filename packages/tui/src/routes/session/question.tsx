@@ -3,6 +3,7 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-j
 import { useRenderer } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
+import { hasTextSelection } from "../../util/selection"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
@@ -315,7 +316,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                     onMouseOver={() => setTabHover(index())}
                     onMouseOut={() => setTabHover(null)}
                     onMouseUp={() => {
-                      if (renderer.getSelection()?.getSelectedText()) return
+                      if (hasTextSelection(renderer)) return
                       selectTab(index())
                     }}
                   >
@@ -343,7 +344,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
               onMouseOver={() => setTabHover("confirm")}
               onMouseOut={() => setTabHover(null)}
               onMouseUp={() => {
-                if (renderer.getSelection()?.getSelectedText()) return
+                if (hasTextSelection(renderer)) return
                 selectTab(questions().length)
               }}
             >
@@ -370,7 +371,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                       onMouseOver={() => moveTo(i())}
                       onMouseDown={() => moveTo(i())}
                       onMouseUp={() => {
-                        if (renderer.getSelection()?.getSelectedText()) return
+                        if (hasTextSelection(renderer)) return
                         selectOption()
                       }}
                     >
@@ -402,7 +403,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                   onMouseOver={() => moveTo(options().length)}
                   onMouseDown={() => moveTo(options().length)}
                   onMouseUp={() => {
-                    if (renderer.getSelection()?.getSelectedText()) return
+                    if (hasTextSelection(renderer)) return
                     selectOption()
                   }}
                 >
