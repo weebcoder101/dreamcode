@@ -82,6 +82,7 @@ function init() {
   })
 
   let focus: Renderable | null
+  let clearing = false
   function refocus() {
     setTimeout(() => {
       if (!focus) return
@@ -135,14 +136,26 @@ function init() {
 
   return {
     clear() {
-      for (const item of store.stack) {
-        if (item.onClose) item.onClose()
+      // Prevent re-entrant clear() — the overlay's onClose and a content
+      // handler (e.g. dialog-select option's onSelect) can both call clear()
+      // in the same event chain. Without this guard, the inner box with
+      // stopPropagation is destroyed while the mouseup event is still
+      // propagating, which can leave a stale selection on the renderer and
+      // block subsequent clicks (InlineToolRow guard at index.tsx:1903).
+      if (clearing) return
+      clearing = true
+      try {
+        for (const item of store.stack) {
+          if (item.onClose) item.onClose()
+        }
+        batch(() => {
+          setStore("size", "medium")
+          setStore("stack", [])
+        })
+        refocus()
+      } finally {
+        clearing = false
       }
-      batch(() => {
-        setStore("size", "medium")
-        setStore("stack", [])
-      })
-      refocus()
     },
     replace(input: any, onClose?: () => void) {
       if (store.stack.length === 0) {
@@ -159,6 +172,9 @@ function init() {
           onClose,
         },
       ])
+    },
+    get clearing() {
+      return clearing
     },
     get stack() {
       return store.stack
@@ -183,6 +199,9 @@ export function DialogProvider(props: ParentProps) {
   const clipboard = useClipboard()
 
   function copySelection() {
+    // Skip copy if dialog is mid-clear — the render tree may be in an
+    // inconsistent state and getSelection() could reference destroyed nodes.
+    if (value.clearing) return false
     const text = renderer.getSelection()?.getSelectedText()
     if (!text || !clipboard.write) return false
     void clipboard.write(text).then(

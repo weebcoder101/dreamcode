@@ -1105,7 +1105,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       }}
       onMouseUp={
         !Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT
-          ? () => Selection.copy(renderer, toast, clipboard)
+          ? () => {
+              // Skip copy if a dialog is mid-clear — the render tree may be
+              // inconsistent and getSelection() could reference destroyed nodes.
+              if ((dialog as { clearing?: boolean }).clearing) return
+              Selection.copy(renderer, toast, clipboard)
+            }
           : undefined
       }
     >

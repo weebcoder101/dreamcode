@@ -459,7 +459,10 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       <box
         flexDirection="row"
         backgroundColor={active() ? theme.primary : RGBA.fromInts(0, 0, 0, 0)}
-        onMouseUp={() => triggerAction(item)}
+        onMouseUp={(e: { stopPropagation(): void }) => {
+            e.stopPropagation()
+            triggerAction(item)
+          }}
       >
         <text
           fg={disabled() ? theme.textMuted : active() ? fg : theme.text}
@@ -481,7 +484,10 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               {props.title}
             </text>
           )}
-          <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+          <text fg={theme.textMuted} onMouseUp={(e: { stopPropagation(): void }) => {
+              e.stopPropagation()
+              dialog.clear()
+            }}>
             esc
           </text>
         </box>
@@ -561,8 +567,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                             setStore("input", "mouse")
                             setFocusedAction(undefined)
                           }}
-                          onMouseUp={() => {
+                          onMouseUp={(e: { stopPropagation(): void }) => {
                             if (props.locked) return
+                            e.stopPropagation()
                             option.onSelect?.(dialog)
                             props.onSelect?.(option)
                           }}
