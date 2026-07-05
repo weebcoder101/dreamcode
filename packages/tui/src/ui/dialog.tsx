@@ -33,6 +33,16 @@ export function Dialog(
       onMouseUp={(e: { stopPropagation(): void }) => {
         e.stopPropagation()
         if (dismiss) {
+          // Stale selection (from destroyed dialog content) makes dismiss
+          // truthy on every click, permanently trapping the dialog open.
+          // Clear the selection so the next click can dismiss normally.
+          const sel = renderer.getSelection()
+          const text = sel?.getSelectedText()
+          if (text) {
+            const len = text.length
+            console.error("[dialog] dismiss blocked by selection=" + len + "ch (stale? " + (sel ? "sel exists" : "null") + ")")
+          }
+          renderer.clearSelection()
           dismiss = false
           return
         }
@@ -165,6 +175,10 @@ function init() {
       }
     },
     replace(input: any, onClose?: () => void) {
+      // Prevent re-entrant replace() — if this fires while clear() is
+      // running (e.g. from an onClose callback), the batch in clear()
+      // would overwrite the stack with [] and discard the new content.
+      if (clearing) return
       // Clear selection before replacing — old dialog content is destroyed
       // and any selection referencing it would become stale.
       renderer.clearSelection()
@@ -198,7 +212,7 @@ function init() {
   }
 }
 
-export type DialogContext = ReturnType<typeof init>
+export type DialogContext = ReturnType<typeof init> & { readonly clearing: boolean }
 
 const ctx = createContext<DialogContext>()
 
