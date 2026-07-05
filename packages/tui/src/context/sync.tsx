@@ -161,9 +161,20 @@ export const {
 
     event.subscribe((event, { workspace }) => {
       switch (event.type) {
-        case "server.instance.disposed":
+        case "server.instance.disposed": {
+          // Don't re-bootstrap if any session is actively generating.
+          // server.instance.disposed fires when the server recycles an
+          // instance (config reload, cache expiry, etc.) during normal
+          // operation. Running bootstrap() replaces the entire session
+          // list via reconcile(), which can remove the active session
+          // if it hasn't been persisted yet — causing session() to
+          // return undefined and the entire UI to disappear (black screen).
+          const hasActiveGeneration = Object.values(store.session_status)
+            .some((s) => s.type === "busy" || s.type === "retry")
+          if (hasActiveGeneration) break
           void bootstrap()
           break
+        }
         case "permission.replied": {
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
