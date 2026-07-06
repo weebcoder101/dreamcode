@@ -1465,24 +1465,36 @@ export function Session() {
             <Toast />
           </box>
           <Show when={sidebarVisible()}>
-            <Switch>
-              <Match when={wide()}>
-                <Sidebar sessionID={route.sessionID} />
-              </Match>
-              <Match when={!wide()}>
-                <box
-                  position="absolute"
-                  top={0}
-                  left={0}
-                  right={0}
-                  bottom={0}
-                  alignItems="flex-end"
-                  backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
-                >
+            <ErrorBoundary
+              fallback={(error) => {
+                try {
+                  fs.appendFileSync(
+                    "/tmp/dreamcode-diag.log",
+                    `[${Date.now()}] RENDER-ERROR sidebar sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
+                  )
+                } catch {}
+                return <></>
+              }}
+            >
+              <Switch>
+                <Match when={wide()}>
                   <Sidebar sessionID={route.sessionID} />
-                </box>
-              </Match>
-            </Switch>
+                </Match>
+                <Match when={!wide()}>
+                  <box
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    right={0}
+                    bottom={0}
+                    alignItems="flex-end"
+                    backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
+                  >
+                    <Sidebar sessionID={route.sessionID} />
+                  </box>
+                </Match>
+              </Switch>
+            </ErrorBoundary>
           </Show>
         </box>
       </context.Provider>
