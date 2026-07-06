@@ -504,6 +504,15 @@ Before every response, verify your reasoning:
               aborted: true,
             })
             msg.time.completed = Date.now()
+            // Preserve any cost/tokens the processor may have accumulated
+            // (e.g. from step-finish parts) before publishing. The initial
+            // msg has cost=0 and tokens={0}, and publishing those values
+            // would overwrite the session-level accumulated tokens in the
+            // TUI store — triggering the "tokens become zero" bug.
+            // The processor handle may have set handle.message.cost/tokens
+            // via step-finish parts even if the LLM was interrupted.
+            msg.cost = handle.message.cost ?? msg.cost
+            msg.tokens = handle.message.tokens ?? msg.tokens
             yield* sessions.updateMessage(msg)
           })
           const handle = yield* processor
