@@ -712,6 +712,12 @@ export const {
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
+            // Capture snapshot BEFORE produce to have a stable reference for
+            // the defensive wipe guard. The SolidJS draft proxy may return a
+            // stale/empty reference after rapid 100-limit shifts, causing
+            // currentMessages inside produce to be [] and silently wiping
+            // all messages. This snapshot is the LIVE store reference.
+            const preSyncMessages = store.message[sessionID]
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
@@ -747,11 +753,21 @@ export const {
                 )
                 const removed = infos.slice(0, -100)
                 const visible = infos.slice(-100)
-                // DIAG: detect unexpected message wipe — sync produced < 2 messages
-                // when there was data in the store. This helps catch the persona
-                // bug where SSE-delivered messages vanish.
+                // DIAG + DEFENSIVE GUARD: detect when sync would wipe messages.
+                // If currentMessages had >= 2 but visible has < 2, the SolidJS
+                // draft proxy likely returned a stale reference (after rapid
+                // 100-limit shifts replacing the array). Preserve the pre-sync
+                // snapshot instead of wiping everything to blank.
+                if ((preSyncMessages?.length ?? 0) >= 2 && visible.length < 2) {
+                  diag(`SYNC-WIPE-PREVENTED: sessionID=${sessionID} preserved=${preSyncMessages!.length} currentMessages=${currentMessages.length} serverReturned=${(messages.data ?? []).length} visible=${visible.length} trackerMessages=${tracker.messages.size}`)
+                  draft.message[sessionID] = preSyncMessages!
+                  draft.session_diff[sessionID] = diff.data ?? []
+                  return
+                }
+                // DIAG-only: log when the condition was met but the guard
+                // snapshot was empty (in case the snapshot itself was empty).
                 if (currentMessages.length >= 2 && visible.length < 2) {
-                  diag(`SYNC-WIPE: sessionID=${sessionID} currentMessages=${currentMessages.length} serverReturned=${(messages.data ?? []).length} visible=${visible.length} trackerMessages=${tracker.messages.size} deletedMessages=${tracker.deletedMessages.size}`)
+                  diag(`SYNC-WIPE: sessionID=${sessionID} currentMessages=${currentMessages.length} serverReturned=${(messages.data ?? []).length} visible=${visible.length} trackerMessages=${tracker.messages.size} deletedMessages=${tracker.deletedMessages.size} preSyncMessages=${preSyncMessages?.length ?? 0}`)
                 }
                 const visibleIDs = new Set(visible.map((message) => message.id))
                 for (const message of messages.data ?? []) {
