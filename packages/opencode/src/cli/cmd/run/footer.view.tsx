@@ -22,6 +22,7 @@ import {
 } from "./footer.command"
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
+import { createPanelAutoClose } from "./footer.panel"
 import { createSubagentTabState } from "./footer.subagent-tab"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
@@ -513,26 +514,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   // NOTE: Auto-close on subagent tab/menu/queued removed by user request.
   // These effects are now in createSubagentTabState in footer.subagent-tab.ts.
 
-  createEffect(() => {
-    if (active().type === "prompt") {
-      return
-    }
-
-    const current = route()
-    if (
-      current.type !== "command" &&
-      current.type !== "skill" &&
-      current.type !== "model" &&
-      current.type !== "variant" &&
-      current.type !== "queued-menu" &&
-      current.type !== "subagent-menu" &&
-      current.type !== "subagent-model"
-    ) {
-      return
-    }
-
-    closePanel()
-  })
+  createPanelAutoClose({ active, route, closePanel })
 
   createEffect(() => {
     props.onLayout({
