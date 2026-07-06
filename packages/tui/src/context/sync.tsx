@@ -725,6 +725,16 @@ export const {
                 if (!match.found) draft.session.splice(match.index, 0, session.data!)
                 draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
+                // Use preSyncMessages (live store snapshot) for the preserve logic,
+                // NOT currentMessages (draft proxy). If the SolidJS draft proxy
+                // returns a stale/empty reference after rapid 100-limit shifts,
+                // currentMessages will be [] and the preserve step below would
+                // silently drop SSE messages that arrived before sync started.
+                // This is the root cause of the "all data gone" bug: the HTTP
+                // response is stale (returns fewer messages than SSE delivered),
+                // but the preserve step can't recover them from the draft proxy.
+                // Using the live store snapshot guarantees we see the real data.
+                const liveMessages = preSyncMessages ?? []
                 // DIAG: detect SolidJS draft proxy returning stale/empty reference.
                 // If the live store (preSyncMessages) has data but the draft proxy
                 // (currentMessages) shows fewer or zero, the draft proxy is stale.
@@ -738,7 +748,7 @@ export const {
                 }
                 const infos = (messages.data ?? []).flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]
-                  const current = currentMessages.find((item) => item.id === message.info.id)
+                  const current = liveMessages.find((item) => item.id === message.info.id)
                   return current ? [current] : []
                 })
                 // Preserve ALL current messages not already in the server response.
@@ -753,10 +763,14 @@ export const {
                 // (revert/undo/compaction). The message.removed handler adds them
                 // to tracker.deletedMessages as defense-in-depth — the handler also
                 // removes them from the store synchronously (so they're typically
-                // already gone from currentMessages), but if a race causes them
+                // already gone from preSyncMessages), but if a race causes them
                 // to still be present, this guard prevents re-preservation.
+                //
+                // IMPORTANT: This reads from liveMessages (preSyncMessages snapshot)
+                // instead of currentMessages (draft proxy) to prevent stale draft
+                // proxy references from silently dropping SSE-preserved messages.
                 infos.push(
-                  ...currentMessages.filter(
+                  ...liveMessages.filter(
                     (message) =>
                       !infos.some((item) => item.id === message.id) &&
                       !tracker.deletedMessages.has(message.id),
