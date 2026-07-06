@@ -219,6 +219,13 @@ export function Session() {
   // DIAG: detect when session view renders empty while store has data
   // This helps identify if a Solid reactivity glitch causes the session
   // to show no messages despite data being in the store.
+  //
+  // Auto-recovery: when the store has messages but the reactive memo returns
+  // empty (reactivity glitch or data wipe), call session.recover() to force
+  // a fresh re-sync from the server. A 10-second cooldown prevents loops
+  // when the server returns empty responses.
+  let lastEmptyRenderRecover = 0
+  const EMPTY_RENDER_COOLDOWN = 10_000
   createEffect(() => {
     const s = session()
     const msgs = messages()
@@ -230,6 +237,20 @@ export function Session() {
           `[${Date.now()}] EMPTY-RENDER sessionID=${route.sessionID} sessionExists=true sessionTitle="${(s.title ?? "").slice(0, 40)}" messagesInStore=${storeMsgs?.length ?? 0} messageKeys=${Object.keys(sync.data.message).length}\n`,
         )
       } catch {}
+      // Auto-recovery: if store has data but render is empty (reactivity glitch),
+      // or if store is empty (data was wiped), trigger a fresh re-sync.
+      // Cooldown prevents infinite loops when server returns empty responses.
+      const now = Date.now()
+      if (now - lastEmptyRenderRecover > EMPTY_RENDER_COOLDOWN) {
+        lastEmptyRenderRecover = now
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${now}] EMPTY-RECOVER sessionID=${route.sessionID} storeHas=${storeMsgs?.length ?? 0}\n`,
+          )
+        } catch {}
+        void sync.session.recover(route.sessionID).catch(() => {})
+      }
     }
   })
 

@@ -697,6 +697,16 @@ export const {
           if (last.role === "user") return "working"
           return last.time.completed ? "idle" : "working"
         },
+        async recover(sessionID: string) {
+          // Bypass fullSyncedSessions to force a fresh re-sync from the server.
+          // This is used by EMPTY-RENDER auto-recovery when the session view
+          // renders empty but data should exist. Deleting fullSyncedSessions
+          // allows the sync() call below to proceed even if a previous sync
+          // completed (and data was later wiped by an unlogged path).
+          fullSyncedSessions.delete(sessionID)
+          diag(`session.recover() sessionID=${sessionID} — forcing re-sync`)
+          return this.sync(sessionID)
+        },
         async sync(sessionID: string) {
           if (fullSyncedSessions.has(sessionID)) {
             diag(`session.sync() SKIPPED — fullSyncedSessions has sessionID=${sessionID}`)
