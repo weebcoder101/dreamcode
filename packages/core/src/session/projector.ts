@@ -282,6 +282,26 @@ export const layer = Layer.effectDiscard(
         // If the row was deleted between event creation and projection, skip
         // the update — the Deleted handler will clean up shortly.
         if (!current) return
+
+        // DIAG: log when event cost/tokens differ from current DB row — this
+        // identifies which patch()/touch() call creates a stale SessionUpdated
+        // event before step-finish parts have been projected.
+        const eventCost = event.data.info.cost ?? 0
+        const eventTokensIn = (event.data.info.tokens ?? { input: 0 }).input
+        const eventTokensOut = (event.data.info.tokens ?? { output: 0 }).output
+        if (
+          eventCost !== current.cost ||
+          eventTokensIn !== current.tokens_input ||
+          eventTokensOut !== current.tokens_output
+        ) {
+          yield* Effect.logWarning(
+            `[PROJECTOR-DIAG] SessionUpdated cost/tokens differ from DB — ` +
+            `sessionID=${event.data.sessionID} ` +
+            `eventCost=${eventCost} dbCost=${current.cost} ` +
+            `eventTokensIn=${eventTokensIn} dbTokensIn=${current.tokens_input} ` +
+            `eventTokensOut=${eventTokensOut} dbTokensOut=${current.tokens_output}`
+          )
+        }
         yield* db
           .update(SessionTable)
           .set({
