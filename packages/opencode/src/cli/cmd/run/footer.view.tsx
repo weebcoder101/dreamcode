@@ -22,6 +22,7 @@ import {
 } from "./footer.command"
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
+import { createFooterBindings } from "./footer.bindings"
 import { createPanelAutoClose } from "./footer.panel"
 import { createSubagentTabState } from "./footer.subagent-tab"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
@@ -29,10 +30,8 @@ import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { footerWidthPolicy } from "./footer.width"
 import {
-  OPENCODE_BASE_MODE,
   formatKeyBindings,
   formatKeySequence,
-  useBindings,
   useKeymapSelector,
   type OpenTuiKeymap,
 } from "@opencode-ai/tui/keymap"
@@ -445,71 +444,20 @@ export function RunFooterView(props: RunFooterViewProps) {
     props.onRequestExit?.(undefined)
   })
 
-  useBindings(() => ({
-    mode: OPENCODE_BASE_MODE,
-    enabled: active().type === "prompt" && route().type === "composer" && !composer.visible(),
-    commands: [
-      {
-        name: "command.palette.show",
-        title: "Open command palette",
-        category: "Prompt",
-        run: openCommand,
-      },
-      {
-        name: "variant.cycle",
-        title: "Cycle model variant",
-        category: "Model",
-        run: props.onCycle,
-      },
-    ],
-    bindings: [
-      ...props.tuiConfig.keybinds.get("command.palette.show"),
-      ...props.tuiConfig.keybinds.get("variant.cycle"),
-    ],
-  }))
-
-  useBindings(() => ({
-    mode: OPENCODE_BASE_MODE,
-    enabled: active().type === "prompt" && route().type === "composer" && foregroundSubagents(),
-    priority: 1,
-    commands: [
-      {
-        name: "session.background",
-        title: "Background subagents",
-        category: "Session",
-        run: () => props.onBackground?.(),
-      },
-    ],
-    bindings: props.tuiConfig.keybinds.get("session.background"),
-  }))
-
-  useBindings(() => ({
-    mode: OPENCODE_BASE_MODE,
-    enabled: active().type === "prompt" && route().type === "composer" && tabs().length > 0,
-    commands: [
-      {
-        name: "session.child.first",
-        title: "View subagents",
-        category: "Session",
-        run: openSubagentMenu,
-      },
-    ],
-    bindings: props.tuiConfig.keybinds.get("session.child.first"),
-  }))
-
-  useBindings(() => ({
-    mode: OPENCODE_BASE_MODE,
-    enabled: active().type === "prompt" && route().type === "composer" && queuedPrompts().length > 0,
-    commands: [
-      {
-        name: "session.queued_prompts",
-        title: "Manage queued prompts",
-        category: "Session",
-        run: openQueuedMenu,
-      },
-    ],
-    bindings: props.tuiConfig.keybinds.get("session.queued_prompts"),
-  }))
+  createFooterBindings({
+    active,
+    route,
+    composerVisible: () => composer.visible(),
+    foregroundSubagents,
+    tabs,
+    queuedPromptsLength: () => queuedPrompts().length,
+    openCommand,
+    openSubagentMenu,
+    openQueuedMenu,
+    onCycle: props.onCycle,
+    onBackground: props.onBackground,
+    tuiConfig: props.tuiConfig,
+  })
 
   // NOTE: Auto-close on subagent tab/menu/queued removed by user request.
   // These effects are now in createSubagentTabState in footer.subagent-tab.ts.
