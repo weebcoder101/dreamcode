@@ -471,8 +471,8 @@ export function selectPersonas(result: SensorGateResult, prompt?: string): Perso
     return { profile, score }
   })
 
-  // Raise minimum score threshold — require at least 2 tag matches to justify a persona
-  const eligible = scored.filter((s) => s.score >= 2).sort((a, b) => b.score - a.score)
+  // Minimum score threshold — require at least 1 tag match to justify a persona
+  const eligible = scored.filter((s) => s.score >= 1).sort((a, b) => b.score - a.score)
 
   // For simple/low-risk tasks, skip personas entirely
   if (complexityScore <= 1 && mode !== "DREAM_INNOVATION" && eligible.length === 0) {
@@ -976,7 +976,7 @@ export const layer = Layer.effect(
           // Defense-in-depth: also check the raw prompt for social greetings, since Python's
           // social greeting early-return produces empty stdout and is_social_greeting is false.
           const promptIsSocialGreeting = result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())
-          if (result.personas.length === 0 && result.domain_tags.length === 0 && !promptIsSocialGreeting) {
+          if (result.personas.length === 0 && !promptIsSocialGreeting) {
             // Use question complexity to determine fallback count instead of hardcoded 3.
             // If we have active rated questions, use their max complexity; otherwise default to medium.
             const complexity: ComplexityLevel = result.complexity === "high" ? "high"

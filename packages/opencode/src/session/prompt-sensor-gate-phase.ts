@@ -240,6 +240,11 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
       agent: "general",
       variant: lastUser?.model?.variant,
       path: { cwd: ctx.directory, root: ctx.worktree },
+      // cost/tokens MUST be present with zero values because the TUI
+      // reads these immediately via message.updated events and crashes
+      // with "Missing key at ["info"]["cost"]" when they are absent.
+      // Accumulated values are written after all subagents complete
+      // below. The initial "0" is temporary and gets overwritten.
       cost: 0,
       tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       providerID: model.providerID,
@@ -338,7 +343,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
           persona.task,
         ].join("\n")
 
-        const updatePart = (status: "completed" | "error", output: string) =>
+        const updatePart = (status: "completed" | "error", output: string, resultMetadata?: Record<string, any>) =>
           Effect.gen(function* () {
             yield* tracker.complete(persona.name, persona.role, output, status, {
               task: persona.task, goals: persona.goals, synthesisGuide: persona.synthesisGuide,
@@ -347,8 +352,8 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
             yield* sessions.updatePart({
               ...part,
               state: status === "completed"
-                ? { ...st, status: "completed", output, title: persona.name, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
-                : { ...st, status: "error", error: output, metadata: { ...st.metadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
+                ? { ...st, status: "completed", output, title: persona.name, metadata: { ...st.metadata, ...resultMetadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } }
+                : { ...st, status: "error", error: output, metadata: { ...st.metadata, ...resultMetadata, persona: persona.name }, time: { start: st.time?.start ?? Date.now(), end: Date.now() } },
             })
           }).pipe(Effect.catchCause((cause) => Effect.logWarning("updatePart failed", { cause })))
 
@@ -374,7 +379,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
           .pipe(
             Effect.matchEffect({
               onSuccess: (result: any) => Effect.gen(function* () {
-                yield* updatePart("completed", result?.output)
+                yield* updatePart("completed", result?.output, result?.metadata)
                 const subagentCost_ = Number(result?.subagentCost)
                 const subagentTokens_ = result?.subagentTokens
                 if (Number.isFinite(subagentCost_) && subagentCost_ > 0) {
@@ -407,7 +412,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
               }),
               onFailure: (error) => {
                 abortController.abort()
-                return updatePart("error", String(error))
+                return updatePart("error", String(error), undefined)
               },
             }),
           )

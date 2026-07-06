@@ -1953,9 +1953,9 @@ function InlineTool(props: {
       onMouseOver={() => clickable() && setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseDown={() => {
-        if (hasTextSelection(renderer)) return
-        if (failed()) return
-        props.onClick?.()
+        // Clear stale selection at boundary; navigation deferred to onMouseUp
+        // so terminal-native PRIMARY selection on Linux completes before any
+        // click action fires.
       }}
       onMouseUp={() => {
         if (hasTextSelection(renderer)) return
@@ -1963,7 +1963,7 @@ function InlineTool(props: {
           setErrorExpanded((value) => !value)
           return
         }
-        // No default navigation — onMouseDown handles it. onMouseUp is error-expand only.
+        props.onClick?.()
       }}
     >
       {props.children}
