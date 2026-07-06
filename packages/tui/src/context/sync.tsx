@@ -183,7 +183,15 @@ export const {
             .some((s) => s.type === "busy" || s.type === "retry")
           const hasSessionMessages = Object.keys(store.message).length > 0
           const hasAnySessions = store.session.length > 0
-          if (hasActiveGeneration || hasSessionMessages || hasAnySessions) break
+          if (hasActiveGeneration || hasSessionMessages || hasAnySessions) {
+            console.warn(
+              `[DIAG] server.instance.disposed SUPPRESSED — activeGen=${hasActiveGeneration} sessionMsgs=${hasSessionMessages} anySessions=${hasAnySessions} sessions=${store.session.length} msgKeys=${Object.keys(store.message).length}`,
+            )
+            break
+          }
+          console.warn(
+            `[DIAG] server.instance.disposed FIRING bootstrap — activeGen=${hasActiveGeneration} sessionMsgs=${hasSessionMessages} anySessions=${hasAnySessions}`,
+          )
           void bootstrap()
           break
         }
@@ -271,6 +279,9 @@ export const {
           break
 
         case "session.deleted": {
+          console.warn(
+            `[DIAG] session.deleted id=${event.properties.info.id} title="${event.properties.info.title?.slice(0, 60) ?? ""}"`,
+          )
           const result = search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
             setStore(
@@ -656,9 +667,12 @@ export const {
           return last.time.completed ? "idle" : "working"
         },
         async sync(sessionID: string) {
-          if (fullSyncedSessions.has(sessionID)) return
+          if (fullSyncedSessions.has(sessionID)) {
+            return
+          }
           const syncing = syncingSessions.get(sessionID)
           if (syncing) return syncing
+          console.warn(`[DIAG] session.sync() starting sessionID=${sessionID}`)
           const tracker = { messages: new Set<string>(), parts: new Set<string>(), deletedMessages: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
@@ -703,6 +717,14 @@ export const {
                 )
                 const removed = infos.slice(0, -100)
                 const visible = infos.slice(-100)
+                // DIAG: detect unexpected message wipe — sync produced < 2 messages
+                // when there was data in the store. This helps catch the persona
+                // bug where SSE-delivered messages vanish.
+                if (currentMessages.length >= 2 && visible.length < 2) {
+                  console.warn(
+                    `[DIAG] SYNC-WIPE: sessionID=${sessionID} currentMessages=${currentMessages.length} serverReturned=${(messages.data ?? []).length} visible=${visible.length} trackerMessages=${tracker.messages.size} deletedMessages=${tracker.deletedMessages.size}`,
+                  )
+                }
                 const visibleIDs = new Set(visible.map((message) => message.id))
                 for (const message of messages.data ?? []) {
                   if (!visibleIDs.has(message.info.id)) {
@@ -744,6 +766,9 @@ export const {
               }),
             )
             fullSyncedSessions.add(sessionID)
+            console.warn(
+              `[DIAG] session.sync() COMPLETE sessionID=${sessionID} messagesInStore=${store.message[sessionID]?.length ?? 0}`,
+            )
           })().finally(() => {
             syncingSessions.delete(sessionID)
             hydratingSessions.delete(sessionID)
