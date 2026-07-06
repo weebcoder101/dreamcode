@@ -4,6 +4,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  ErrorBoundary,
   For,
   Match,
   on,
@@ -17,6 +18,7 @@ import {
 import { Dynamic } from "solid-js/web"
 import path from "node:path"
 import { mkdir, writeFile } from "node:fs/promises"
+import fs from "node:fs"
 import { useRoute, useRouteData } from "../../context/route"
 import { hasTextSelection } from "../../util/selection"
 import { useProject } from "../../context/project"
@@ -1244,6 +1246,46 @@ export function Session() {
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
+              <ErrorBoundary
+                fallback={(error, reset) => {
+                  try {
+                    fs.appendFileSync(
+                      "/tmp/dreamcode-diag.log",
+                      `[${Date.now()}] RENDER-ERROR sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
+                    )
+                  } catch {}
+                  return (
+                    <box
+                      border={["left"]}
+                      paddingTop={1}
+                      paddingBottom={1}
+                      paddingLeft={2}
+                      marginTop={1}
+                      backgroundColor={theme.backgroundPanel}
+                      borderColor={theme.error}
+                    >
+                      <text fg={theme.error}>⚠ Render error in session view</text>
+                      <text paddingTop={1} fg={theme.textMuted}>
+                        {error instanceof Error ? error.message.slice(0, 80) : "An unexpected error occurred"}
+                      </text>
+                      <box
+                        onMouseUp={() => {
+                          try {
+                            fs.appendFileSync(
+                              "/tmp/dreamcode-diag.log",
+                              `[${Date.now()}] RENDER-RETRY sessionID=${route.sessionID}\n`,
+                            )
+                          } catch {}
+                          reset()
+                        }}
+                        paddingTop={1}
+                      >
+                        <text fg={theme.text}>╭─ Click to retry ─╮</text>
+                      </box>
+                    </box>
+                  )
+                }}
+              >
               <scrollbox
                 ref={(r) => (scroll = r)}
                 viewportOptions={{
@@ -1397,6 +1439,7 @@ export function Session() {
                   </pluginRuntime.Slot>
                 </Show>
               </box>
+              </ErrorBoundary>
             </Show>
             <Toast />
           </box>
