@@ -294,6 +294,7 @@ export const {
           break
         }
         case "session.updated": {
+          diag(`session.updated id=${event.properties.info.id} title="${event.properties.info.title?.slice(0, 60) ?? ""}" cost=${event.properties.info.cost ?? "?"} tokensInput=${event.properties.info.tokens?.input ?? "?"}`)
           const result = search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
             setStore("session", result.index, reconcile(event.properties.info))
@@ -325,14 +326,35 @@ export const {
         }
 
         case "session.status": {
+          diag(`session.status sessionID=${event.properties.sessionID} type=${event.properties.status.type}`)
           setStore("session_status", event.properties.sessionID, event.properties.status)
           break
         }
 
+
+        case "message.removed": {
+          touchMessage(event.properties.sessionID, event.properties.messageID)
+          touchDeletedMessage(event.properties.sessionID, event.properties.messageID)
+          const messages = store.message[event.properties.sessionID]
+          const beforeCount = messages?.length ?? 0
+          const result = search(messages, event.properties.messageID, (m) => m.id)
+          if (result.found) {
+            diag(`message.removed sessionID=${event.properties.sessionID} messageID=${event.properties.messageID} beforeCount=${beforeCount}`)
+            setStore(
+              "message",
+              event.properties.sessionID,
+              produce((draft) => {
+                draft.splice(result.index, 1)
+              }),
+            )
+          }
+          break
+        }
         case "message.updated": {
           touchMessage(event.properties.info.sessionID, event.properties.info.id)
           const messages = store.message[event.properties.info.sessionID]
           if (!messages) {
+            diag(`message.updated NEW sessionID=${event.properties.info.sessionID} messageID=${event.properties.info.id} role=${event.properties.info.role}`)
             setStore("message", event.properties.info.sessionID, [event.properties.info])
             break
           }
@@ -351,7 +373,7 @@ export const {
           const updated = store.message[event.properties.info.sessionID]
           if (updated.length > 100) {
             const oldest = updated[0]
-            diag(`message.updated 100-LIMIT-SHIFT sessionID=${event.properties.info.sessionID} messageID=${oldest.id} count=${updated.length}`)
+            diag(`message.updated 100-LIMIT-SHIFT sessionID=${event.properties.info.sessionID} messageID=${oldest.id} incomingID=${event.properties.info.id} role=${event.properties.info.role} count=${updated.length}`)
             batch(() => {
               setStore(
                 "message",
@@ -367,24 +389,6 @@ export const {
                 }),
               )
             })
-          }
-          break
-        }
-        case "message.removed": {
-          touchMessage(event.properties.sessionID, event.properties.messageID)
-          touchDeletedMessage(event.properties.sessionID, event.properties.messageID)
-          const messages = store.message[event.properties.sessionID]
-          const beforeCount = messages?.length ?? 0
-          const result = search(messages, event.properties.messageID, (m) => m.id)
-          if (result.found) {
-            diag(`message.removed sessionID=${event.properties.sessionID} messageID=${event.properties.messageID} beforeCount=${beforeCount}`)
-            setStore(
-              "message",
-              event.properties.sessionID,
-              produce((draft) => {
-                draft.splice(result.index, 1)
-              }),
-            )
           }
           break
         }
@@ -567,6 +571,7 @@ export const {
         })
         .then(() => {
           if (store.status !== "complete") setStore("status", "partial")
+          diag(`bootstrap() COMPLETE — store.sessions=${store.session.length} store.message.keys=${Object.keys(store.message).length} status=${store.status}`)
           // non-blocking
           void Promise.all([
             ...(args.continue
@@ -617,6 +622,7 @@ export const {
           })
         })
         .catch(async (e) => {
+          diag(`bootstrap() FAILED — error=${e instanceof Error ? e.message : String(e)}`)
           console.error("tui bootstrap failed", {
             error: e instanceof Error ? e.message : String(e),
             name: e instanceof Error ? e.name : undefined,

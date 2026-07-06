@@ -235,15 +235,18 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         Effect.sync(() => registerOpencodeKeymap(keymap, renderer, input.config)),
         (unregister) => Effect.sync(unregister),
       )
-      yield* Effect.addFinalizer(() =>
-        Effect.promise(async () => {
+      yield* Effect.addFinalizer(() => {
+        let disposed = false
+        return Effect.promise(async () => {
+          if (disposed) return
+          disposed = true
           try {
             await input.pluginHost.dispose()
           } catch (error) {
             console.error("Failed to dispose TUI plugins", error)
           }
-        }),
-      )
+        })
+      })
       yield* Effect.addFinalizer(() => Effect.sync(TuiAudio.dispose))
       const shutdown = yield* Deferred.make<unknown>()
       const onSighup = () => destroyRenderer(renderer)
@@ -435,14 +438,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       setReady(true)
     })
 
-  // Selection copy/dismiss runs ahead of normal bindings on ALL platforms.
-  // On Linux the handleSelectionKey intercept was previously gated behind
-  // OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT (defaults false on Linux),
-  // which meant Esc never cleared stale selections — the primary trigger for
-  // the black-screen overlay trap.
+  // Let selection copy/dismiss win ahead of normal bindings when explicit
+  // copy is required. On Linux this is gated behind the
+  // OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT flag (defaults false)
+  // because terminals handle native mouse selection independently — the
+  // dialog's own Esc/Ctrl+C handlers clear stale selections internally.
   const offSelectionKeys = keymap.intercept(
     "key",
     ({ event }) => {
+      if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
       Selection.handleSelectionKey(renderer, toast, event, clipboard)
     },
     { priority: 1 },
@@ -450,6 +454,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   onCleanup(() => {
     offSelectionKeys()
     attention.dispose()
+    for (const unsub of unsubs) unsub()
   })
 
   // Wire up console copy-to-clipboard via opentui's onCopySelection callback
@@ -471,6 +476,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   // Update terminal window title based on current route and session
   createEffect(() => {
     if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
+    if (!route.data) return
 
     if (route.data.type === "home") {
       renderer.setTerminalTitle("DreamCode")
@@ -533,6 +539,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           } else {
             toast.show({ message: "Failed to fork session", variant: "error" })
           }
+        }).catch((error) => {
+          toast.show({ message: "Failed to fork session", variant: "error" })
+          console.error("Session fork failed", error)
         })
       } else {
         route.navigate({ type: "session", sessionID: match })
@@ -553,6 +562,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       } else {
         toast.show({ message: "Failed to fork session", variant: "error" })
       }
+    }).catch((error) => {
+      toast.show({ message: "Failed to fork session", variant: "error" })
+      console.error("Session fork failed", error)
     })
   })
 
@@ -840,7 +852,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "docs.open",
         title: "Open docs",
         run: () => {
-          open("https://dreamcode.ai/docs").catch(() => {})
+          open("https://dreamcode.ai/docs").catch(() => console.warn("Failed to open docs URL"))
           dialog.clear()
         },
         category: "System",
@@ -993,53 +1005,77 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     bindings: tuiConfig.keybinds.gather("app_exit", ["app.exit"]),
   }))
 
-  event.on("tui.command.execute", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    keymap.dispatchCommand(evt.properties.command)
-  })
+  const unsubs: (() => void)[] = []
+  unsubs.push(
+    event.on("tui.command.execute", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
+      keymap.dispatchCommand(evt.properties.command)
+    }),
+  )
 
-  event.on("tui.toast.show", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    toast.show({
-      title: evt.properties.title,
-      message: evt.properties.message,
-      variant: evt.properties.variant,
-      duration: evt.properties.duration,
-    })
-  })
-
-  event.on("tui.session.select", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    route.navigate({
-      type: "session",
-      sessionID: evt.properties.sessionID,
-    })
-  })
-
-  event.on("session.deleted", (evt) => {
-    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
-      route.navigate({ type: "home" })
+  unsubs.push(
+    event.on("tui.toast.show", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
       toast.show({
-        variant: "info",
-        message: "The current session was deleted",
+        title: evt.properties.title,
+        message: evt.properties.message,
+        variant: evt.properties.variant,
+        duration: evt.properties.duration,
       })
-    }
-  })
+    }),
+  )
 
-  event.on("session.error", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    const error = evt.properties.error
-    if (error && typeof error === "object" && error.name === "MessageAbortedError") return
-    const message = errorMessage(error)
+  unsubs.push(
+    event.on("tui.session.select", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
+      route.navigate({
+        type: "session",
+        sessionID: evt.properties.sessionID,
+      })
+    }),
+  )
 
-    toast.show({
-      variant: "error",
-      message,
-      duration: 5000,
-    })
-  })
+  unsubs.push(
+    event.on("session.deleted", (evt) => {
+      if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${Date.now()}] app.session.deleted NAVIGATING HOME sessionID=${evt.properties.info.id} title="${evt.properties.info.title?.slice(0, 60) ?? ""}"\n`,
+          )
+        } catch {}
+        route.navigate({ type: "home" })
+        toast.show({
+          variant: "info",
+          message: "The current session was deleted",
+        })
+      }
+    }),
+  )
 
-  event.on("installation.update-available", async (evt) => {
+  unsubs.push(
+    event.on("session.error", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
+      const error = evt.properties.error
+      if (error && typeof error === "object" && error.name === "MessageAbortedError") return
+      const message = errorMessage(error)
+      try {
+        require("node:fs").appendFileSync(
+          "/tmp/dreamcode-diag.log",
+          `[${Date.now()}] app.session.error sessionID=${evt.properties.sessionID ?? "?"} message="${message.slice(0, 200)}"\n`,
+        )
+      } catch {}
+
+      toast.show({
+        variant: "error",
+        message,
+        duration: 5000,
+      })
+    }),
+  )
+
+  unsubs.push(
+    event.on("installation.update-available", async (evt) => {
     const version = evt.properties.version
 
     const skipped = kv.get("skipped_version")
@@ -1084,7 +1120,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     )
 
     void exit()
-  })
+  }))
 
   const plugin = createMemo(() => {
     if (!ready()) return
