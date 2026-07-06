@@ -351,6 +351,7 @@ export const {
           const updated = store.message[event.properties.info.sessionID]
           if (updated.length > 100) {
             const oldest = updated[0]
+            diag(`message.updated 100-LIMIT-SHIFT sessionID=${event.properties.info.sessionID} messageID=${oldest.id} count=${updated.length}`)
             batch(() => {
               setStore(
                 "message",
@@ -373,8 +374,10 @@ export const {
           touchMessage(event.properties.sessionID, event.properties.messageID)
           touchDeletedMessage(event.properties.sessionID, event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
+          const beforeCount = messages?.length ?? 0
           const result = search(messages, event.properties.messageID, (m) => m.id)
           if (result.found) {
+            diag(`message.removed sessionID=${event.properties.sessionID} messageID=${event.properties.messageID} beforeCount=${beforeCount}`)
             setStore(
               "message",
               event.properties.sessionID,
@@ -481,6 +484,7 @@ export const {
     const args = useArgs()
 
     async function bootstrap(input: { fatal?: boolean } = {}) {
+      diag(`bootstrap() STARTING — store.sessions=${store.session.length} store.message.keys=${Object.keys(store.message).length}`)
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
       const projectPromise = project.sync()
@@ -668,6 +672,7 @@ export const {
         },
         async sync(sessionID: string) {
           if (fullSyncedSessions.has(sessionID)) {
+            diag(`session.sync() SKIPPED — fullSyncedSessions has sessionID=${sessionID}`)
             return
           }
           const syncing = syncingSessions.get(sessionID)
