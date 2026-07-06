@@ -259,12 +259,45 @@ export const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) =>
-      db
-        .update(SessionTable)
-        .set(sessionRow(event.data.info))
-        .where(eq(SessionTable.id, event.data.sessionID))
-        .run()
-        .pipe(Effect.orDie),
+      Effect.gen(function* () {
+        // Read current accumulated cost/tokens BEFORE overwriting so we don't
+        // lose values that step-finish parts (projected asynchronously via
+        // PartUpdated → applyUsage) have already written to the DB row.
+        // Without this guard, a SessionUpdated event created before the
+        // PartUpdated projector runs will contain stale/zero cost/tokens,
+        // and the `.set(sessionRow(...))` below would silently wipe them.
+        const current = yield* db
+          .select({
+            cost: SessionTable.cost,
+            tokens_input: SessionTable.tokens_input,
+            tokens_output: SessionTable.tokens_output,
+            tokens_reasoning: SessionTable.tokens_reasoning,
+            tokens_cache_read: SessionTable.tokens_cache_read,
+            tokens_cache_write: SessionTable.tokens_cache_write,
+          })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        // If the row was deleted between event creation and projection, skip
+        // the update — the Deleted handler will clean up shortly.
+        if (!current) return
+        yield* db
+          .update(SessionTable)
+          .set({
+            ...sessionRow(event.data.info),
+            // Preserve accumulated cost/tokens from step-finish parts.
+            cost: current.cost,
+            tokens_input: current.tokens_input,
+            tokens_output: current.tokens_output,
+            tokens_reasoning: current.tokens_reasoning,
+            tokens_cache_read: current.tokens_cache_read,
+            tokens_cache_write: current.tokens_cache_write,
+          })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      }),
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
