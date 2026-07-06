@@ -653,7 +653,9 @@ export const {
           const counts = sessionIDs
             .map((id) => `${id.slice(0, 20)}:${store.message[id]?.length ?? 0}`)
             .join(" ")
-          diag(`SNAPSHOT sessions=${store.session.length} msgKeys=${sessionIDs.length} counts=[${counts}]`)
+          const partKeys = Object.keys(store.part)
+          const totalParts = partKeys.reduce((sum, id) => sum + (store.part[id]?.length ?? 0), 0)
+          diag(`SNAPSHOT sessions=${store.session.length} msgKeys=${sessionIDs.length} counts=[${counts}] partKeys=${partKeys.length} totalParts=${totalParts}`)
         } catch {}
       }, 30_000)
       onCleanup(() => clearInterval(snapshotInterval))
