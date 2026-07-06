@@ -19,6 +19,7 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
+  AssistantMessage,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -312,6 +313,7 @@ export const {
         case "session.next.moved": {
           const result = search(store.session, event.properties.sessionID, (s) => s.id)
           if (!result.found) break
+          diag(`STORE-WRITE session.next.moved sessionID=${event.properties.sessionID} dir=${event.properties.location.directory}`)
           setStore(
             "session",
             result.index,
@@ -354,15 +356,21 @@ export const {
           touchMessage(event.properties.info.sessionID, event.properties.info.id)
           const messages = store.message[event.properties.info.sessionID]
           if (!messages) {
-            diag(`message.updated NEW sessionID=${event.properties.info.sessionID} messageID=${event.properties.info.id} role=${event.properties.info.role}`)
+            diag(`STORE-WRITE message.updated.new sessionID=${event.properties.info.sessionID} messageID=${event.properties.info.id} role=${event.properties.info.role}`)
             setStore("message", event.properties.info.sessionID, [event.properties.info])
             break
           }
           const result = search(messages, event.properties.info.id, (m) => m.id)
           if (result.found) {
+            const msg = event.properties.info
+            const cost = "cost" in msg ? (msg as AssistantMessage).cost : "?"
+            const tokensIn = "tokens" in msg ? (msg as AssistantMessage).tokens?.input : "?"
+            const tokensOut = "tokens" in msg ? (msg as AssistantMessage).tokens?.output : "?"
+            diag(`STORE-WRITE message.updated.reconcile sessionID=${msg.sessionID} messageID=${msg.id} role=${msg.role} cost=${cost} tokens=${tokensIn}/${tokensOut}`)
             setStore("message", event.properties.info.sessionID, result.index, reconcile(event.properties.info))
             break
           }
+          diag(`STORE-WRITE message.updated.splice sessionID=${event.properties.info.sessionID} messageID=${event.properties.info.id} role=${event.properties.info.role} beforeCount=${messages.length}`)
           setStore(
             "message",
             event.properties.info.sessionID,
@@ -383,6 +391,7 @@ export const {
                   draft.shift()
                 }),
               )
+              diag(`STORE-WRITE message.updated.shift.part messageID=${oldest.id} — deleted parts for shifted message`)
               setStore(
                 "part",
                 produce((draft) => {
@@ -564,11 +573,13 @@ export const {
                       sessionsWithLocalMessages.has(s.id) &&
                       !serverIds.has(s.id),
                   )
+                  diag(`STORE-WRITE bootstrap.blocking.session sessionID=${Array.from(serverIds).slice(0, 3).join(",")} serverCount=${sessions.length} localWithMsgs=${sessionsWithLocalMessages.size} preservedLocal=${preservedLocal.length}`)
                   setStore(
                     "session",
                     reconcile([...sessions, ...preservedLocal]),
                   )
                 } else {
+                  diag(`STORE-WRITE bootstrap.blocking.session sessions=${sessions.length} prevSessions=${store.session.length}`)
                   setStore("session", reconcile(sessions))
                 }
               }
@@ -579,8 +590,7 @@ export const {
           if (store.status !== "complete") setStore("status", "partial")
           diag(`bootstrap() COMPLETE — store.sessions=${store.session.length} store.message.keys=${Object.keys(store.message).length} status=${store.status}`)
           // non-blocking
-          void Promise.all([
-            ...(args.continue
+          void Promise.all([                              ...(args.continue
               ? []
               : [
                   sessionListPromise.then((sessions) => {
@@ -600,11 +610,13 @@ export const {
                           sessionsWithLocalMessages.has(s.id) &&
                           !serverIds.has(s.id),
                       )
+                      diag(`STORE-WRITE bootstrap.nonblocking.session serverCount=${sessions.length} localWithMsgs=${sessionsWithLocalMessages.size} preservedLocal=${preservedLocal.length}`)
                       setStore(
                         "session",
                         reconcile([...sessions, ...preservedLocal]),
                       )
                     } else {
+                      diag(`STORE-WRITE bootstrap.nonblocking.session sessions=${sessions.length} prevSessions=${store.session.length}`)
                       setStore("session", reconcile(sessions))
                     }
                   }),
@@ -685,6 +697,7 @@ export const {
         },
         async refresh() {
           const list = await listSessions()
+          diag(`STORE-WRITE session.refresh sessions=${list.length} prevSessions=${store.session.length}`)
           setStore("session", reconcile(list))
         },
         status(sessionID: string) {
@@ -733,8 +746,14 @@ export const {
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
-                if (match.found) draft.session[match.index] = session.data!
-                if (!match.found) draft.session.splice(match.index, 0, session.data!)
+                if (match.found) {
+                  draft.session[match.index] = session.data!
+                  diag(`STORE-WRITE session.sync.session.session UPDATE sessionID=${sessionID} prevTitle=${store.session[match.index]?.title?.slice(0, 30) ?? ""} newTitle=${session.data?.title?.slice(0, 30) ?? ""}`)
+                }
+                if (!match.found) {
+                  draft.session.splice(match.index, 0, session.data!)
+                  diag(`STORE-WRITE session.sync.session.session NEW sessionID=${sessionID} title=${session.data?.title?.slice(0, 30) ?? ""}`)
+                }
                 draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
                 // Use preSyncMessages (live store snapshot) for the preserve logic,
@@ -842,6 +861,7 @@ export const {
                   draft.part[message.info.id] = parts
                 }
                 for (const message of removed) delete draft.part[message.id]
+                diag(`STORE-WRITE session.sync.message sessionID=${sessionID} visible=${visible.length} serverReturned=${(messages.data ?? []).length} preSyncMessages=${preSyncMessages?.length ?? 0} trackerMessages=${tracker.messages.size} removed=${removed.length}`)
                 draft.message[sessionID] = visible
                 draft.session_diff[sessionID] = diff.data ?? []
               }),
