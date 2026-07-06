@@ -162,22 +162,25 @@ export const {
     event.subscribe((event, { workspace }) => {
       switch (event.type) {
         case "server.instance.disposed": {
-          // Don't re-bootstrap if any session is actively generating OR
-          // has content. server.instance.disposed fires when the server
-          // recycles an instance (config reload, cache expiry, etc.)
-          // during normal operation. Running bootstrap() replaces the
-          // entire session list via reconcile(), which can remove the
-          // active session if it hasn't been persisted yet — causing
-          // session() to return undefined and the entire UI to disappear
-          // (black screen). This is especially harmful when all persona
-          // subagents just completed (sessions become "idle") — the guard
-          // below must ALSO check for existing session content.
+          // Don't re-bootstrap if any session is actively generating,
+          // has content, or if we have any sessions at all.
+          // server.instance.disposed fires when the server recycles an
+          // instance (config reload, cache expiry, etc.) during normal
+          // operation. Running bootstrap() replaces the entire session
+          // list via reconcile(), which can remove the active session if
+          // it hasn't been persisted yet — causing session() to return
+          // undefined and the entire UI to disappear (black screen).
+          //
+          // Three-layer guard:
+          // 1. hasActiveGeneration: any session is busy/retry
+          // 2. hasSessionMessages: any session has loaded messages
+          // 3. hasAnySessions: the session list itself has entries
+          //    (prevents wipe when sync hasn't loaded messages yet)
           const hasActiveGeneration = Object.values(store.session_status)
             .some((s) => s.type === "busy" || s.type === "retry")
-          // Don't replace existing session messages — prevents the active
-          // session from being reconciled out when personas complete.
           const hasSessionMessages = Object.keys(store.message).length > 0
-          if (hasActiveGeneration || hasSessionMessages) break
+          const hasAnySessions = store.session.length > 0
+          if (hasActiveGeneration || hasSessionMessages || hasAnySessions) break
           void bootstrap()
           break
         }
@@ -515,7 +518,31 @@ export const {
               setStore("console_state", reconcile(consoleState))
               setStore("agent", reconcile(agents))
               setStore("config", reconcile(config))
-              if (sessions !== undefined) setStore("session", reconcile(sessions))
+              if (sessions !== undefined) {
+                // Preserve sessions that have local messages to prevent
+                // wiping out active sessions during instance disposal.
+                // The server response may not include a session that was
+                // just created or hasn't been persisted yet.
+                const sessionsWithLocalMessages = new Set(
+                  Object.keys(store.message).filter(
+                    (k) => (store.message[k]?.length ?? 0) > 0,
+                  ),
+                )
+                if (sessionsWithLocalMessages.size > 0) {
+                  const serverIds = new Set(sessions.map((s: any) => s.id))
+                  const preservedLocal = store.session.filter(
+                    (s) =>
+                      sessionsWithLocalMessages.has(s.id) &&
+                      !serverIds.has(s.id),
+                  )
+                  setStore(
+                    "session",
+                    reconcile([...sessions, ...preservedLocal]),
+                  )
+                } else {
+                  setStore("session", reconcile(sessions))
+                }
+              }
             })
           })
         })
@@ -523,7 +550,35 @@ export const {
           if (store.status !== "complete") setStore("status", "partial")
           // non-blocking
           void Promise.all([
-            ...(args.continue ? [] : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
+            ...(args.continue
+              ? []
+              : [
+                  sessionListPromise.then((sessions) => {
+                    // Same preservation logic as the blocking phase:
+                    // don't wipe sessions that have local messages.
+                    const sessionsWithLocalMessages = new Set(
+                      Object.keys(store.message).filter(
+                        (k) => (store.message[k]?.length ?? 0) > 0,
+                      ),
+                    )
+                    if (sessionsWithLocalMessages.size > 0) {
+                      const serverIds = new Set(
+                        sessions.map((s: any) => s.id),
+                      )
+                      const preservedLocal = store.session.filter(
+                        (s) =>
+                          sessionsWithLocalMessages.has(s.id) &&
+                          !serverIds.has(s.id),
+                      )
+                      setStore(
+                        "session",
+                        reconcile([...sessions, ...preservedLocal]),
+                      )
+                    } else {
+                      setStore("session", reconcile(sessions))
+                    }
+                  }),
+                ]),
             consoleStatePromise.then((consoleState) => setStore("console_state", reconcile(consoleState))),
             sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
             sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
@@ -621,9 +676,16 @@ export const {
                   const current = currentMessages.find((item) => item.id === message.info.id)
                   return current ? [current] : []
                 })
+                // Preserve ALL current messages not already in the server response.
+                // The tracker-only guard (messages touched by events DURING sync)
+                // misses messages that arrived via SSE BEFORE sync started but
+                // haven't been persisted to DB yet. Without this, the HTTP response
+                // can be stale — returning fewer messages than what SSE delivered —
+                // and the missing messages get silently dropped. This is the root
+                // cause of the "everything goes blank" / "tokens become zero" bug.
                 infos.push(
                   ...currentMessages.filter(
-                    (message) => tracker.messages.has(message.id) && !infos.some((item) => item.id === message.id),
+                    (message) => !infos.some((item) => item.id === message.id),
                   ),
                 )
                 const removed = infos.slice(0, -100)
