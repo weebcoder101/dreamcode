@@ -725,6 +725,17 @@ export const {
                 if (!match.found) draft.session.splice(match.index, 0, session.data!)
                 draft.todo[sessionID] = todo.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
+                // DIAG: detect SolidJS draft proxy returning stale/empty reference.
+                // If the live store (preSyncMessages) has data but the draft proxy
+                // (currentMessages) shows fewer or zero, the draft proxy is stale.
+                // This helps pinpoint the root cause of the "all data gone" bug.
+                const preSyncLen = preSyncMessages?.length ?? 0
+                const currentLen = currentMessages.length
+                if (preSyncLen >= 2 && currentLen < 2) {
+                  diag(`DRAFT-STALE: sessionID=${sessionID} preSyncMessages=${preSyncLen} currentMessages=${currentLen}`)
+                } else if (preSyncLen >= 2 && currentLen !== preSyncLen) {
+                  diag(`DRAFT-MISMATCH: sessionID=${sessionID} preSyncMessages=${preSyncLen} currentMessages=${currentLen} diff=${currentLen - preSyncLen}`)
+                }
                 const infos = (messages.data ?? []).flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]
                   const current = currentMessages.find((item) => item.id === message.info.id)
