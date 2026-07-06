@@ -110,6 +110,12 @@ export function DialogSessionList() {
           await sync.session.refresh()
           if (search()) await refetch()
           if (info?.workspaceID === session.workspaceID) {
+            try {
+              require("node:fs").appendFileSync(
+                "/tmp/dreamcode-diag.log",
+                `[${Date.now()}] dialog-session-list.navigate HOME — workspace deleted sessionID=${info?.id ?? "?"} workspaceID=${session.workspaceID}\n`,
+              )
+            } catch {}
             route.navigate({ type: "home" })
           }
           return true

@@ -78,6 +78,12 @@ export function DialogWorkspaceList() {
     }
 
     if (current() === workspace.id) {
+      try {
+        require("node:fs").appendFileSync(
+          "/tmp/dreamcode-diag.log",
+          `[${Date.now()}] dialog-workspace-list.navigate HOME — workspace removed workspaceID=${workspace.id}\n`,
+        )
+      } catch {}
       project.workspace.set(undefined)
       route.navigate({ type: "home" })
     }

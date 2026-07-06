@@ -290,6 +290,29 @@ export function Session() {
       const previousWorkspace = untrack(() => project.workspace.current())
       const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
       if (!result.data) {
+        // DIAG: server returned null for this session — check for race
+        const localMessages = sync.data.message[sessionID]
+        if (localMessages && localMessages.length > 0) {
+          try {
+            require("node:fs").appendFileSync(
+              "/tmp/dreamcode-diag.log",
+              `[${Date.now()}] session.sync() DEFENSIVE: server returned null for sessionID=${sessionID} but localMessages=${localMessages.length} — NOT navigating home\n`,
+            )
+          } catch {}
+          // Session exists locally with data — server race, don't navigate home
+          toast.show({
+            message: "Session unavailable — showing cached data",
+            variant: "warning",
+            duration: 5000,
+          })
+          return
+        }
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${Date.now()}] session.sync() SESSION NOT FOUND — navigating home sessionID=${sessionID}\n`,
+          )
+        } catch {}
         toast.show({
           message: `Session not found: ${sessionID}`,
           variant: "error",
@@ -300,6 +323,12 @@ export function Session() {
       }
 
       if (result.data.workspaceID !== previousWorkspace) {
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${Date.now()}] session.sync() WORKSPACE CHANGED — bootstrapping sessionID=${sessionID} oldWorkspace=${previousWorkspace ?? "none"} newWorkspace=${result.data.workspaceID ?? "none"}\n`,
+          )
+        } catch {}
         project.workspace.set(result.data.workspaceID)
 
         // Sync all the data for this workspace. Note that this
@@ -315,8 +344,31 @@ export function Session() {
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
+      const fullErrMsg = errorMessage(error)
+      const truncated = String(fullErrMsg).slice(0, 200)
+      try {
+        require("node:fs").appendFileSync(
+          "/tmp/dreamcode-diag.log",
+          `[${Date.now()}] session.sync() FETCH ERROR — navigating home sessionID=${sessionID} error="${truncated}"\n`,
+        )
+      } catch {}
+      const localMessages = sync.data.message[sessionID]
+      if (localMessages && localMessages.length > 0) {
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${Date.now()}] session.sync() DEFENSIVE: fetch error but localMessages=${localMessages.length} — NOT navigating home\n`,
+          )
+        } catch {}
+        toast.show({
+          message: "Session unavailable — showing cached data",
+          variant: "warning",
+          duration: 5000,
+        })
+        return
+      }
       toast.show({
-        message: errorMessage(error),
+        message: fullErrMsg,
         variant: "error",
         duration: 5000,
       })
