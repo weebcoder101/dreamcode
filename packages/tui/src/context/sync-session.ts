@@ -114,11 +114,17 @@ export function createSessionSync(deps: SessionSyncDeps) {
             const removed = infos.slice(0, -100)
             const visible = infos.slice(-100)
 
-            if ((preSyncMessages?.length ?? 0) >= 2 && visible.length < 2) {
+            // SYNC-WIPE GUARD: if the server returned significantly fewer
+            // messages than the pre-sync snapshot had, preserve the live
+            // data instead of replacing. This handles the case where the
+            // server projector hasn't caught up (async lag) and returns
+            // stale/partial data that would wipe messages from the TUI.
+            // Two thresholds: absolute (< 2) and proportional (< 50%).
+            if (preSyncLen >= 2 && (visible.length < 2 || visible.length < preSyncLen * 0.5)) {
               diag(
-                `SYNC-WIPE-PREVENTED: sessionID=${sessionID} preserved=${preSyncMessages!.length} currentMessages=${currentMessages.length} serverReturned=${serverMessages.length} visible=${visible.length} trackerMessages=${tracker.messages.size}`,
+                `SYNC-WIPE-PREVENTED: sessionID=${sessionID} preSyncLen=${preSyncLen} serverReturned=${serverMessages.length} visible=${visible.length} threshold=${Math.max(2, Math.round(preSyncLen * 0.5))}`,
               )
-              draft.message[sessionID] = preSyncMessages
+              draft.message[sessionID] = preSyncMessages!
               draft.session_diff[sessionID] = diff.data ?? []
               return
             }

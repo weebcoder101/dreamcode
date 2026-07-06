@@ -225,7 +225,7 @@ export function Session() {
   // a fresh re-sync from the server. A 10-second cooldown prevents loops
   // when the server returns empty responses.
   let lastEmptyRenderRecover = 0
-  const EMPTY_RENDER_COOLDOWN = 10_000
+  const EMPTY_RENDER_COOLDOWN = 1_000
   createEffect(() => {
     const s = session()
     const msgs = messages()
