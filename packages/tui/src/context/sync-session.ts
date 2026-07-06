@@ -114,6 +114,20 @@ export function createSessionSync(deps: SessionSyncDeps) {
             const removed = infos.slice(0, -100)
             const visible = infos.slice(-100)
 
+            // SYNC-WIPE DIAG: log whenever the HTTP response returns
+            // significantly fewer messages than the pre-sync snapshot had
+            // (drops by >50% or by >10 messages). This catches stale
+            // projector data regardless of whether the guard below fires.
+            if (preSyncLen >= 2) {
+              const dropPct = 1 - visible.length / preSyncLen
+              const dropAbs = preSyncLen - visible.length
+              if (dropAbs > 10 || dropPct > 0.5) {
+                diag(
+                  `SYNC-WIPE-DROP: sessionID=${sessionID} preSyncLen=${preSyncLen} serverReturned=${serverMessages.length} visible=${visible.length} dropPct=${(dropPct * 100).toFixed(0)}% dropAbs=${dropAbs} guardTriggered=${visible.length < 2 || visible.length < preSyncLen * 0.5}`,
+                )
+              }
+            }
+
             // SYNC-WIPE GUARD: if the server returned significantly fewer
             // messages than the pre-sync snapshot had, preserve the live
             // data instead of replacing. This handles the case where the
