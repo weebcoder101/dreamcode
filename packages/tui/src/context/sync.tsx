@@ -135,12 +135,15 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
-    const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string>; deletedMessages: Set<string> }>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
+    }
+    const touchDeletedMessage = (sessionID: string, messageID: string) => {
+      hydratingSessions.get(sessionID)?.deletedMessages.add(messageID)
     }
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
@@ -357,6 +360,7 @@ export const {
         }
         case "message.removed": {
           touchMessage(event.properties.sessionID, event.properties.messageID)
+          touchDeletedMessage(event.properties.sessionID, event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
           const result = search(messages, event.properties.messageID, (m) => m.id)
           if (result.found) {
@@ -655,7 +659,7 @@ export const {
           if (fullSyncedSessions.has(sessionID)) return
           const syncing = syncingSessions.get(sessionID)
           if (syncing) return syncing
-          const tracker = { messages: new Set<string>(), parts: new Set<string>() }
+          const tracker = { messages: new Set<string>(), parts: new Set<string>(), deletedMessages: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
             const [session, messages, todo, diff] = await Promise.all([
@@ -683,9 +687,18 @@ export const {
                 // can be stale — returning fewer messages than what SSE delivered —
                 // and the missing messages get silently dropped. This is the root
                 // cause of the "everything goes blank" / "tokens become zero" bug.
+                //
+                // Exclude messages that were explicitly removed during sync
+                // (revert/undo/compaction). The message.removed handler adds them
+                // to tracker.deletedMessages as defense-in-depth — the handler also
+                // removes them from the store synchronously (so they're typically
+                // already gone from currentMessages), but if a race causes them
+                // to still be present, this guard prevents re-preservation.
                 infos.push(
                   ...currentMessages.filter(
-                    (message) => !infos.some((item) => item.id === message.id),
+                    (message) =>
+                      !infos.some((item) => item.id === message.id) &&
+                      !tracker.deletedMessages.has(message.id),
                   ),
                 )
                 const removed = infos.slice(0, -100)
