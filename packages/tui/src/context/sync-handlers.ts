@@ -118,7 +118,24 @@ export function registerEventHandlers(
         )
         const result = search(store.session, event.properties.info.id, (s: any) => s.id)
         if (result.found) {
-          setStore("session", result.index, reconcile(event.properties.info))
+          // MERGE instead of replace: preserve higher cost/tokens from live state.
+          // patch() reads stale DB state (cost: 0) before projector accumulates
+          // subagent costs. The event carries stale zeros — we must not overwrite
+          // correct live values with them.
+          setStore("session", result.index, produce((draft: any) => {
+            const incoming = event.properties.info
+            Object.assign(draft, incoming)
+            // Preserve higher cost/tokens — never regress
+            if (incoming.cost != null && draft.cost != null && incoming.cost < draft.cost) {
+              draft.cost = draft.cost
+            }
+            if (incoming.tokens?.input != null && draft.tokens?.input != null && incoming.tokens.input < draft.tokens.input) {
+              draft.tokens = draft.tokens
+            }
+            if (incoming.tokens?.output != null && draft.tokens?.output != null && incoming.tokens.output < draft.tokens.output) {
+              draft.tokens = draft.tokens
+            }
+          }))
           break
         }
         setStore("session", produce((draft: any) => { draft.splice(result.index, 0, event.properties.info) }))
@@ -192,10 +209,10 @@ export function registerEventHandlers(
           produce((draft: any) => { draft.splice(result.index, 0, event.properties.info) }),
         )
         const updated = store.message[event.properties.info.sessionID]
-        if (updated && updated.length > 100) {
+        if (updated && updated.length > 200) {
           const oldest = updated[0]
           diag(
-            `message.updated 100-LIMIT-SHIFT sessionID=${event.properties.info.sessionID} messageID=${(oldest as any).id} incomingID=${event.properties.info.id} role=${event.properties.info.role} count=${updated.length}`,
+            `message.updated 200-LIMIT-SHIFT sessionID=${event.properties.info.sessionID} messageID=${(oldest as any).id} incomingID=${event.properties.info.id} role=${event.properties.info.role} count=${updated.length}`,
           )
           const beforeShiftCount = updated.length
           batch(() => {
@@ -208,7 +225,7 @@ export function registerEventHandlers(
           const afterShift = store.message[event.properties.info.sessionID]
           if (afterShift) {
             diag(
-              `message.updated 100-LIMIT-AFTER sessionID=${event.properties.info.sessionID} beforeLen=${beforeShiftCount} afterLen=${afterShift.length}`,
+              `message.updated 200-LIMIT-AFTER sessionID=${event.properties.info.sessionID} beforeLen=${beforeShiftCount} afterLen=${afterShift.length}`,
             )
           }
         }

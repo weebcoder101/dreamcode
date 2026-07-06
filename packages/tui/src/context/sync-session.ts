@@ -128,15 +128,15 @@ export function createSessionSync(deps: SessionSyncDeps) {
               }
             }
 
-            // SYNC-WIPE GUARD: if the server returned significantly fewer
-            // messages than the pre-sync snapshot had, preserve the live
-            // data instead of replacing. This handles the case where the
-            // server projector hasn't caught up (async lag) and returns
-            // stale/partial data that would wipe messages from the TUI.
-            // Two thresholds: absolute (< 2) and proportional (< 50%).
-            if (preSyncLen >= 2 && (visible.length < 2 || visible.length < preSyncLen * 0.5)) {
+            // SYNC-WIPE GUARD: if the server returned fewer messages than the
+            // pre-sync snapshot had, preserve the live data instead of replacing.
+            // This handles the case where the server projector hasn't caught up
+            // (async lag) and returns stale/partial data that would wipe messages.
+            // ANY reduction in message count is suspicious — the live store has
+            // more recent data from SSE events than the HTTP fetch can provide.
+            if (preSyncLen >= 2 && visible.length < preSyncLen) {
               diag(
-                `SYNC-WIPE-PREVENTED: sessionID=${sessionID} preSyncLen=${preSyncLen} serverReturned=${serverMessages.length} visible=${visible.length} threshold=${Math.max(2, Math.round(preSyncLen * 0.5))}`,
+                `SYNC-WIPE-PREVENTED: sessionID=${sessionID} preSyncLen=${preSyncLen} serverReturned=${serverMessages.length} visible=${visible.length} preserved=${preSyncLen}`,
               )
               draft.message[sessionID] = preSyncMessages!
               draft.session_diff[sessionID] = diff.data ?? []

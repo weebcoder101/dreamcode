@@ -83,10 +83,27 @@ export function createBootstrap(deps: BootstrapDeps) {
                 const preservedLocal = store.session.filter(
                   (s: any) => sessionsWithLocalMessages.has(s.id) && !serverIds.has(s.id),
                 )
+                // For sessions that exist on BOTH server and locally,
+                // merge them — preserve higher cost/tokens from local state.
+                const merged = sessions.map((serverSession: any) => {
+                  const local = store.session.find((s: any) => s.id === serverSession.id)
+                  if (!local) return serverSession
+                  // Preserve higher cost/tokens from local (live SSE data)
+                  // Server may have stale cost: 0 if projector hasn't caught up
+                  return {
+                    ...serverSession,
+                    cost: Math.max(serverSession.cost ?? 0, local.cost ?? 0),
+                    tokens: {
+                      input: Math.max(serverSession.tokens?.input ?? 0, local.tokens?.input ?? 0),
+                      output: Math.max(serverSession.tokens?.output ?? 0, local.tokens?.output ?? 0),
+                      reasoning: Math.max(serverSession.tokens?.reasoning ?? 0, local.tokens?.reasoning ?? 0),
+                    },
+                  }
+                })
                 diag(
                   `STORE-WRITE bootstrap.blocking.session sessionID=${Array.from(serverIds).slice(0, 3).join(",")} serverCount=${sessions.length} localWithMsgs=${sessionsWithLocalMessages.size} preservedLocal=${preservedLocal.length}`,
                 )
-                setStore("session", reconcile([...sessions, ...preservedLocal]))
+                setStore("session", reconcile([...merged, ...preservedLocal]))
               } else {
                 diag(
                   `STORE-WRITE bootstrap.blocking.session sessions=${sessions.length} prevSessions=${store.session.length}`,
