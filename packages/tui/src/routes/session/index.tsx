@@ -213,6 +213,24 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+
+  // DIAG: detect when session view renders empty while store has data
+  // This helps identify if a Solid reactivity glitch causes the session
+  // to show no messages despite data being in the store.
+  createEffect(() => {
+    const s = session()
+    const msgs = messages()
+    if (s && msgs.length === 0) {
+      const storeMsgs = sync.data.message[route.sessionID]
+      try {
+        require("node:fs").appendFileSync(
+          "/tmp/dreamcode-diag.log",
+          `[${Date.now()}] EMPTY-RENDER sessionID=${route.sessionID} sessionExists=true sessionTitle="${(s.title ?? "").slice(0, 40)}" messagesInStore=${storeMsgs?.length ?? 0} messageKeys=${Object.keys(sync.data.message).length}\n`,
+        )
+      } catch {}
+    }
+  })
+
   const foregroundTasks = createMemo(() =>
     messages().flatMap((message) =>
       (sync.data.part[message.id] ?? []).filter(

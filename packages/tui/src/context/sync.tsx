@@ -28,7 +28,7 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, onCleanup, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import fs from "node:fs"
@@ -374,6 +374,7 @@ export const {
           if (updated.length > 100) {
             const oldest = updated[0]
             diag(`message.updated 100-LIMIT-SHIFT sessionID=${event.properties.info.sessionID} messageID=${oldest.id} incomingID=${event.properties.info.id} role=${event.properties.info.role} count=${updated.length}`)
+            const beforeShiftCount = updated.length
             batch(() => {
               setStore(
                 "message",
@@ -389,6 +390,11 @@ export const {
                 }),
               )
             })
+            // Log the AFTER state to confirm shift worked correctly
+            const afterShift = store.message[event.properties.info.sessionID]
+            if (afterShift) {
+              diag(`message.updated 100-LIMIT-AFTER sessionID=${event.properties.info.sessionID} beforeLen=${beforeShiftCount} afterLen=${afterShift.length}`)
+            }
           }
           break
         }
@@ -638,6 +644,19 @@ export const {
 
     onMount(() => {
       void bootstrap()
+
+      // Periodic snapshot: every 30s, log message counts for ALL sessions
+      // so we can detect when data disappears mid-stream.
+      const snapshotInterval = setInterval(() => {
+        try {
+          const sessionIDs = Object.keys(store.message)
+          const counts = sessionIDs
+            .map((id) => `${id.slice(0, 20)}:${store.message[id]?.length ?? 0}`)
+            .join(" ")
+          diag(`SNAPSHOT sessions=${store.session.length} msgKeys=${sessionIDs.length} counts=[${counts}]`)
+        } catch {}
+      }, 30_000)
+      onCleanup(() => clearInterval(snapshotInterval))
     })
 
     const result = {
