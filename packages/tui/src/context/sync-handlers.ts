@@ -124,16 +124,18 @@ export function registerEventHandlers(
           // correct live values with them.
           setStore("session", result.index, produce((draft: any) => {
             const incoming = event.properties.info
+            // Save OLD values BEFORE Object.assign overwrites them
+            const oldCost = draft.cost
+            const oldTokens = draft.tokens
             Object.assign(draft, incoming)
             // Preserve higher cost/tokens — never regress
-            if (incoming.cost != null && draft.cost != null && incoming.cost < draft.cost) {
-              draft.cost = draft.cost
+            if (oldCost != null && incoming.cost != null && incoming.cost < oldCost) {
+              draft.cost = oldCost
             }
-            if (incoming.tokens?.input != null && draft.tokens?.input != null && incoming.tokens.input < draft.tokens.input) {
-              draft.tokens = draft.tokens
-            }
-            if (incoming.tokens?.output != null && draft.tokens?.output != null && incoming.tokens.output < draft.tokens.output) {
-              draft.tokens = draft.tokens
+            if (oldTokens?.input != null && incoming.tokens?.input != null && incoming.tokens.input < oldTokens.input) {
+              draft.tokens = oldTokens
+            } else if (oldTokens?.output != null && incoming.tokens?.output != null && incoming.tokens.output < oldTokens.output) {
+              draft.tokens = oldTokens
             }
           }))
           break

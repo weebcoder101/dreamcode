@@ -114,6 +114,14 @@ export function createSessionSync(deps: SessionSyncDeps) {
             const removed = infos.slice(0, -100)
             const visible = infos.slice(-100)
 
+            for (let i = 0; i < visible.length; i++) {
+              const msg = visible[i]
+              const storeMsg = liveMessages.find((m: any) => m.id === msg.id)
+              if (storeMsg) {
+                visible[i] = storeMsg
+              }
+            }
+
             // SYNC-WIPE DIAG: log whenever the HTTP response returns
             // significantly fewer messages than the pre-sync snapshot had
             // (drops by >50% or by >10 messages). This catches stale
