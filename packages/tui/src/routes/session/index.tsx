@@ -4,7 +4,6 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  ErrorBoundary,
   For,
   Match,
   on,
@@ -1267,53 +1266,7 @@ export function Session() {
       >
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
-            <Show when={session()}>
-              <ErrorBoundary
-                fallback={(error, reset) => {
-                  try {
-                    fs.appendFileSync(
-                      "/tmp/dreamcode-diag.log",
-                      `[${Date.now()}] RENDER-ERROR sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
-                    )
-                  } catch {}
-                  // Auto-retry when session navigates (TDZ fix for compiled binary)
-                  createEffect(() => {
-                    route.sessionID
-                    const timer = setTimeout(() => reset(), 500)
-                    onCleanup(() => clearTimeout(timer))
-                  })
-                  return (
-                    <box
-                      border={["left"]}
-                      paddingTop={1}
-                      paddingBottom={1}
-                      paddingLeft={2}
-                      marginTop={1}
-                      backgroundColor={theme.backgroundPanel}
-                      borderColor={theme.error}
-                    >
-                      <text fg={theme.error}>⚠ Render error in session view</text>
-                      <text paddingTop={1} fg={theme.textMuted}>
-                        {error instanceof Error ? error.message.slice(0, 80) : "An unexpected error occurred"}
-                      </text>
-                      <box
-                        onMouseUp={() => {
-                          try {
-                            fs.appendFileSync(
-                              "/tmp/dreamcode-diag.log",
-                              `[${Date.now()}] RENDER-RETRY sessionID=${route.sessionID}\n`,
-                            )
-                          } catch {}
-                          reset()
-                        }}
-                        paddingTop={1}
-                      >
-                        <text fg={theme.text}>╭─ Click to retry ─╮</text>
-                      </box>
-                    </box>
-                  )
-                }}
-              >
+             <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
                 viewportOptions={{
@@ -1467,22 +1420,10 @@ export function Session() {
                   </pluginRuntime.Slot>
                 </Show>
               </box>
-              </ErrorBoundary>
             </Show>
             <Toast />
           </box>
           <Show when={sidebarVisible()}>
-            <ErrorBoundary
-              fallback={(error) => {
-                try {
-                  fs.appendFileSync(
-                    "/tmp/dreamcode-diag.log",
-                    `[${Date.now()}] RENDER-ERROR sidebar sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
-                  )
-                } catch {}
-                return <></>
-              }}
-            >
               <Switch>
                 <Match when={wide()}>
                   <Sidebar sessionID={route.sessionID} />
@@ -1501,7 +1442,6 @@ export function Session() {
                   </box>
                 </Match>
               </Switch>
-            </ErrorBoundary>
           </Show>
         </box>
       </context.Provider>
