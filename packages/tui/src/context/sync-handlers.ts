@@ -118,26 +118,28 @@ export function registerEventHandlers(
         )
         const result = search(store.session, event.properties.info.id, (s: any) => s.id)
         if (result.found) {
-          // MERGE instead of replace: preserve higher cost/tokens from live state.
-          // patch() reads stale DB state (cost: 0) before projector accumulates
-          // subagent costs. The event carries stale zeros — we must not overwrite
-          // correct live values with them.
-          setStore("session", result.index, produce((draft: any) => {
-            const incoming = event.properties.info
-            // Save OLD values BEFORE Object.assign overwrites them
-            const oldCost = draft.cost
-            const oldTokens = draft.tokens
-            Object.assign(draft, incoming)
-            // Preserve higher cost/tokens — never regress
-            if (oldCost != null && incoming.cost != null && incoming.cost < oldCost) {
-              draft.cost = oldCost
+          // Use reconcile() for proper deep merging (WIP branch pattern).
+          // Object.assign(draft, incoming) overwrites ALL fields including
+          // cost:0 and tokens:0 from stale DB state. reconcile() only
+          // applies fields that actually changed, preventing accidental
+          // reset of accumulated cost/tokens during active generation.
+          const current = store.session[result.index]
+          const oldCost = current?.cost
+          const oldTokens = current?.tokens
+          setStore("session", result.index, reconcile(event.properties.info))
+          // Restore cost if incoming has stale zeros
+          if (oldCost != null && event.properties.info.cost != null && event.properties.info.cost < oldCost) {
+            setStore("session", result.index, "cost", oldCost)
+          }
+          // Restore tokens if incoming has stale zeros
+          if (oldTokens && event.properties.info.tokens) {
+            const needsRestore =
+              (oldTokens.input != null && event.properties.info.tokens.input != null && event.properties.info.tokens.input < oldTokens.input) ||
+              (oldTokens.output != null && event.properties.info.tokens.output != null && event.properties.info.tokens.output < oldTokens.output)
+            if (needsRestore) {
+              setStore("session", result.index, "tokens", oldTokens)
             }
-            if (oldTokens?.input != null && incoming.tokens?.input != null && incoming.tokens.input < oldTokens.input) {
-              draft.tokens = oldTokens
-            } else if (oldTokens?.output != null && incoming.tokens?.output != null && incoming.tokens.output < oldTokens.output) {
-              draft.tokens = oldTokens
-            }
-          }))
+          }
           break
         }
         setStore("session", produce((draft: any) => { draft.splice(result.index, 0, event.properties.info) }))
@@ -238,6 +240,7 @@ export function registerEventHandlers(
         touchPart(event.properties.part.sessionID, event.properties.part.id)
         const parts = store.part[event.properties.part.messageID]
         if (!parts) {
+          diag(`STORE-WRITE message.part.updated.NEW sessionID=${event.properties.part.sessionID} messageID=${event.properties.part.messageID} partID=${event.properties.part.id} type=${(event.properties.part as any).type}`)
           setStore("part", event.properties.part.messageID, [event.properties.part])
           break
         }
@@ -246,6 +249,7 @@ export function registerEventHandlers(
           setStore("part", event.properties.part.messageID, result.index, reconcile(event.properties.part))
           break
         }
+        diag(`STORE-WRITE message.part.updated.splice sessionID=${event.properties.part.sessionID} messageID=${event.properties.part.messageID} partID=${event.properties.part.id}`)
         setStore("part", event.properties.part.messageID, produce((draft: any) => { draft.splice(result.index, 0, event.properties.part) }))
         break
       }
@@ -253,6 +257,7 @@ export function registerEventHandlers(
       case "message.part.delta": {
         let parts = store.part[event.properties.messageID]
         if (!parts) {
+          diag(`STORE-WRITE message.part.delta.STUB sessionID=${event.properties.sessionID} messageID=${event.properties.messageID} partID=${event.properties.partID}`)
           const stub: Part = {
             id: event.properties.partID,
             messageID: event.properties.messageID,
