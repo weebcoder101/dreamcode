@@ -68,7 +68,32 @@ export function createSessionSync(deps: SessionSyncDeps) {
           produce((draft: any) => {
             const match = search(draft.session, sessionID, (s: any) => s.id)
             if (match.found) {
-              draft.session[match.index] = session.data
+              // Use Object.assign to merge server data in-place, preserving
+              // fields that SSE events may have set (cost, tokens) which the
+              // HTTP response might still have at stale zero values.
+              // Direct assignment (draft.session[match.index] = session.data)
+              // replaces the entire session object, clobbering SSE-populated
+              // token/cost data — same root cause that was fixed in the
+              // session.updated handler (sync-handlers.ts) where Object.assign
+              // was replaced with reconcile. Inside produce, we use assign
+              // with explicit restore rather than reconcile.
+              const oldSession = draft.session[match.index]
+              const oldCost = oldSession?.cost
+              const oldTokens = oldSession?.tokens
+              Object.assign(oldSession, session.data)
+              // Restore cost if incoming has stale zeros
+              if (oldCost != null && (session.data as any)?.cost != null && (session.data as any).cost < oldCost) {
+                oldSession.cost = oldCost
+              }
+              // Restore tokens if incoming has stale zeros
+              if (oldTokens && (session.data as any)?.tokens) {
+                const needsRestore =
+                  (oldTokens.input != null && (session.data as any).tokens.input != null && (session.data as any).tokens.input < oldTokens.input) ||
+                  (oldTokens.output != null && (session.data as any).tokens.output != null && (session.data as any).tokens.output < oldTokens.output)
+                if (needsRestore) {
+                  oldSession.tokens = oldTokens
+                }
+              }
               diag(
                 `STORE-WRITE session.sync.session.session UPDATE sessionID=${sessionID} prevTitle=${(store.session[match.index] as any)?.title?.slice(0, 30) ?? ""} newTitle=${(session.data as any)?.title?.slice(0, 30) ?? ""}`,
               )
@@ -81,7 +106,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
             }
             draft.todo[sessionID] = todo.data ?? []
             const currentMessages = draft.message[sessionID] ?? []
-            const liveMessages = preSyncMessages ?? []
+            const liveMessages = currentMessages
 
             const preSyncLen = preSyncMessages?.length ?? 0
             const currentLen = currentMessages.length
@@ -121,34 +146,73 @@ export function createSessionSync(deps: SessionSyncDeps) {
             // significantly fewer messages than the pre-sync snapshot had
             // (drops by >50% or by >10 messages). This catches stale
             // projector data regardless of whether the guard below fires.
-            if (preSyncLen > 0) {
-              const dropPct = 1 - visible.length / preSyncLen
-              const dropAbs = preSyncLen - visible.length
+            // SYNC-WIPE DIAG: log whenever the HTTP response returns
+            // significantly fewer messages than the pre-sync snapshot had
+            // (drops by >50% or by >10 messages). This catches stale
+            // projector data regardless of whether the guard below fires.
+            // Now reports using both preSyncLen and currentLen — SSE events
+            // may have populated the store between capture and produce.
+            const maxLen = Math.max(preSyncLen, currentLen)
+            if (maxLen > 0) {
+              const dropPct = 1 - visible.length / maxLen
+              const dropAbs = maxLen - visible.length
               if (dropAbs > 10 || dropPct > 0.5) {
                 diag(
-                  `SYNC-WIPE-DROP: sessionID=${sessionID} preSyncLen=${preSyncLen} serverReturned=${serverMessages.length} visible=${visible.length} dropPct=${(dropPct * 100).toFixed(0)}% dropAbs=${dropAbs} guardTriggered=${visible.length < 2 || visible.length < preSyncLen * 0.5}`,
+                  `SYNC-WIPE-DROP: sessionID=${sessionID} preSyncLen=${preSyncLen} currentLen=${currentLen} serverReturned=${serverMessages.length} visible=${visible.length} dropPct=${(dropPct * 100).toFixed(0)}% dropAbs=${dropAbs} trackerMessages=${tracker.messages.size} guardCandidate=${currentLen > 0}`,
                 )
               }
             }
 
-            // SYNC-WIPE GUARD: if the server returned fewer messages than the
-            // pre-sync snapshot had, preserve the live data instead of replacing.
-            // This handles the case where the server projector hasn't caught up
-            // (async lag) and returns stale/partial data that would wipe messages.
-            // ANY reduction in message count is suspicious — the live store has
-            // more recent data from SSE events than the HTTP fetch can provide.
-            if (visible.length < preSyncLen) {
+            // ── SYNC-WIPE GUARD v2 ──────────────────────────────────
+            //
+            // The original guard only compared visible.length against
+            // preSyncLen (the length *before* setStore was called). But
+            // preSyncMessages is captured *outside* the produce callback,
+            // while currentMessages reflects the state *inside* the
+            // produce callback — SSE events that arrived between capture
+            // and execution are visible in currentMessages but NOT in
+            // preSyncMessages. This created a window where SSE data
+            // would be silently wiped.
+            //
+            // New approach:
+            //   1. Compare visible.length against max(preSyncLen, currentLen)
+            //      so any SSE data that arrived between capture and produce
+            //      is also protected.
+            //   2. When preSyncLen was 0 but the hydration tracker has
+            //      recorded messages (from SSE), never replace with empty
+            //      server data — preserve the live store.
+            //   3. When currentMessages has messages but visible is empty,
+            //      always preserve live data regardless of preSyncLen.
+
+            // Use the larger of preSyncLen and currentLen for comparison
+            const guardLen = Math.max(preSyncLen, currentLen)
+
+            // Check if SSE has populated messages tracked by hydration tracker
+            const hasTrackedMessages = tracker.messages.size > 0
+
+            // Check if the store genuinely has messages (either before produce or inside it)
+            const storeHasMessages = currentLen > 0 || preSyncLen > 0
+
+            // Guard 1: Server returned fewer messages than store had
+            if (visible.length < guardLen) {
               diag(
-                `SYNC-WIPE-PREVENTED: sessionID=${sessionID} preSyncLen=${preSyncLen} serverReturned=${serverMessages.length} visible=${visible.length} preserved=${preSyncLen}`,
+                `SYNC-WIPE-PREVENTED: sessionID=${sessionID} preSyncLen=${preSyncLen} currentLen=${currentLen} guardLen=${guardLen} serverReturned=${serverMessages.length} visible=${visible.length} trackerMessages=${tracker.messages.size} preserved=${currentLen}`,
               )
-              draft.message[sessionID] = preSyncMessages!
+              draft.message[sessionID] = currentMessages.length > 0 ? currentMessages : preSyncMessages!
               draft.session_diff[sessionID] = diff.data ?? []
               return
             }
-            if (currentMessages.length >= 1 && visible.length < 1) {
+
+            // Guard 2: Server returned empty but watermark tracker shows activity —
+            // SSE events populated messages but preSyncLen was 0 (missed window).
+            // This prevents the FIRST sync call from wiping SSE data.
+            if (hasTrackedMessages && visible.length === 0 && guardLen === 0) {
               diag(
-                `SYNC-WIPE: sessionID=${sessionID} currentMessages=${currentMessages.length} serverReturned=${serverMessages.length} visible=${visible.length} trackerMessages=${tracker.messages.size} deletedMessages=${tracker.deletedMessages.size} preSyncMessages=${preSyncMessages?.length ?? 0}`,
+                `SYNC-WIPE-TRACKER-GUARD: sessionID=${sessionID} preSyncLen=${preSyncLen} currentLen=${currentLen} serverReturned=${serverMessages.length} trackerMessages=${tracker.messages.size} — tracker shows messages, server returned empty, preserving live data`,
               )
+              draft.message[sessionID] = currentMessages
+              draft.session_diff[sessionID] = diff.data ?? []
+              return
             }
 
             const visibleIDs = new Set(visible.map((message: any) => message.id))
