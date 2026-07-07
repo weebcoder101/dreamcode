@@ -9,7 +9,6 @@ import {
   Match,
   on,
   onCleanup,
-  onMount,
   Show,
   Switch,
   untrack,
@@ -2397,12 +2396,6 @@ function Task(props: ToolProps) {
   const { navigate } = useRoute()
   const sync = useSync()
   const dialog = useDialog()
-
-  onMount(() => {
-    if (props.part.state.status === "pending") return
-    const sessionID = stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
-    if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
-  })
 
   const sessionID = createMemo(() => {
     return stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
