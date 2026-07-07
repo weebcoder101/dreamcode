@@ -443,10 +443,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   // OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT flag (defaults false)
   // because terminals handle native mouse selection independently — the
   // dialog's own Esc/Ctrl+C handlers clear stale selections internally.
+  // Ctrl+C with text selection should copy on all platforms. On Windows the
+  // flag controls this because Windows has native Ctrl+C copy, but on Linux/WSL2
+  // we need our own handler since clipboard tools may be missing.
   const offSelectionKeys = keymap.intercept(
     "key",
     ({ event }) => {
-      if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
       Selection.handleSelectionKey(renderer, toast, event, clipboard)
     },
     { priority: 1 },
