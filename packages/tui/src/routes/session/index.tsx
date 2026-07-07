@@ -1277,6 +1277,12 @@ export function Session() {
                       `[${Date.now()}] RENDER-ERROR sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
                     )
                   } catch {}
+                  // Auto-retry when session navigates (TDZ fix for compiled binary)
+                  createEffect(() => {
+                    route.sessionID
+                    const timer = setTimeout(() => reset(), 500)
+                    onCleanup(() => clearTimeout(timer))
+                  })
                   return (
                     <box
                       border={["left"]}
