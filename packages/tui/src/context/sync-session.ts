@@ -46,16 +46,11 @@ export function createSessionSync(deps: SessionSyncDeps) {
     },
 
     async recover(sessionID: string) {
-      fullSyncedSessions.delete(sessionID)
       diag(`session.recover() sessionID=${sessionID} — forcing re-sync`)
       return this.sync(sessionID)
     },
 
     async sync(sessionID: string) {
-      if (fullSyncedSessions.has(sessionID)) {
-        diag(`session.sync() SKIPPED — fullSyncedSessions has sessionID=${sessionID}`)
-        return
-      }
       const syncing = syncingSessions.get(sessionID)
       if (syncing) return syncing
       diag(`session.sync() starting sessionID=${sessionID}`)
@@ -90,9 +85,9 @@ export function createSessionSync(deps: SessionSyncDeps) {
 
             const preSyncLen = preSyncMessages?.length ?? 0
             const currentLen = currentMessages.length
-            if (preSyncLen >= 2 && currentLen < 2) {
+            if (preSyncLen > 0 && currentLen < 1) {
               diag(`DRAFT-STALE: sessionID=${sessionID} preSyncMessages=${preSyncLen} currentMessages=${currentLen}`)
-            } else if (preSyncLen >= 2 && currentLen !== preSyncLen) {
+            } else if (preSyncLen > 0 && currentLen !== preSyncLen) {
               diag(
                 `DRAFT-MISMATCH: sessionID=${sessionID} preSyncMessages=${preSyncLen} currentMessages=${currentLen} diff=${currentLen - preSyncLen}`,
               )
@@ -126,7 +121,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
             // significantly fewer messages than the pre-sync snapshot had
             // (drops by >50% or by >10 messages). This catches stale
             // projector data regardless of whether the guard below fires.
-            if (preSyncLen >= 2) {
+            if (preSyncLen > 0) {
               const dropPct = 1 - visible.length / preSyncLen
               const dropAbs = preSyncLen - visible.length
               if (dropAbs > 10 || dropPct > 0.5) {
@@ -142,7 +137,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
             // (async lag) and returns stale/partial data that would wipe messages.
             // ANY reduction in message count is suspicious — the live store has
             // more recent data from SSE events than the HTTP fetch can provide.
-            if (preSyncLen >= 2 && visible.length < preSyncLen) {
+            if (visible.length < preSyncLen) {
               diag(
                 `SYNC-WIPE-PREVENTED: sessionID=${sessionID} preSyncLen=${preSyncLen} serverReturned=${serverMessages.length} visible=${visible.length} preserved=${preSyncLen}`,
               )
@@ -150,7 +145,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
               draft.session_diff[sessionID] = diff.data ?? []
               return
             }
-            if (currentMessages.length >= 2 && visible.length < 2) {
+            if (currentMessages.length >= 1 && visible.length < 1) {
               diag(
                 `SYNC-WIPE: sessionID=${sessionID} currentMessages=${currentMessages.length} serverReturned=${serverMessages.length} visible=${visible.length} trackerMessages=${tracker.messages.size} deletedMessages=${tracker.deletedMessages.size} preSyncMessages=${preSyncMessages?.length ?? 0}`,
               )
@@ -187,14 +182,13 @@ export function createSessionSync(deps: SessionSyncDeps) {
               draft.part[message.info.id] = parts
             }
             for (const message of removed) delete draft.part[message.id]
-            diag(
-              `STORE-WRITE session.sync.message sessionID=${sessionID} visible=${visible.length} serverReturned=${serverMessages.length} preSyncMessages=${preSyncMessages?.length ?? 0} trackerMessages=${tracker.messages.size} removed=${removed.length}`,
-            )
-            draft.message[sessionID] = visible
-            draft.session_diff[sessionID] = diff.data ?? []
+        diag(
+          `STORE-WRITE session.sync.message sessionID=${sessionID} visible=${visible.length} serverReturned=${serverMessages.length} preSyncMessages=${preSyncMessages?.length ?? 0} trackerMessages=${tracker.messages.size} removed=${removed.length}`,
+        )
+        draft.message[sessionID] = visible
+        draft.session_diff[sessionID] = diff.data ?? []
           }),
         )
-        fullSyncedSessions.add(sessionID)
         diag(`session.sync() COMPLETE sessionID=${sessionID} messagesInStore=${store.message[sessionID]?.length ?? 0}`)
       })().finally(() => {
         syncingSessions.delete(sessionID)
