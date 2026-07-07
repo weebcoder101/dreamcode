@@ -18,16 +18,17 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
 
   const state = createMemo(() => {
     const last = msg().findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    if (!last) {
-      return {
-        tokens: 0,
-        percent: null,
-      }
+    const s = session()
+    // Use session-level accumulated tokens when available, fall back to per-message
+    let tokens: number
+    if (s?.tokens && (s.tokens.input > 0 || s.tokens.output > 0)) {
+      tokens = s.tokens.input + s.tokens.output
+    } else if (last) {
+      tokens = last.tokens.input + last.tokens.output + last.tokens.reasoning
+    } else {
+      tokens = 0
     }
-
-    const tokens =
-      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    const model = props.api.state.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const model = last ? props.api.state.provider.find((item) => item.id === last.providerID)?.models[last.modelID] : undefined
     return {
       tokens,
       percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : null,
