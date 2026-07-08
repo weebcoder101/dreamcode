@@ -12,7 +12,7 @@ import { TaskTool } from "@/tool/task"
 import { ulid } from "ulid"
 import type { SessionID } from "./schema"
 
-export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: {
+export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: {
   gateResult: any; explicitSpawnCount: number; sessionID: SessionID;
   msgs: any[]; system: string[]; model: any; ctx: any;
   handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;

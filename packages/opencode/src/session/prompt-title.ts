@@ -10,7 +10,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { LLMEvent } from "@opencode-ai/llm"
 
-export const ensureTitle = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
+export var ensureTitle = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
   session: Session.Info
   history: SessionV1.WithParts[]
   providerID: ProviderV2.ID
