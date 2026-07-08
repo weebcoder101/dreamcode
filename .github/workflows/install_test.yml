@@ -1,9 +1,9 @@
 name: Install Test
 on:
   push:
-    branches: [main, dev, dreamcode-fork]
+    branches: [stable-release, dev, dreamcode-fork]
   pull_request:
-    branches: [main]
+    branches: [stable-release]
 
 jobs:
   test-install-linux:

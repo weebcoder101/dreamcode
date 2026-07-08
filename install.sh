@@ -84,8 +84,11 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "${MUTED}Branch: $CURRENT_BRANCH${NC}"
   if [ "$CURRENT_BRANCH" = "HEAD" ]; then
     echo -e "${MUTED}Detached HEAD — skipping git pull (CI mode)${NC}"
-  elif ! git -C "$INSTALL_DIR" pull origin "$CURRENT_BRANCH"; then
-    echo -e "${ORANGE}WARN: git pull failed on '$CURRENT_BRANCH'. Continuing with existing clone.${NC}"
+  elif [ "$CURRENT_BRANCH" != "stable-release" ]; then
+    echo -e "${CYAN}Switching to stable-release branch...${NC}"
+    git -C "$INSTALL_DIR" checkout stable-release || git -C "$INSTALL_DIR" checkout -b stable-release origin/stable-release
+  elif ! git -C "$INSTALL_DIR" pull origin stable-release; then
+    echo -e "${ORANGE}WARN: git pull failed on stable-release. Continuing with existing clone.${NC}"
   fi
 else
   if [ -d "$INSTALL_DIR" ]; then
@@ -94,8 +97,8 @@ else
     echo -e "${ORANGE}Or set DREAMCODE_DIR to a different path.${NC}"
     exit 1
   fi
-  echo -e "${CYAN}Cloning DreamCode...${NC}"
-  git clone https://github.com/weebcoder101/dreamcode.git "$INSTALL_DIR"
+  echo -e "${CYAN}Cloning DreamCode (stable-release branch)...${NC}"
+  git clone -b stable-release https://github.com/weebcoder101/dreamcode.git "$INSTALL_DIR"
 fi
 
 # ─── Phase 2: Re-exec from repo (skip if already there) ──────────────

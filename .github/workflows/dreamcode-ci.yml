@@ -2,7 +2,7 @@ name: Dreamcode CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [stable-release, dev]
   pull_request:
   workflow_dispatch:
 
