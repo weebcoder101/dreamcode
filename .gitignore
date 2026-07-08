@@ -67,3 +67,4 @@ evolution/
 .opencode/git_push.lock
 .git-rewrite/
 packages/opencode/bin/dreamcode
+packages/opencode/bin/dreamcode
