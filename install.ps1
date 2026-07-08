@@ -123,7 +123,16 @@ if ($BuildFromSource) {
   # Clone or update repo
   if (Test-Path "$INSTALL_DIR\.git") {
     Write-Color "Updating existing DreamCode install..." $CYAN
-    git -C $INSTALL_DIR pull 2>&1 | Out-Null
+    $currentBranch = git -C $INSTALL_DIR rev-parse --abbrev-ref HEAD 2>&1
+    if ($currentBranch -ne "stable-release") {
+      Write-Color "Switching to stable-release branch..." $CYAN
+      git -C $INSTALL_DIR fetch origin stable-release 2>&1 | Out-Null
+      git -C $INSTALL_DIR checkout stable-release 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        git -C $INSTALL_DIR checkout -b stable-release origin/stable-release 2>&1 | Out-Null
+      }
+    }
+    git -C $INSTALL_DIR pull origin stable-release 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
       Write-Color "WARN: git pull failed (detached HEAD or network issue). Using working tree as-is." $ORANGE
       git -C $INSTALL_DIR checkout .
@@ -134,9 +143,9 @@ if ($BuildFromSource) {
       Write-Color "Remove it or set `$env:DREAMCODE_DIR to a different path." $ORANGE
       exit 1
     }
-    Write-Color "Cloning DreamCode..." $CYAN
+    Write-Color "Cloning DreamCode (stable-release branch)..." $CYAN
     try {
-      git clone "https://github.com/$OWNER/$REPO.git" $INSTALL_DIR
+      git clone -b stable-release "https://github.com/$OWNER/$REPO.git" $INSTALL_DIR
     } catch {
       Write-Color "ERROR: git clone failed: $_" $RED
       exit 1
