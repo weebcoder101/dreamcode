@@ -6,7 +6,7 @@
 # $env:LOCALAPPDATA\dreamcode\bin\, and adds it to the user PATH.
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/weebcoder101/dreamcode/stable-release/install.ps1 | iex
 #   .\install.ps1
 #
 # Or clone + build from source:
