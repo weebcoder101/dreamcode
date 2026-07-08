@@ -39,18 +39,18 @@ An open-source AI coding agent with native dream thinking, 37-skill dynamic grap
 
 **Linux / macOS (bash):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/stable-release/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/weebcoder101/dreamcode/stable-release/install.ps1 | iex
 ```
 
 **Windows (WSL2):**
 ```bash
 # Inside WSL2 terminal — same as Linux
-curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/stable-release/install.sh | bash
 ```
 
 ### Or clone and install
@@ -69,10 +69,10 @@ git clone https://github.com/weebcoder101/dreamcode; cd dreamcode; .\install.ps1
 
 **Linux / macOS:**
 ```bash
-git clone https://github.com/weebcoder101/dreamcode
+git clone -b stable-release https://github.com/weebcoder101/dreamcode
 cd dreamcode
 bun install
-cd packages/opencode && OPENCODE_VERSION=1.3.4 bun run build --single
+cd packages/opencode && OPENCODE_VERSION=1.4.0 bun run build --single
 
 # The binary is at dist/dreamcode-<platform>-<arch>/bin/dreamcode
 # Create a symlink so `dreamcode` is available globally:
@@ -87,11 +87,11 @@ dreamcode --version
 ```
 
 **Windows (PowerShell):**
-```powershell
-git clone https://github.com/weebcoder101/dreamcode
+```bash
+git clone -b stable-release https://github.com/weebcoder101/dreamcode
 cd dreamcode
 bun install
-cd packages\opencode; $env:OPENCODE_VERSION="1.3.4"; bun run build --single --skip-embed-web-ui
+cd packages\opencode; $env:OPENCODE_VERSION="1.4.0"; bun run build --single --skip-embed-web-ui
 
 # The binary is at .\dist\dreamcode-windows-x64\bin\dreamcode.exe
 # Copy it to a standard location and add to PATH:
