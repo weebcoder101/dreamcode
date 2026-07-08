@@ -86,7 +86,8 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     echo -e "${MUTED}Detached HEAD — skipping git pull (CI mode)${NC}"
   elif [ "$CURRENT_BRANCH" != "stable-release" ]; then
     echo -e "${CYAN}Switching to stable-release branch...${NC}"
-    git -C "$INSTALL_DIR" checkout stable-release || git -C "$INSTALL_DIR" checkout -b stable-release origin/stable-release
+    git -C "$INSTALL_DIR" fetch origin stable-release 2>/dev/null || true
+    git -C "$INSTALL_DIR" checkout stable-release 2>/dev/null || git -C "$INSTALL_DIR" checkout -b stable-release origin/stable-release
   elif ! git -C "$INSTALL_DIR" pull origin stable-release; then
     echo -e "${ORANGE}WARN: git pull failed on stable-release. Continuing with existing clone.${NC}"
   fi
