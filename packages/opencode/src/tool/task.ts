@@ -152,6 +152,9 @@ export const TaskTool = Tool.define(
 
     const activeSubagentSessions = yield* Ref.make(new Set<SessionID>())
     const depthCache = yield* Ref.make(new Map<SessionID, number>())
+    // Total subagents spawned per session (lifecycle counter — never decremented).
+    // Prevents sequential re-spawning from bypassing the concurrent limit.
+    const totalSpawnedPerSession = yield* Ref.make(new Map<SessionID, number>())
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -234,6 +237,36 @@ export const TaskTool = Tool.define(
         )
       }
 
+      // Total session spawn limit — prevents sequential re-spawning from bypassing
+      // the concurrent cap. Once a session has spawned this many subagents total
+      // (including finished ones), no more are allowed.
+      const maxTotal = cfg.experimental?.max_total_subagents_per_session ?? 20
+      const totalMap = yield* Ref.get(totalSpawnedPerSession)
+      const totalSpawned = totalMap.get(ctx.sessionID) ?? 0
+      if (totalSpawned >= maxTotal) {
+        yield* Effect.sync(() =>
+          GlobalBus.emit("event", {
+            payload: {
+              type: "task.subagent_total_cap_reached",
+              sessionID: ctx.sessionID,
+              total: totalSpawned,
+              max: maxTotal,
+              agentType: params.subagent_type,
+              description: params.description,
+            },
+          }),
+        ).pipe(Effect.ignore)
+        log.warn("total session subagent cap reached", {
+          sessionID: ctx.sessionID,
+          total: totalSpawned,
+          max: maxTotal,
+          subagentType: params.subagent_type,
+        })
+        return yield* Effect.fail(
+          new Error(`Total subagent cap reached (${totalSpawned}/${maxTotal}) for session ${ctx.sessionID}. Synthesize with what you have.`),
+        )
+      }
+
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
@@ -289,6 +322,11 @@ export const TaskTool = Tool.define(
       }
 
       yield* Ref.update(activeSubagentSessions, (set) => { set.add(nextSession.id); return set })
+      // Increment total session spawn counter (lifecycle — never decremented)
+      yield* Ref.update(totalSpawnedPerSession, (m) => {
+        const prev = m.get(ctx.sessionID) ?? 0
+        return new Map(m).set(ctx.sessionID, prev + 1)
+      })
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,

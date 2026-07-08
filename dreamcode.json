@@ -25,6 +25,7 @@
       "enabled": true
     }
   },
+  "model": "nara/mimo-v2.5-pro",
   "plugin": [
     ".opencode/plugins/sensor-gate-enforcer.ts"
   ],

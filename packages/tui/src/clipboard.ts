@@ -66,6 +66,14 @@ export async function read() {
       Buffer.alloc(0),
     )
     if (x11.length) return { data: x11.toString("base64"), mime: "image/png" }
+    // WSL2: read text from Windows clipboard via PowerShell
+    if (release().includes("WSL")) {
+      const wslText = await command("powershell.exe", [
+        "-NonInteractive", "-NoProfile", "-Command",
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard"
+      ]).catch(() => Buffer.alloc(0))
+      if (wslText.length) return { data: wslText.toString("utf-8").trim(), mime: "text/plain" }
+    }
   }
 
   const { default: clipboardy } = await import("clipboardy")
@@ -80,6 +88,16 @@ export function copyCommand(
 ): string[] | undefined {
   if (os === "darwin" && has("osascript")) return ["osascript"]
   if (os === "linux" && wayland && has("wl-copy")) return ["wl-copy"]
+  // WSL2: use PowerShell to access Windows clipboard
+  if (os === "linux" && release().includes("WSL") && has("powershell.exe")) {
+    return [
+      "powershell.exe",
+      "-NonInteractive",
+      "-NoProfile",
+      "-Command",
+      "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+    ]
+  }
   if (os === "linux" && has("xclip")) return ["xclip", "-selection", "clipboard"]
   if (os === "linux" && has("xsel")) return ["xsel", "--clipboard", "--input"]
   if (os === "win32" && has("powershell.exe")) {

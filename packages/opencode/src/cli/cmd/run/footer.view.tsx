@@ -13,7 +13,6 @@ import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCle
 import "opentui-spinner/solid"
 import { createColors, createFrames } from "@opencode-ai/tui/ui/spinner"
 import {
-  RUN_SUBAGENT_PANEL_ROWS,
   RunCommandMenuBody,
   RunModelSelectBody,
   RunQueuedPromptSelectBody,
@@ -23,15 +22,15 @@ import {
 } from "./footer.command"
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
+import { createPanelAutoClose } from "./footer.panel"
+import { createSubagentTabState } from "./footer.subagent-tab"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { footerWidthPolicy } from "./footer.width"
 import {
-  OPENCODE_BASE_MODE,
   formatKeyBindings,
   formatKeySequence,
-  useBindings,
   useKeymapSelector,
   type OpenTuiKeymap,
 } from "@opencode-ai/tui/keymap"
@@ -132,10 +131,53 @@ export function RunFooterView(props: RunFooterViewProps) {
     )
   })
   const [route, setRoute] = createSignal<FooterPromptRoute>({ type: "composer" })
-  const [subagentMenuRows, setSubagentMenuRows] = createSignal(RUN_SUBAGENT_PANEL_ROWS)
   const queuedPrompts = createMemo(() => props.queuedPrompts?.() ?? [])
+  const tabState = createSubagentTabState({
+    subagent,
+    queuedPrompts,
+    route,
+    setRoute,
+    onSubagentSelect: props.onSubagentSelect,
+    tuiConfig: props.tuiConfig,
+    backgroundSubagents: props.backgroundSubagents,
+  })
+  const {
+    subagentMenuRows,
+    setSubagentMenuRows,
+    selected,
+    tabs,
+    activeTabs,
+    selectedTab,
+    selectedIndex,
+    foregroundSubagents,
+    detail,
+    subagentShortcut,
+    backgroundShortcut,
+    queuedShortcut,
+    cycleTab,
+    openSubagentMenu,
+    openQueuedMenu,
+    closePanel,
+  } = tabState
+  const tabOpenTab = tabState.openTab
+  const tabCloseTab = tabState.closeTab
   const skills = createMemo(() => (props.commands() ?? []).filter((item) => item.source === "skill"))
   const prompt = createMemo(() => active().type === "prompt" && route().type === "composer")
+  // Tracks the status of the currently viewed subagent tab at the time it was last
+  // opened by the user. The auto-close effect uses this to distinguish a deliberate
+  // selection of an already-completed tab from a running→completed transition that
+  // should auto-dismiss the inspector.
+  let openTabStatus: string | undefined
+  const openTab = (sessionID: string) => {
+    const tab = tabs().find((item) => item.sessionID === sessionID)
+    openTabStatus = tab?.status
+    tabOpenTab(sessionID)
+  }
+  const closeTab = () => {
+    openTabStatus = undefined
+    tabCloseTab()
+  }
+
   const selectingSubagent = createMemo(() => active().type === "prompt" && route().type === "subagent-menu")
   const selectingQueued = createMemo(() => active().type === "prompt" && route().type === "queued-menu")
   const inspecting = createMemo(() => active().type === "prompt" && route().type === "subagent")
@@ -156,32 +198,9 @@ export function RunFooterView(props: RunFooterViewProps) {
       subagentModeling() ||
       varianting(),
   )
-  const selected = createMemo(() => {
-    const current = route()
-    return current.type === "subagent" ? current.sessionID : undefined
-  })
-  const tabs = createMemo(() => subagent().tabs)
-  const activeTabs = createMemo(() => tabs().filter((item) => item.status === "running"))
-  const selectedTab = createMemo(() => tabs().find((item) => item.sessionID === selected()))
-  const selectedIndex = createMemo(() => {
-    const sessionID = selected()
-    if (!sessionID) {
-      return 0
-    }
-
-    return tabs().findIndex((item) => item.sessionID === sessionID) + 1
-  })
-  const foregroundSubagents = createMemo(
-    () => props.backgroundSubagents && activeTabs().some((item) => !item.background),
-  )
-
   const model = createMemo(() => {
     const current = props.currentModel()
     return current ? modelInfo(props.providers(), current) : { model: props.state().model, provider: undefined }
-  })
-  const detail = createMemo(() => {
-    const current = route()
-    return current.type === "subagent" ? subagent().details[current.sessionID] : undefined
   })
   const command = useKeymapSelector(
     (keymap: OpenTuiKeymap) =>
@@ -190,35 +209,7 @@ export function RunFooterView(props: RunFooterViewProps) {
           .getCommandBindings({ visibility: "registered", commands: ["command.palette.show"] })
           .get("command.palette.show")?.[0]?.sequence,
         props.tuiConfig,
-      ) ?? "",
-  )
-  const subagentShortcut = useKeymapSelector(
-    (keymap: OpenTuiKeymap) =>
-      formatKeySequence(
-        keymap
-          .getCommandBindings({ visibility: "registered", commands: ["session.child.first"] })
-          .get("session.child.first")?.[0]?.sequence,
-        props.tuiConfig,
-      ) ?? "",
-  )
-  const queuedShortcut = useKeymapSelector(
-    (keymap: OpenTuiKeymap) =>
-      formatKeySequence(
-        keymap
-          .getCommandBindings({ visibility: "registered", commands: ["session.queued_prompts"] })
-          .get("session.queued_prompts")?.[0]?.sequence,
-        props.tuiConfig,
-      ) ?? "",
-  )
-  const backgroundShortcut = useKeymapSelector(
-    (keymap: OpenTuiKeymap) =>
-      formatKeySequence(
-        keymap
-          .getCommandBindings({ visibility: "registered", commands: ["session.background"] })
-          .get("session.background")?.[0]?.sequence,
-        props.tuiConfig,
-      ) ?? "",
-  )
+      ) ?? "",    )
   const interrupt = useKeymapSelector(
     (keymap: OpenTuiKeymap) =>
       formatKeySequence(
@@ -320,51 +311,6 @@ export function RunFooterView(props: RunFooterViewProps) {
     props.onSubagentSelect?.(undefined)
   }
 
-  const openSubagentMenu = () => {
-    if (tabs().length === 0) {
-      return
-    }
-
-    setRoute({ type: "subagent-menu" })
-    props.onSubagentSelect?.(undefined)
-  }
-
-  const openQueuedMenu = () => {
-    if (queuedPrompts().length === 0) return
-    setRoute({ type: "queued-menu" })
-    props.onSubagentSelect?.(undefined)
-  }
-
-  const closePanel = () => {
-    setRoute({ type: "composer" })
-  }
-
-  const openTab = (sessionID: string) => {
-    setRoute({ type: "subagent", sessionID })
-    props.onSubagentSelect?.(sessionID)
-  }
-
-  const closeTab = () => {
-    setRoute({ type: "composer" })
-    props.onSubagentSelect?.(undefined)
-  }
-
-  const cycleTab = (dir: -1 | 1) => {
-    if (tabs().length === 0) {
-      return
-    }
-
-    const routeState = route()
-    const current =
-      routeState.type === "subagent" ? tabs().findIndex((item) => item.sessionID === routeState.sessionID) : -1
-    const index = current === -1 ? 0 : (current + dir + tabs().length) % tabs().length
-    const next = tabs()[index]
-    if (!next) {
-      return
-    }
-
-    openTab(next.sessionID)
-  }
   const composer = createPromptState({
     directory: props.directory,
     findFiles: props.findFiles,
@@ -479,7 +425,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     if (queuedPrompts().length > 0 && queuedShortcut()) {
       items.push({ kind: "queued", key: queuedShortcut(), label: `${queue()} queued` })
     }
-    if (tabs().length > 0 && subagentShortcut()) {
+    if (tabs().length > 0 && subagentShortcut() && activeTabs().length > 0) {
       items.push({ kind: "subagents", key: subagentShortcut(), label: "subagents" })
     }
 
@@ -587,6 +533,26 @@ export function RunFooterView(props: RunFooterViewProps) {
     }
 
     closeTab()
+  })
+
+  // Auto-close subagent tab when the currently inspected subagent finishes.
+  // This returns focus to the composer so the user can type immediately
+  // without having to manually press Escape to dismiss the subagent view.
+  // Does NOT close if the user deliberately selected an already-completed tab
+  // (openTabStatus already reflects the terminal status at selection time).
+  createEffect(() => {
+    const current = route()
+    if (current.type !== "subagent") return
+    const tab = tabs().find((item) => item.sessionID === current.sessionID)
+    if (!tab) return
+    // If the tab was already in a terminal status when the user selected it,
+    // they deliberately chose to view a completed subagent — keep it open.
+    const wasTerminalOnOpen =
+      openTabStatus === "completed" || openTabStatus === "cancelled" || openTabStatus === "error"
+    if (wasTerminalOnOpen) return
+    if (tab.status === "completed" || tab.status === "cancelled" || tab.status === "error") {
+      closeTab()
+    }
   })
 
   createEffect(() => {

@@ -118,6 +118,14 @@ export function RunFooterSubagentBody(props: {
     }
   })
 
+  const handleClick = () => {
+    // Focus the scrollbox on click so mouse wheel and keyboard input
+    // are captured by the subagent view, not the composer behind it.
+    if (scroll && typeof scroll.focus === "function") {
+      scroll.focus()
+    }
+  }
+
   return (
     <box
       id="run-direct-footer-subagent"
@@ -125,8 +133,13 @@ export function RunFooterSubagentBody(props: {
       height="100%"
       flexDirection="column"
       backgroundColor={footer().surface}
+      onClick={handleClick}
+      onMouseDown={handleClick}
     >
-      <box paddingTop={1} paddingLeft={1} paddingRight={3} paddingBottom={1} flexDirection="column" flexGrow={1}>
+      <box paddingTop={1} paddingLeft={1} paddingRight={3} paddingBottom={1} flexDirection="column" flexGrow={1}
+        onClick={handleClick}
+        onMouseDown={handleClick}
+      >
         <Show when={tab()}>
           {(current) => (
             <box width="100%" flexDirection="row" gap={1} paddingBottom={1} flexShrink={0}>
@@ -156,12 +169,14 @@ export function RunFooterSubagentBody(props: {
         <scrollbox
           width="100%"
           height="100%"
-          stickyScroll={true}
+          stickyScroll={tab()?.status === "running"}
           stickyStart="bottom"
           verticalScrollbarOptions={scrollbar()}
           ref={(item) => {
             scroll = item
           }}
+          onClick={handleClick}
+          onMouseDown={handleClick}
         >
           <box width="100%" flexDirection="column" gap={0}>
             {commits().length > 0 ? (

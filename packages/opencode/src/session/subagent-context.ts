@@ -7,6 +7,8 @@ export interface SubagentContext {
   mentionedPaths: string[]
   /** Current user prompt text */
   currentPrompt: string
+  /** Skill chain required by the parent sensor gate (propagated for enforcement) */
+  requiredSkillChain?: string[]
 }
 
 const PATH_REGEX = /[\w/.-]+\/\w[\w/.-]*\.\w{2,4}/g
@@ -77,6 +79,20 @@ export function buildSubagentContextPrompt(
     for (const fp of subagentCtx.mentionedPaths) {
       lines.push(`- \`${fp}\``)
     }
+    lines.push("")
+  }
+
+  // Add required skill chain from parent sensor gate
+  if (subagentCtx.requiredSkillChain && subagentCtx.requiredSkillChain.length > 0) {
+    lines.push("## Mandatory Skill Chain (Propagated from Parent)")
+    lines.push("The parent session's sensor gate requires these skills. Load each one")
+    lines.push("via the `skill` tool before proceeding:")
+    for (const skill of subagentCtx.requiredSkillChain) {
+      lines.push(`- \`skill\` name="${skill}" — MUST load via tool`)
+    }
+    lines.push("")
+    lines.push("After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]")
+    lines.push("FAILURE TO LOAD ALL CHAIN SKILLS WILL RESULT IN INCOMPLETE RESULTS.")
     lines.push("")
   }
 

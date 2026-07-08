@@ -1,0 +1,23 @@
+diff a/packages/opencode/src/cli/cmd/run/footer.view.tsx b/packages/opencode/src/cli/cmd/run/footer.view.tsx	(rejected hunks)
+@@ -339,12 +339,21 @@ export function RunFooterView(props: RunFooterViewProps) {
+     setRoute({ type: "composer" })
+   }
+ 
++  // Tracks the status of the currently viewed subagent tab at the time it was last
++  // opened by the user. The auto-close effect uses this to distinguish a deliberate
++  // selection of an already-completed tab from a running→completed transition that
++  // should auto-dismiss the inspector.
++  let openTabStatus: string | undefined
++
+   const openTab = (sessionID: string) => {
++    const tab = tabs().find((item) => item.sessionID === sessionID)
++    openTabStatus = tab?.status
+     setRoute({ type: "subagent", sessionID })
+     props.onSubagentSelect?.(sessionID)
+   }
+ 
+   const closeTab = () => {
++    openTabStatus = undefined
+     setRoute({ type: "composer" })
+     props.onSubagentSelect?.(undefined)
+   }

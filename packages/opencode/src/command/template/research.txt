@@ -31,8 +31,11 @@ Run sub-agents in PARALLEL (up to 3 concurrent). Each sub-agent should:
 3. Extract — Pull key facts, quotes, code snippets, citations
 4. Verify — Cross-reference claims across multiple sources
 
-IMPORTANT: Sub-agents CAN use the task tool themselves if they need to delegate
-sub-tasks (the parent controls the depth). Use them wisely.
+HARD LIMITS (MANDATORY):
+- Maximum 5 sub-agents total for this research session. Once 5 sub-agents have been spawned, STOP and synthesize with what you have.
+- Sub-agents MUST NOT spawn their own sub-agents. Each sub-agent performs direct work only.
+- If a sub-agent fails or times out, do NOT re-spawn it. Continue with remaining vectors.
+- Total research time budget: 10 minutes. After 10 minutes, force-stop and synthesize.
 
 **Source quality hierarchy** (highest to lowest):
 1. Official documentation & RFCs

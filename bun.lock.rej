@@ -1,0 +1,10 @@
+diff a/bun.lock b/bun.lock	(rejected hunks)
+@@ -495,7 +495,7 @@
+     },
+     "packages/opencode": {
+       "name": "dreamcode",
+-      "version": "1.3.6",
++      "version": "1.3.8",
+       "bin": {
+         "dreamcode": "./bin/dreamcode",
+       },

@@ -632,6 +632,8 @@ export const RunCommand = effectCmd({
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
           let error: string | undefined
+          const knownSessions = new Set<string>([sessionID])
+          const idleSessions = new Set<string>()
 
           for await (const event of events.stream) {
             if (
@@ -720,10 +722,32 @@ export const RunCommand = effectCmd({
               UI.error(err)
             }
 
+            // Track subagent sessions via session.created events
+            if (event.type === "session.created") {
+              const props = event.properties as Record<string, unknown>
+              const childID = typeof props.id === "string" ? props.id : undefined
+              const parentID = typeof props.parentID === "string" ? props.parentID : undefined
+              if (childID && parentID && knownSessions.has(parentID)) {
+                knownSessions.add(childID)
+              }
+            }
+
+            // Track idle status for all known sessions
+            if (event.type === "session.status" && event.properties.status.type === "idle") {
+              if (knownSessions.has(event.properties.sessionID)) {
+                idleSessions.add(event.properties.sessionID)
+              }
+            }
+            if (event.type === "session.status" && event.properties.status.type !== "idle") {
+              idleSessions.delete(event.properties.sessionID)
+            }
+
+            // Only break when main session is idle AND all subagent sessions are also idle
             if (
               event.type === "session.status" &&
               event.properties.sessionID === sessionID &&
-              event.properties.status.type === "idle"
+              event.properties.status.type === "idle" &&
+              idleSessions.size >= knownSessions.size
             ) {
               break
             }

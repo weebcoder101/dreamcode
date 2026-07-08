@@ -4,6 +4,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  ErrorBoundary,
   For,
   Match,
   on,
@@ -287,8 +288,33 @@ export function Session() {
     const sessionID = route.sessionID
     void (async () => {
       const previousWorkspace = untrack(() => project.workspace.current())
+      try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] TRIGGER-RESYNC sessionID=${sessionID}\n`) } catch {}
       const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
       if (!result.data) {
+        try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] TRIGGER-RESYNC NULL-DATA sessionID=${sessionID}\n`) } catch {}
+        // DIAG: server returned null for this session — check for race
+        const localMessages = sync.data.message[sessionID]
+        if (localMessages && localMessages.length > 0) {
+          try {
+            require("node:fs").appendFileSync(
+              "/tmp/dreamcode-diag.log",
+              `[${Date.now()}] session.sync() DEFENSIVE: server returned null for sessionID=${sessionID} but localMessages=${localMessages.length} — NOT navigating home\n`,
+            )
+          } catch {}
+          // Session exists locally with data — server race, don't navigate home
+          toast.show({
+            message: "Session unavailable — showing cached data",
+            variant: "warning",
+            duration: 5000,
+          })
+          return
+        }
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${Date.now()}] session.sync() SESSION NOT FOUND — navigating home sessionID=${sessionID}\n`,
+          )
+        } catch {}
         toast.show({
           message: `Session not found: ${sessionID}`,
           variant: "error",
@@ -299,6 +325,12 @@ export function Session() {
       }
 
       if (result.data.workspaceID !== previousWorkspace) {
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${Date.now()}] session.sync() WORKSPACE CHANGED — bootstrapping sessionID=${sessionID} oldWorkspace=${previousWorkspace ?? "none"} newWorkspace=${result.data.workspaceID ?? "none"}\n`,
+          )
+        } catch {}
         project.workspace.set(result.data.workspaceID)
 
         // Sync all the data for this workspace. Note that this
@@ -314,8 +346,31 @@ export function Session() {
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
+      const fullErrMsg = errorMessage(error)
+      const truncated = String(fullErrMsg).slice(0, 200)
+      try {
+        require("node:fs").appendFileSync(
+          "/tmp/dreamcode-diag.log",
+          `[${Date.now()}] session.sync() FETCH ERROR — navigating home sessionID=${sessionID} error="${truncated}"\n`,
+        )
+      } catch {}
+      const localMessages = sync.data.message[sessionID]
+      if (localMessages && localMessages.length > 0) {
+        try {
+          require("node:fs").appendFileSync(
+            "/tmp/dreamcode-diag.log",
+            `[${Date.now()}] session.sync() DEFENSIVE: fetch error but localMessages=${localMessages.length} — NOT navigating home\n`,
+          )
+        } catch {}
+        toast.show({
+          message: "Session unavailable — showing cached data",
+          variant: "warning",
+          duration: 5000,
+        })
+        return
+      }
       toast.show({
-        message: errorMessage(error),
+        message: fullErrMsg,
         variant: "error",
         duration: 5000,
       })
@@ -1330,24 +1385,36 @@ export function Session() {
             <Toast />
           </box>
           <Show when={sidebarVisible()}>
-            <Switch>
-              <Match when={wide()}>
-                <Sidebar sessionID={route.sessionID} />
-              </Match>
-              <Match when={!wide()}>
-                <box
-                  position="absolute"
-                  top={0}
-                  left={0}
-                  right={0}
-                  bottom={0}
-                  alignItems="flex-end"
-                  backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
-                >
+            <ErrorBoundary
+              fallback={(error) => {
+                try {
+                  fs.appendFileSync(
+                    "/tmp/dreamcode-diag.log",
+                    `[${Date.now()}] RENDER-ERROR sidebar sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
+                  )
+                } catch {}
+                return <></>
+              }}
+            >
+              <Switch>
+                <Match when={wide()}>
                   <Sidebar sessionID={route.sessionID} />
-                </box>
-              </Match>
-            </Switch>
+                </Match>
+                <Match when={!wide()}>
+                  <box
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    right={0}
+                    bottom={0}
+                    alignItems="flex-end"
+                    backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
+                  >
+                    <Sidebar sessionID={route.sessionID} />
+                  </box>
+                </Match>
+              </Switch>
+            </ErrorBoundary>
           </Show>
         </box>
       </context.Provider>
@@ -1910,7 +1977,6 @@ function InlineTool(props: {
           setErrorExpanded((value) => !value)
           return
         }
-        // No default navigation — onMouseDown handles it. onMouseUp is error-expand only.
       }}
     >
       {props.children}
@@ -2242,8 +2308,10 @@ function Task(props: ToolProps) {
 
   onMount(() => {
     if (props.part.state.status === "pending") return
-    const sessionID = stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
-    if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
+    const childSessionID = stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
+    if (childSessionID && !sync.data.message[childSessionID]?.length) sync.session.sync(childSessionID).catch((e: any) => {
+      try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] ONMOUNT-SYNC-ERROR childSessionID=${childSessionID} error=${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}\n`) } catch {}
+    })
   })
 
   const sessionID = createMemo(() => {
@@ -2326,8 +2394,10 @@ function Task(props: ToolProps) {
       pending="Delegating..."
       part={props.part}
       onClick={() => {
-        if (sessionID()) {
-          navigate({ type: "session", sessionID: sessionID()! })
+        const sid = sessionID()
+        try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] TASK-CLICK sessionID=${sid ?? "undefined"} partID=${props.part.id} status=${props.part.state.status} hasMetadata=${"metadata" in props.part.state}\n`) } catch {}
+        if (sid) {
+          navigate({ type: "session", sessionID: sid })
         }
         const status = retry()
         if (status) void DialogAlert.show(dialog, "Retry Error", status.message)

@@ -292,13 +292,17 @@ export function evaluateSpawnNecessity(
   }
 
   // Simplicity threshold: high confidence + low risk + single domain + simple phrasing
-  const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade)\s/i
-  const isSimpleTask = result.confidence >= 0.8
+  // Trivial prompts include: short status checks ("alive?", "done?"), single-word
+  // confirmations ("ok", "thanks", "looks good"), quick commands, and simple edits.
+  const TRIVIAL_PROMPT_RE = /^(?:(?:alive|done|ready|good|ok|okay|yes|no|thanks|ty|np|👍|✅)\s*)?$/i
+  const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade|check|run|bump|bump\s|pin|drop)\s/i
+  const isSimpleTask = (result.confidence >= 0.8
     && result.risk_level === "low"
     && uniqueDomains <= 1
     && prompt.length < 500
     && (result.complexity === "low" || !result.complexity)
-    && simplicityPatterns.test(prompt.trim())
+    && simplicityPatterns.test(prompt.trim()))
+    || (prompt.trim().length < 100 && !prompt.includes("\n") && !prompt.includes("```") && TRIVIAL_PROMPT_RE.test(prompt.trim()))
 
   if (isSimpleTask) {
     return { shouldSpawn: false, reason: "Simple high-confidence task — agent handles directly", suggestedCount: 0 }
@@ -330,8 +334,10 @@ export function evaluateSpawnNecessity(
     score += 2
   }
 
-  // Filter "always" skills (like breakthrough-overdrive-innovation) from chain-length scoring
-  const alwaysSkills = new Set(["breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning", "lint-fixer", "context-compactor"])
+  // Filter "always" skills (like breakthrough-overdrive-innovation) from chain-length scoring.
+  // deep-research is a workflow skill that manages its own subagents — it should NOT inflate
+  // the spawn score, otherwise it causes persona spawning alongside workflow spawning (infinite loop).
+  const alwaysSkills = new Set(["breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning", "lint-fixer", "context-compactor", "deep-research"])
   const effectiveChainLen = result.chain.filter((s) => !alwaysSkills.has(s)).length
   if (effectiveChainLen >= 2) {
     reasons.push("Complex skill chain — parallel analysis beneficial")
@@ -370,6 +376,14 @@ export function depthScore(result: SensorGateResult): number {
 }
 
 export function selectPersonas(result: SensorGateResult): Persona[] {
+  // Workflow skills (deep-research) manage their own subagents internally.
+  // Skip persona selection entirely when a workflow skill is present — otherwise
+  // both systems spawn subagents simultaneously, causing infinite spawn loops.
+  const WORKFLOW_SKILLS = new Set(["deep-research"])
+  if (result.chain.some((s) => WORKFLOW_SKILLS.has(s))) {
+    return []
+  }
+
   const tags = new Set(result.domain_tags.map((t) => t.trim().toLowerCase()))
   const chain = new Set(result.chain.map((s) => s.trim().toLowerCase()))
   const allTags = new Set([...tags, ...chain])
@@ -389,8 +403,8 @@ export function selectPersonas(result: SensorGateResult): Persona[] {
     return { profile, score }
   })
 
-  // Raise minimum score threshold — require at least 2 tag matches to justify a persona
-  const eligible = scored.filter((s) => s.score >= 2).sort((a, b) => b.score - a.score)
+  // Minimum score threshold — require at least 1 tag match to justify a persona
+  const eligible = scored.filter((s) => s.score >= 1).sort((a, b) => b.score - a.score)
 
   // For simple/low-risk tasks, skip personas entirely
   if (complexityScore <= 1 && mode !== "DREAM_INNOVATION" && eligible.length === 0) {
@@ -835,7 +849,7 @@ export const layer = Layer.effect(
           // Defense-in-depth: also check the raw prompt for social greetings, since Python's
           // social greeting early-return produces empty stdout and is_social_greeting is false.
           const promptIsSocialGreeting = result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())
-          if (result.personas.length === 0 && result.domain_tags.length === 0 && !promptIsSocialGreeting) {
+          if (result.personas.length === 0 && !promptIsSocialGreeting) {
             // Use question complexity to determine fallback count instead of hardcoded 3.
             // If we have active rated questions, use their max complexity; otherwise default to medium.
             const complexity: ComplexityLevel = result.complexity === "high" ? "high"
@@ -844,9 +858,17 @@ export const layer = Layer.effect(
               : result.risk_level === "medium" ? "medium"
               : "low"
             const spawnConfig = COMPLEXITY_SPAWN_MAP[complexity]
-            const fallbackCount = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
-            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, count=${fallbackCount}`)
-            result.personas = PERSONA_PROFILES.slice(0, fallbackCount).map((p) => ({
+            const fallbackMax = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
+            // Use depthScore + minComplexity to select relevant personas instead of blind first-N.
+            // Simple tasks (depth 1-2) get only foundation personas (minComplexity=1).
+            // Complex tasks (depth 3-5) get specialized and advanced personas too.
+            const taskDepth = depthScore(result)
+            const eligible = PERSONA_PROFILES
+              .filter((p) => p.minComplexity <= taskDepth)
+              .sort((a, b) => a.minComplexity - b.minComplexity) // foundation first
+            const fallbackCount = Math.min(fallbackMax, eligible.length)
+            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, taskDepth=${taskDepth}, count=${fallbackCount}`)
+            result.personas = eligible.slice(0, fallbackCount).map((p) => ({
               name: p.name,
               role: p.role,
               focus: p.focus,

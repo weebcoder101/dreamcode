@@ -50,19 +50,33 @@ export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: numbe
   return dynamicTool({
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(inputSchema),
-    execute: (args: unknown, options) =>
-      client.callTool(
-        {
-          name: mcpTool.name,
-          arguments: (args || {}) as Record<string, unknown>,
-        },
-        CallToolResultSchema,
-        {
-          resetTimeoutOnProgress: true,
-          signal: options.abortSignal,
-          timeout,
-        },
-      ),
+    execute: async (args: unknown, options) => {
+      let lastError: unknown
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await client.callTool(
+            {
+              name: mcpTool.name,
+              arguments: (args || {}) as Record<string, unknown>,
+            },
+            CallToolResultSchema,
+            {
+              resetTimeoutOnProgress: true,
+              signal: options.abortSignal,
+              timeout,
+            },
+          )
+        } catch (error) {
+          lastError = error
+          // Only retry once for transient errors; skip retry on abort/validation
+          if (options.abortSignal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error
+          // Brief delay before retry
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        }
+      }
+      const msg = lastError instanceof Error ? lastError.message : String(lastError)
+      throw new Error(`MCP tool "${mcpTool.name}" call failed after retry: ${msg}`)
+    },
   })
 }
 

@@ -116,6 +116,11 @@ export const layer = Layer.effect(
         }
         remove.push(msg)
       }
+      const hasPartsToRemove = session.revert.partID && target && target.parts.findIndex((part) => part.id === session.revert!.partID) >= 0
+      if (remove.length === 0 && !hasPartsToRemove) {
+        yield* sessions.clearRevert(sessionID)
+        return
+      }
       for (const msg of remove) {
         yield* sessions.removeMessage({ sessionID, messageID: msg.info.id })
       }

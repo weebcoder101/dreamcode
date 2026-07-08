@@ -721,6 +721,29 @@ export function bootstrapSubagentData(input: BootstrapSubagentInput) {
     }
   }
 
+  // ─── Fallback: create stub tabs for children not found in message scan ──
+  // When messages are truncated (SUBAGENT_BOOTSTRAP_LIMIT=200), older task
+  // tool call parts that created child sessions are invisible. The SDK's
+  // session.children() API is the authoritative source — any child it reports
+  // that doesn't have a tab yet gets a stub tab here so it remains clickable
+  // regardless of scroll depth.
+  for (const [id, item] of child) {
+    if (input.data.tabs.has(id)) {
+      continue // already discovered via message scan
+    }
+    input.data.tabs.set(id, {
+      sessionID: id,
+      partID: `bootstrap:${id}`,
+      callID: `bootstrap:${id}`,
+      label: Locale.titlecase(item.title ?? "task"),
+      description: item.title ?? "Background subagent",
+      status: "running",
+      lastUpdatedAt: Date.now(),
+    })
+    ensureDetail(input.data, id)
+    changed = true
+  }
+
   for (const item of input.permissions) {
     if (!children.has(item.sessionID)) {
       continue
