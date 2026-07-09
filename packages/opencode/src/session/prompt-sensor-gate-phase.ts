@@ -1,6 +1,6 @@
 import { Effect, Ref } from "effect"
-import { SensorGate, evaluateSpawnNecessity, type Persona } from "@/skill/sensor-gate"
-import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
+import { evaluateSpawnNecessity, WORKFLOW_SKILLS, type Persona } from "@/skill/sensor-gate"
+import { type ChainResult } from "@/skill/chain-executor"
 import * as PersonaTracker from "./persona-tracker"
 import { extractSubagentContext, buildSubagentContextPrompt } from "./subagent-context"
 import { sanitizeForSystemPrompt, normalizeTokens, injectChainGapDetection, injectSkillLoadingGap, injectSkillChainObligation, buildUnloadedChainBlockMessage } from "./prompt-utils"
@@ -12,17 +12,26 @@ import { TaskTool } from "@/tool/task"
 import { ulid } from "ulid"
 import type { SessionID } from "./schema"
 
-export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: {
+// Tracks workflow skills (e.g., deep-research) that recently completed execution per session.
+// When the sensor gate chain includes a workflow skill, persona spawning is normally
+// blocked. But on subsequent turns, if the same workflow skill is still in the chain,
+// this map allows persona spawning to proceed because the workflow already ran.
+// Cleared once personas successfully spawn. Keyed by sessionID to prevent cross-session leaks.
+const recentlyCompletedWorkflows = new Map<SessionID, Set<string>>()
+
+export interface SensorGatePhaseInput {
   gateResult: any; explicitSpawnCount: number; sessionID: SessionID;
   msgs: any[]; system: string[]; model: any; ctx: any;
-  handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
+  instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
   sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
   personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
   chainExecutor: any; sys: any;
-}) {
+}
+
+export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: SensorGatePhaseInput) {
   const {
     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
-    handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
+    instruction, ops, piecesLTM, selfEvolve, registry, agents,
     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
     personaRoundMap, spawnHistory, compaction, chainExecutor, sys,
   } = input
@@ -93,7 +102,9 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
     storedContentResultsMap.set(sessionID, contentResults)
 
     yield* injectChainGapDetection(system, gateResult, chainResults, userText, chainExecutor)
-    injectSkillLoadingGap(system, gateResult, msgs)
+    // Pass successfully executed script skills so they're excluded from loading gap
+    const preExecutedSkills = scriptResults.filter(r => r.status === "ok").map(r => r.name)
+    injectSkillLoadingGap(system, gateResult, msgs, preExecutedSkills)
     injectSkillChainObligation(system, gateResult, scriptResults, contentResults)
 
     yield* selfEvolve.capture({
@@ -105,16 +116,36 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
         whatFailed: `Skill ${r.name} failed: ${r.output.slice(0, 200)}`,
         whatToChange: `Chain skill ${r.name} needs fixing`,
       })),
-    }).pipe(Effect.catch(() => Effect.void))
+    }).pipe(Effect.catch((e) => Effect.logWarning(`[sensor-gate] selfEvolve.capture failed: ${e}`)))
     yield* sys.invalidateKnowledgeCache().pipe(Effect.catch(() => Effect.void))
+
+    // Mark workflow skills as recently completed so persona spawning is
+    // unblocked on subsequent turns even if the workflow skill is still
+    // in the sensor gate chain. Session-scoped to prevent cross-session leaks.
+    if (gateResult?.chain?.length > 0) {
+      const sessionCompleted = recentlyCompletedWorkflows.get(sessionID) ?? new Set<string>()
+      for (const skill of gateResult.chain) {
+        if (WORKFLOW_SKILLS.has(skill)) {
+          sessionCompleted.add(skill)
+        }
+      }
+      recentlyCompletedWorkflows.set(sessionID, sessionCompleted)
+    }
   }
 
   // ─── Determine personas ─────────────────────────────────
   let evaluation = evaluateSpawnNecessity(gateResult, userText)
   yield* Effect.logWarning(`[SENSOR-GATE-DIAG] evaluateSpawnNecessity shouldSpawn=${evaluation.shouldSpawn} suggestedCount=${evaluation.suggestedCount} reason=${evaluation.reason}`)
 
-  const WORKFLOW_SKILLS = new Set(["deep-research"])
-  const hasWorkflowSkill = gateResult?.chain?.some((s: string) => WORKFLOW_SKILLS.has(s))
+  const sessionCompleted = recentlyCompletedWorkflows.get(sessionID) ?? new Set<string>()
+  const hasWorkflowSkill = gateResult?.chain?.some((s: string) => {
+    // If this workflow skill recently completed for this session, don't block
+    // persona spawning. This breaks the infinite loop where deep-research blocks
+    // spawning forever because the Python model keeps including it in the chain
+    // on every turn.
+    if (sessionCompleted.has(s)) return false
+    return WORKFLOW_SKILLS.has(s)
+  })
   if (hasWorkflowSkill) {
     evaluation = {
       shouldSpawn: false,
@@ -122,6 +153,23 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
       suggestedCount: 0,
     }
     debugLog(`[sensor-gate] Workflow skill detected: ${evaluation.reason}`)
+  }
+
+  // Clean up recently completed workflow tracking. When personas successfully
+  // spawn despite a workflow skill being in the chain (because it was recently
+  // completed), clear the tracking so stale entries don't accumulate.
+  // If spawning remains blocked by a NEW workflow skill, keep tracking so the
+  // next turn gets a chance once that new skill also completes.
+  if (sessionCompleted.size > 0) {
+    if (!hasWorkflowSkill && evaluation.shouldSpawn) {
+      // We bypassed the workflow block — personas can spawn. Clear tracking
+      // to avoid stale entries accumulating over time.
+      recentlyCompletedWorkflows.delete(sessionID)
+      debugLog(`[sensor-gate] Cleared recentlyCompletedWorkflows for session ${sessionID} — personas spawned despite workflow in chain`)
+    }
+    // Otherwise: either a new workflow skill is still blocking (keep tracking),
+    // or spawning was suppressed for other reasons (keep tracking so the next
+    // turn can still bypass the workflow if it was recently completed).
   }
 
   if (!evaluation.shouldSpawn) {
@@ -200,7 +248,7 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
       outcome: "success",
       keyDecisions: [`Gate classification: ${gateResult?.intent ?? "explicit-override"}`, `Round: ${currentRound + 1}`],
       memoryType: "standup",
-    }).pipe(Effect.catch(() => Effect.void))
+    }).pipe(Effect.catch((e) => Effect.logWarning(`[sensor-gate] piecesLTM.persist failed: ${e}`)))
 
     yield* Effect.gen(function* () {
       const named = personas.filter((p: any) => p.name && p.skills?.length > 0) as Array<{ name: string; skills: string[]; role: string; focus: string; task?: string; goals?: string[] }>
@@ -216,7 +264,7 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
           })),
         })
       }
-    }).pipe(Effect.catch(() => Effect.void))
+    }).pipe(Effect.catch((e) => Effect.logWarning(`[sensor-gate] selfEvolve.capture failed: ${e}`)))
 
     const personaTeam = personas.slice(0, Math.min(personas.length, RATE_MAX_SPAWNS))
     const subtaskOps = yield* ops({ disableTaskTool: true })

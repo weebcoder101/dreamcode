@@ -144,8 +144,17 @@ function injectSkillLoadingGap(
   system: string[],
   gateResult: any,
   msgs: any[],
+  preExecutedSkills?: string[],
 ): void {
   const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
+  // Skills that were pre-executed by the chain executor (script results injected
+  // as <script-result> blocks) should NOT trigger loading warnings — the agent
+  // already has their output in context.
+  if (preExecutedSkills) {
+    for (const name of preExecutedSkills) {
+      loaded.add(name)
+    }
+  }
   const unloadedChainSkills = gateResult.chain.filter((name: string) => !loaded.has(name))
   // If the agent has already acknowledged [SKILLS LOADED] but some skills
   // are still missing from tool calls, trust the acknowledgment — the agent

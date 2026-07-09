@@ -6,8 +6,7 @@ const storedGateResultMap = new Map<SessionID, any>()
 const storedScriptResultsMap = new Map<SessionID, ChainResult[]>()
 const storedContentResultsMap = new Map<SessionID, ChainResult[]>()
 
-// ─── Sensor Gate Firing State ─────────────────────────────────
-const sensorGateFiredMap = new Map<SessionID, boolean>()
+// ─── Persona Round Tracking ────────────────────────────────────
 const personaRoundMap = new Map<SessionID, number>()
 
 // ─── Rolling-Window Rate Limiter ─────────────────────────────────
@@ -46,7 +45,6 @@ export {
   storedGateResultMap,
   storedScriptResultsMap,
   storedContentResultsMap,
-  sensorGateFiredMap,
   personaRoundMap,
   RATE_WINDOW_MS,
   RATE_MAX_SPAWNS,

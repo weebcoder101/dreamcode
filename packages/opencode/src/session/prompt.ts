@@ -107,7 +107,6 @@ import {
   storedGateResultMap,
   storedScriptResultsMap,
   storedContentResultsMap,
-  sensorGateFiredMap,
   personaRoundMap,
   spawnHistory,
   checkRateLimit,
@@ -164,17 +163,8 @@ export const layer = Layer.effect(
     const chainExecutor = yield* ChainExecutor.Service
     const selfEvolve = yield* SelfEvolve.Service
     const piecesLTM = yield* PiecesLTM.PiecesLTM
-    const ops = Effect.fn("SessionPrompt.ops")(function* (opts?: { disableTaskTool?: boolean }) {
-      return {
-        cancel: (sessionID: SessionID) => cancel(sessionID),
-        resolvePromptParts: (template: string) => resolvePromptParts(template),
-        prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
-        disableTaskTool: opts?.disableTaskTool ?? false,
-      } satisfies TaskPromptOps
-    })
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
-      sensorGateFiredMap.delete(sessionID)
       personaRoundMap.delete(sessionID)
       spawnHistory.delete(sessionID)
       yield* state.cancel(sessionID)
@@ -211,6 +201,14 @@ export const layer = Layer.effect(
         { concurrency: "unbounded", discard: true },
       )
       return parts
+    })
+    const ops = Effect.fn("SessionPrompt.ops")(function* (opts?: { disableTaskTool?: boolean }) {
+      return {
+        cancel: (sessionID: SessionID) => cancel(sessionID),
+        resolvePromptParts: (template: string) => resolvePromptParts(template),
+        prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
+        disableTaskTool: opts?.disableTaskTool ?? false,
+      } satisfies TaskPromptOps
     })
     const title = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
       session: Session.Info
@@ -585,11 +583,15 @@ Before every response, verify your reasoning:
             const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), ...(taste ? [taste] : []), SELF_CHECK]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            // ─── Sensor Gate: Native Dream Mode ─────────────────────────
-            // Runs classification + skill chain selection on EVERY user message.
-            // Only in root sessions — subagents must NOT re-enter persona spawning.
-            // Skip after synthesis — synthesis should NOT auto-spawn subagents.
-            if (!session.parentID) {
+             // ─── Sensor Gate: Native Dream Mode ─────────────────────────
+             // Runs classification + skill chain selection ONCE per user message
+             // (step === 1). On subsequent steps (tool calls, retries), the gate
+             // must NOT re-fire — duplicates skill chain execution, corrupts the
+             // system prompt with duplicate <script-result> blocks, and confuses
+             // the model with conflicting skill-loading instructions.
+             // Only in root sessions — subagents must NOT re-enter persona spawning.
+             // Skip after synthesis — synthesis should NOT auto-spawn subagents.
+             if (step === 1 && !session.parentID) {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
@@ -597,34 +599,17 @@ Before every response, verify your reasoning:
                 .map((p) => p.text)
                 .join("\n")
               // Detect synthesis response — skip auto-spawn after synthesis.
-              // Check ALL user messages, not just the last one, because on
-              // subsequent prompts the synthesis from a PRIOR gate firing is
-              // deeper in the conversation but still proves the gate already
-              // ran. Without this check, every new user message re-fires the
-              // gate, creating duplicate personaAssistantMsg entries with zero
-              // tokens and corrupting the session.
-              const hasSynthesisInConversation = msgs.some(
-                (m) => m.info.role === "user" && m.parts.some(
-                  (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
-                ),
-              )
+              // Only check the LAST user message to avoid a permanent synthesis
+              // lock: once ANY prior message triggered synthesis, a cross-message
+              // scan would block ALL subsequent user messages from ever re-firing
+              // the sensor gate. Each new user message deserves a fresh chance
+              // to trigger persona spawning.
               const lastUserMsg = msgs.findLast(
                 (m) => m.info.role === "user" && m.info.id === lastUser.id,
               )
-              const lastUserMsgIsSynthetic = lastUserMsg?.parts.some(
+              const isSynthesis = lastUserMsg?.parts.some(
                 (p) => p.type === "text" && "synthetic" in p && p.synthetic && p.text.startsWith("<synthesis-request>"),
               ) ?? false
-              const isSynthesis = hasSynthesisInConversation || lastUserMsgIsSynthetic
-              // Diagnostic: when synthesis is found in a PRIOR message (not the
-              // last one), log it so we can verify the cross-message scan is
-              // working and the gate is being correctly suppressed.
-              if (hasSynthesisInConversation && !lastUserMsgIsSynthetic) {
-                // This branch means the last user message is NOT synthetic but
-                // a prior one was — the exact scenario that caused the bug.
-                yield* Effect.logWarning(
-                  `[SENSOR-GATE-SKIP] Suppressed re-fire: synthesis found in PRIOR message (not last user msg) — sessionID=${sessionID}`,
-                )
-              }
               // Skip sensor gate for slash commands — commands handle their own flow.
               const isSlashCommand = userText.trim().startsWith("/")
               // Skip sensor gate if session has active subagents running.
@@ -648,9 +633,9 @@ Before every response, verify your reasoning:
                 if (gateResult && !gateResult.is_social_greeting) {
                   const sgpResult = yield* processSensorGatePhase({
                     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
-                    handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
+                    instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
-                    personaRoundMap, spawnHistory, compaction, chainExecutor,
+                    personaRoundMap, spawnHistory, compaction, chainExecutor, sys,
                   })
                   synthesisText = sgpResult.synthesisText
                 }
@@ -890,4 +875,16 @@ export const node = (LayerNode.make as any)(layer, [
   chainExecutorNode,
 ])
 export { ModelRef, PromptInput, LoopInput, ShellInput, CommandInput, createStructuredOutputTool }
-export * as SessionPrompt from "./prompt"
+export const SessionPrompt = {
+  Service,
+  layer,
+  defaultLayer,
+  node,
+  ModelRef,
+  PromptInput,
+  LoopInput,
+  ShellInput,
+  CommandInput,
+  createStructuredOutputTool,
+}
+

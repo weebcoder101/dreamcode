@@ -12,6 +12,10 @@ const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagen
 
 const RATE_MAX_SPAWNS = 5
 
+export const WORKFLOW_SKILLS = new Set(["deep-research"])
+
+const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
+
 // ─── NEURO Result Cache ─────────────────────────────────────────────
 // Caches NEURO results per project root to avoid redundant re-runs
 // within the same session. The cache is cleared on session disposal.
@@ -272,7 +276,6 @@ export function evaluateSpawnNecessity(
   // CPU-HEAVY TASK DETECTION: cap personas to 2 for compute-bound operations.
   // Typecheck, build, and compilation tasks are CPU-intensive — running 5+ parallel
   // tsc/bun processes causes OOM and degrades performance without benefit.
-  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
   const isCpuHeavy = CPU_HEAVY_RE.test(prompt)
   if (isCpuHeavy) {
     return {
@@ -376,13 +379,12 @@ export function depthScore(result: SensorGateResult): number {
 }
 
 export function selectPersonas(result: SensorGateResult): Persona[] {
-  // Workflow skills (deep-research) manage their own subagents internally.
-  // Skip persona selection entirely when a workflow skill is present — otherwise
-  // both systems spawn subagents simultaneously, causing infinite spawn loops.
-  const WORKFLOW_SKILLS = new Set(["deep-research"])
-  if (result.chain.some((s) => WORKFLOW_SKILLS.has(s))) {
-    return []
-  }
+  // NOTE: Workflow skills (deep-research) are NOT filtered here. They manage
+  // their own subagents, but the spawning decision belongs in
+  // processSensorGatePhase (prompt-sensor-gate-phase.ts), which uses a
+  // recentlyCompletedWorkflows mechanism to allow persona spawning on
+  // subsequent turns after a workflow skill completes. Filtering here would
+  // prevent the caller from ever seeing personas for workflow chains.
 
   const tags = new Set(result.domain_tags.map((t) => t.trim().toLowerCase()))
   const chain = new Set(result.chain.map((s) => s.trim().toLowerCase()))
@@ -425,7 +427,6 @@ export function selectPersonas(result: SensorGateResult): Persona[] {
   const dd = depthScore(result)
   let count: number
   // CPU-heavy task override — max 2 personas for build/typecheck/compile
-  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
   const isCpuHeavy = CPU_HEAVY_RE.test(result.intent)
   if (isCpuHeavy) {
     count = Math.min(2, Math.max(1, Math.ceil(dd / 2)))
