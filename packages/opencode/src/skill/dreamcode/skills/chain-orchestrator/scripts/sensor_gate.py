@@ -72,29 +72,34 @@ def load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 PATTERN_RULES = [
-    (r'\b(fix|bug|error|issue|crash|broken)\b', "debugging", "high"),
-    (r'\b(refactor|restructure|reorganize|cleanup)\b', "refactoring", "medium"),
-    (r'\b(test|tests|testing|coverage|assert)\b', "testing", "medium"),
-    (r'\b(security|auth|token|secret|vulnerability)\b', "security", "high"),
-    (r'\b(performance|slow|optimize|speed|latency)\b', "performance", "medium"),
-    (r'\b(deploy|docker|ci|cd|pipeline|build)\b', "devops", "medium"),
-    (r'\b(git|commit|branch|merge|pr|pull request)\b', "git", "low"),
-    (r'\b(api|endpoint|route|rest|graphql)\b', "api", "medium"),
-    (r'\b(python|django|flask|fastapi)\b', "python", "low"),
-    (r'\b(react|jsx|tsx|component|hooks?)\b', "react", "low"),
-    (r'\b(frontend|ui|css|tailwind|style)\b', "frontend", "low"),
-    (r'\b(quantum|qaoa|qae|qubit)\b', "quantum", "medium"),
-    (r'\b(data|pandas|numpy|analysis)\b', "data", "medium"),
-    (r'\b(plan|planning|roadmap|sprint)\b', "planning", "medium"),
-    (r'\b(architect|architecture|design|pattern)\b', "architecture", "high"),
-    (r'\b(product|feature|user|requirement)\b', "product", "medium"),
-    (r'\b(document|documentation|readme|doc)\b', "documentation", "low"),
-    (r'\b(explain|describe|how does|what is)\b', "communication", "low"),
-    (r'\b(research|investigate|explore|analyze)\b', "research", "medium"),
-    (r'\b(automate|automation|pipeline|workflow)\b', "automation", "medium"),
-    (r'\b(innovate|innovation|breakthrough|novel)\b', "breakthrough-overdrive-innovation", "high"),
-    (r'\b(review|audit|examine|inspect)\b', "neuro", "high"),
-    (r'\b(improve|enhance|better)\b', "neuro", "medium"),
+    # NOTE: Leading \b ensures word-start matching. Trailing \b is intentionally
+    # OMITTED to match inflected forms (e.g. "fix" matches "fixes", "fixed", "fixing";
+    # "bug" matches "bugs"; "refactor" matches "refactoring", "refactored").
+    # The pattern still won't match inside compound words like "prefix" because \b
+    # requires a word/non-word transition before the match.
+    (r'\b(fix|bug|error|issue|crash|broken)', "debugging", "high"),
+    (r'\b(refactor|restructure|reorganize|cleanup)', "refactoring", "medium"),
+    (r'\b(test|tests|testing|coverage|assert)', "testing", "medium"),
+    (r'\b(security|auth|token|secret|vulnerability)', "security", "high"),
+    (r'\b(performance|slow|optimize|speed|latency)', "performance", "medium"),
+    (r'\b(deploy|docker|ci|cd|pipeline|build)', "devops", "medium"),
+    (r'\b(git|commit|branch|merge|pr|pull request)', "git", "low"),
+    (r'\b(api|endpoint|route|rest|graphql)', "api", "medium"),
+    (r'\b(python|django|flask|fastapi)', "python", "low"),
+    (r'\b(react|jsx|tsx|component|hooks?)', "react", "low"),
+    (r'\b(frontend|ui|css|tailwind|style)', "frontend", "low"),
+    (r'\b(quantum|qaoa|qae|qubit)', "quantum", "medium"),
+    (r'\b(data|pandas|numpy|analysis)', "data", "medium"),
+    (r'\b(plan|planning|roadmap|sprint)', "planning", "medium"),
+    (r'\b(architect|architecture|design|pattern)', "architecture", "high"),
+    (r'\b(product|feature|user|requirement)', "product", "medium"),
+    (r'\b(document|documentation|readme|doc)', "documentation", "low"),
+    (r'\b(explain|describe|how does|what is)', "communication", "low"),
+    (r'\b(research|investigate|explore|analyze)', "research", "medium"),
+    (r'\b(automate|automation|pipeline|workflow)', "automation", "medium"),
+    (r'\b(innovate|innovation|breakthrough|novel)', "breakthrough-overdrive-innovation", "high"),
+    (r'\b(review|audit|examine|inspect)', "neuro", "high"),
+    (r'\b(improve|enhance|better)', "neuro", "medium"),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════

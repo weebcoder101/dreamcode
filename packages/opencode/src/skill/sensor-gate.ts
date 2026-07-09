@@ -245,20 +245,7 @@ export function evaluateSpawnNecessity(
   const reasons: string[] = []
   let score = 0
 
-  // 0. Pre-populated personas — if the fallback generator or selectPersonas()
-  //    already decided which specialists are needed, trust that decision.
-  //    This prevents silent discard when the Python subprocess returned empty
-  //    output (leaving stale default metadata) but the TypeScript fallback
-  //    correctly identified relevant specialists.
-  if (result.personas.length > 0) {
-    return {
-      shouldSpawn: true,
-      reason: `Personas pre-selected (${result.personas.length} specialists) — trusting fallback generation`,
-      suggestedCount: Math.min(result.personas.length, RATE_MAX_SPAWNS),
-    }
-  }
-
-  // 1. User-specified agent count — if the prompt explicitly requests N subagents,
+  // 0. User-specified agent count — if the prompt explicitly requests N subagents,
   //    honor that as a hard override (up to RATE_MAX_SPAWNS).
   const userCountMatch = prompt.match(USER_AGENT_COUNT_RE)
   const userCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), RATE_MAX_SPAWNS) : 0
@@ -270,7 +257,7 @@ export function evaluateSpawnNecessity(
     }
   }
 
-  // 2. Social greetings — never spawn for "hello", "thanks", etc.
+  // 1. Social greetings — never spawn for "hello", "thanks", etc.
   if (result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())) {
     return { shouldSpawn: false, reason: "Social greeting — no specialists needed", suggestedCount: 0 }
   }
@@ -389,21 +376,6 @@ export function depthScore(result: SensorGateResult): number {
   const tagDiversity = Math.min(tags, 5)
   const chainDepth = Math.min(chainLen, 4)
   return Math.max(0, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
-}
-
-/**
- * Checks whether persona spawning and spawn necessity evaluation agree.
- * When the Python sensor gate returns empty/default data, the mode defaults
- * to "STANDARD" which causes evaluateSpawnNecessity() to block spawning,
- * even though the fallback persona generator may create personas.
- * Returns true if the result needs mode elevation to DREAM_INNOVATION.
- */
-export function needsModeElevation(result: SensorGateResult, personasCount: number, taskDepth: number): boolean {
-  return personasCount > 0
-    && result.mode !== "DREAM_INNOVATION"
-    && taskDepth >= 2
-    && !result.is_social_greeting
-    && result.chain.length === 0
 }
 
 export function selectPersonas(result: SensorGateResult): Persona[] {
@@ -907,15 +879,14 @@ export const layer = Layer.effect(
               goals: dynamicGoalsFor(p, result.intent || prompt.slice(0, 200)),
               synthesisGuide: dynamicSynthesisFor(p),
             }))
-            // CRITICAL: Elevate mode to DREAM_INNOVATION when using fallback personas
-            // (Python script returned empty/default). Without this, the default mode
-            // "STANDARD" causes evaluateSpawnNecessity() to return shouldSpawn=false
-            // even though personas were generated — the two functions diverge.
-            // Only elevate when task depth justifies it (>= 2) to avoid forcing
-            // DREAM_INNOVATION for truly trivial prompts.
-            if (needsModeElevation(result, result.personas.length, taskDepth)) {
-              debugLog(`[sensor-gate] mode elevated: ${result.mode} → DREAM_INNOVATION (fallback personas, taskDepth=${taskDepth})`)
-              result.mode = "DREAM_INNOVATION"
+            // When fallback generates personas but Python produced no chain,
+            // set a minimum chain (["neuro"]) so the skill loading pipeline fires:
+            // chain executor runs, <script-result> blocks are injected,
+            // and the pre-turn skill enforcer prompts the agent to load skills.
+            // Without this, chain.length === 0 silences the enforcer completely.
+            if (result.chain.length === 0 && result.personas.length > 0) {
+              result.chain = ["neuro"]
+              debugLog(`[sensor-gate] fallback chain set to [neuro] for skill loading`)
             }
           }
         } else {
