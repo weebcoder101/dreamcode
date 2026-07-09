@@ -39,6 +39,15 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
   yield* Effect.logWarning(`[SENSOR-GATE-DIAG] processSensorGatePhase entered gateResult.chain=${gateResult?.chain?.length ?? 0} personas=${gateResult?.personas?.length ?? 0} mode=${gateResult?.mode ?? "N/A"} explicitUserCount=${explicitSpawnCount}`)
 
   const currentRound = (personaRoundMap.get(sessionID) ?? 0)
+  const MAX_PERSONA_ROUNDS = 3
+
+  // ─── Round Limit Check ──────────────────────────────────────
+  // Prevent infinite persona spawning rounds. Each user message can
+  // trigger at most MAX_PERSONA_ROUNDS rounds of specialist analysis.
+  if (currentRound >= MAX_PERSONA_ROUNDS) {
+    yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Max persona rounds reached (${currentRound}/${MAX_PERSONA_ROUNDS}) — skipping persona spawning`)
+    return { synthesisText: undefined, sensorGateFired: true }
+  }
 
   // ─── Skill Chain Execution ──────────────────────────────
   if (gateResult?.chain?.length > 0) {
@@ -147,12 +156,14 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
     return WORKFLOW_SKILLS.has(s)
   })
   if (hasWorkflowSkill) {
+    const blockingSkill = gateResult?.chain?.find((s: string) => WORKFLOW_SKILLS.has(s) && !sessionCompleted.has(s))
+    yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Workflow skill override: blockingSkill=${blockingSkill} sessionCompleted=[${[...sessionCompleted].join(",")}] preOverride_shouldSpawn=${evaluation.shouldSpawn}`)
     evaluation = {
       shouldSpawn: false,
-      reason: "Chain includes workflow-managed skill — workflow handles its own agents",
+      reason: `Chain includes workflow-managed skill "${blockingSkill}" — workflow handles its own agents`,
       suggestedCount: 0,
     }
-    debugLog(`[sensor-gate] Workflow skill detected: ${evaluation.reason}`)
+    debugLog(`[sensor-gate] Workflow skill detected: ${blockingSkill} — overriding spawn decision`)
   }
 
   // Clean up recently completed workflow tracking. When personas successfully
@@ -173,6 +184,16 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
   }
 
   if (!evaluation.shouldSpawn) {
+    // Diagnostic: log when spawn is denied despite personas being populated.
+    // This reveals the broken feedback loop where fallback generates personas
+    // but evaluateSpawnNecessity() denies them due to stale default metadata.
+    if (gateResult?.personas?.length > 0) {
+      yield* Effect.logWarning(
+        `[SENSOR-GATE-DIAG] Spawn BLOCKED despite ${gateResult.personas.length} populated personas. ` +
+        `domain_tags=${gateResult.domain_tags?.length} chain=${gateResult.chain?.length} ` +
+        `confidence=${gateResult.confidence} mode=${gateResult.mode} reason=${evaluation.reason}`,
+      )
+    }
     debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
     recordTaste({
       timestamp: Date.now(), sessionID, domain: gateResult?.mode ?? "unknown",

@@ -245,7 +245,20 @@ export function evaluateSpawnNecessity(
   const reasons: string[] = []
   let score = 0
 
-  // 0. User-specified agent count — if the prompt explicitly requests N subagents,
+  // 0. Pre-populated personas — if the fallback generator or selectPersonas()
+  //    already decided which specialists are needed, trust that decision.
+  //    This prevents silent discard when the Python subprocess returned empty
+  //    output (leaving stale default metadata) but the TypeScript fallback
+  //    correctly identified relevant specialists.
+  if (result.personas.length > 0) {
+    return {
+      shouldSpawn: true,
+      reason: `Personas pre-selected (${result.personas.length} specialists) — trusting fallback generation`,
+      suggestedCount: Math.min(result.personas.length, RATE_MAX_SPAWNS),
+    }
+  }
+
+  // 1. User-specified agent count — if the prompt explicitly requests N subagents,
   //    honor that as a hard override (up to RATE_MAX_SPAWNS).
   const userCountMatch = prompt.match(USER_AGENT_COUNT_RE)
   const userCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), RATE_MAX_SPAWNS) : 0
@@ -257,7 +270,7 @@ export function evaluateSpawnNecessity(
     }
   }
 
-  // 1. Social greetings — never spawn for "hello", "thanks", etc.
+  // 2. Social greetings — never spawn for "hello", "thanks", etc.
   if (result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())) {
     return { shouldSpawn: false, reason: "Social greeting — no specialists needed", suggestedCount: 0 }
   }
@@ -376,6 +389,21 @@ export function depthScore(result: SensorGateResult): number {
   const tagDiversity = Math.min(tags, 5)
   const chainDepth = Math.min(chainLen, 4)
   return Math.max(0, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
+}
+
+/**
+ * Checks whether persona spawning and spawn necessity evaluation agree.
+ * When the Python sensor gate returns empty/default data, the mode defaults
+ * to "STANDARD" which causes evaluateSpawnNecessity() to block spawning,
+ * even though the fallback persona generator may create personas.
+ * Returns true if the result needs mode elevation to DREAM_INNOVATION.
+ */
+export function needsModeElevation(result: SensorGateResult, personasCount: number, taskDepth: number): boolean {
+  return personasCount > 0
+    && result.mode !== "DREAM_INNOVATION"
+    && taskDepth >= 2
+    && !result.is_social_greeting
+    && result.chain.length === 0
 }
 
 export function selectPersonas(result: SensorGateResult): Persona[] {
@@ -710,6 +738,7 @@ function runSensorGateEffect(
       // Clean up temp file
       cleanupTmpFile(tmpFile)
       if (!output) {
+        console.warn("[sensor-gate] Python subprocess returned EMPTY output — using fallback persona generation (no domain_tags available)")
         debugLog("[sensor-gate] empty output from subprocess — returning default result")
         return parseSensorGateOutput("")
       }
@@ -868,7 +897,7 @@ export const layer = Layer.effect(
               .filter((p) => p.minComplexity <= taskDepth)
               .sort((a, b) => a.minComplexity - b.minComplexity) // foundation first
             const fallbackCount = Math.min(fallbackMax, eligible.length)
-            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, taskDepth=${taskDepth}, count=${fallbackCount}`)
+            console.warn(`[sensor-gate] FALLBACK personas: complexity=${complexity}, taskDepth=${taskDepth}, count=${fallbackCount}, eligible=${eligible.length}`)
             result.personas = eligible.slice(0, fallbackCount).map((p) => ({
               name: p.name,
               role: p.role,
@@ -878,6 +907,16 @@ export const layer = Layer.effect(
               goals: dynamicGoalsFor(p, result.intent || prompt.slice(0, 200)),
               synthesisGuide: dynamicSynthesisFor(p),
             }))
+            // CRITICAL: Elevate mode to DREAM_INNOVATION when using fallback personas
+            // (Python script returned empty/default). Without this, the default mode
+            // "STANDARD" causes evaluateSpawnNecessity() to return shouldSpawn=false
+            // even though personas were generated — the two functions diverge.
+            // Only elevate when task depth justifies it (>= 2) to avoid forcing
+            // DREAM_INNOVATION for truly trivial prompts.
+            if (needsModeElevation(result, result.personas.length, taskDepth)) {
+              debugLog(`[sensor-gate] mode elevated: ${result.mode} → DREAM_INNOVATION (fallback personas, taskDepth=${taskDepth})`)
+              result.mode = "DREAM_INNOVATION"
+            }
           }
         } else {
           // Fill in dynamic task/goals/synthesisGuide for Python-provided personas
