@@ -467,8 +467,9 @@ def generate_personas(chain_result: dict, prompt: str) -> str:
     else:
         num_personas = min(MAX_PERSONAS, len(matched_personas))
 
-    # Always include a general analyst if we have room
-    if num_personas < MAX_PERSONAS and len(matched_personas) < 3:
+    # Only include analyst for medium+ complexity tasks.
+    # Low-complexity tasks (1 domain, simple patterns) don't need a general analyst.
+    if complexity != "low" and num_personas < MAX_PERSONAS and len(matched_personas) < 3:
         analyst = {"name": "The Analyst", "role": "General Analysis Specialist", "focus": "holistic review, cross-cutting concerns, integration points"}
         if "The Analyst" not in seen_names:
             matched_personas.append(analyst)

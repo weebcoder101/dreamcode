@@ -495,7 +495,7 @@
     },
     "packages/opencode": {
       "name": "dreamcode",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "bin": {
         "dreamcode": "./bin/dreamcode",
       },

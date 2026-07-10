@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {},
+  "plugin": [
+    "./plugins/sensor-gate-enforcer.ts"
+  ],
+  "references": {
+    "effect": {
+      "repository": "github.com/Effect-TS/effect-smol",
+      "description": "Use for Effect v4 and effect-smol implementation details",
+    },
+    "opencode-local": {
+      "path": "~/.local/share/opencode",
+      "description": "Contains opencode logs and data",
+    },
+    "evolution": {
+      "path": "/home/ronya/dreamcode/evolution",
+      "description": "Agent evolution history: run_log.jsonl (past runs), agent_score.json (gamification), pieces_writes.jsonl (LTM writes), research/* (research reports)"
+    },
+  },
+  "mcp": {},
+  "tools": {
+    "github-triage": false,
+    "github-pr-search": false,
+  },
+}

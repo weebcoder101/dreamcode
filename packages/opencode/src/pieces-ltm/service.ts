@@ -111,7 +111,22 @@ export const defaultLayer = Layer.effect(
       "Connects to MCP at " + cfg.mcpURL,
     )
 
+    // Health-check precondition: verifies Pieces MCP is reachable before any LTM operation.
+    // Returns true if reachable, false with a warning log if not.
+    const checkHealth = Effect.fn("PiecesLTM.checkHealth")(function* () {
+      const h = yield* health
+      if (!h.reachable) {
+        yield* Effect.logWarning(
+          "[PiecesLTM] MCP server unreachable at " + cfg.mcpURL + " — " +
+          "LTM features unavailable. Install Pieces for Developers at https://pieces.app"
+        )
+      }
+      return h.reachable
+    })
+
     const persist = Effect.fn("PiecesLTM.persist")(function* (input: PersistInput) {
+      const ok = yield* checkHealth
+      if (!ok) return { memoryType: "standup" as MemoryType, description: "skipped (MCP unreachable)", mcpResult: null }
       const memoryType = classifyMemory(input)
       const summary = buildMemorySummary(input)
       const description = `[${memoryType.toUpperCase()}] ${input.taskDescription} — ${input.outcome}`
@@ -128,6 +143,8 @@ export const defaultLayer = Layer.effect(
     })
 
     const query = Effect.fn("PiecesLTM.query")(function* (input: QueryInput) {
+      const ok = yield* checkHealth
+      if (!ok) return null
       const arguments_: Record<string, unknown> = { question: input.query }
       if (input.timeWindow) arguments_.time_window = input.timeWindow
       if (input.topics?.length) arguments_.topics = input.topics

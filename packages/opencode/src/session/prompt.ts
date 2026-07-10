@@ -113,6 +113,7 @@ import {
   recordSpawn,
   parseExplicitSpawnCount,
   RATE_MAX_SPAWNS,
+  isSensorGateGloballyDisabled,
 } from "./prompt-state"
 import { summarizeTaste, refreshProfile } from "./prompt-taste"
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
@@ -612,6 +613,14 @@ Before every response, verify your reasoning:
               ) ?? false
               // Skip sensor gate for slash commands — commands handle their own flow.
               const isSlashCommand = userText.trim().startsWith("/")
+              // Skip sensor gate for compaction auto-continue — synthetic
+              // continuation after a context compaction event. The message is
+              // internal (e.g. "Continue if you have next steps...") and should
+              // NOT trigger any skill chain or sensor gate classification.
+              const isCompactionContinue = lastUserMsg?.parts.some(
+                (p): p is typeof p & { metadata: { compaction_continue: boolean } } =>
+                  p.type === "text" && (p as any).metadata?.compaction_continue === true,
+              ) ?? false
               // Skip sensor gate if session has active subagents running.
               // At step=1 the session is always briefly busy (just set at loop start),
               // so we bypass that check — every new user message must get classified.
@@ -622,8 +631,12 @@ Before every response, verify your reasoning:
               } else {
                 yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=1 bypassed isSessionBusy check — fire gate for every new user message`)
               }
-              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy}`)
-              if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy) {
+              // Sensor Gate Toggle: user can disable sensor gate classification
+              // via the TUI toggle button. When disabled, the skill chain pipeline
+              // still runs (using the stored gate result from a previous turn).
+              const sensorGateToggledOff = isSensorGateGloballyDisabled()
+              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy} isCompactionContinue=${isCompactionContinue} sensorGateToggledOff=${sensorGateToggledOff}`)
+              if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy && !isCompactionContinue && !sensorGateToggledOff) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>
                     Effect.as(Effect.logError("Sensor gate unavailable", { cause }), null),

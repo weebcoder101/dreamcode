@@ -6,6 +6,20 @@ const storedGateResultMap = new Map<SessionID, any>()
 const storedScriptResultsMap = new Map<SessionID, ChainResult[]>()
 const storedContentResultsMap = new Map<SessionID, ChainResult[]>()
 
+// ─── Sensor Gate Toggle ─────────────────────────────────────────
+// Global toggle: when true, sensor gate classification is skipped
+// for ALL prompts but the skill chain pipeline still runs.
+// Set by the TUI toggle button ("GATE" / "GATE OFF").
+let sensorGateGloballyDisabled = false
+
+export function setSensorGateGloballyDisabled(disabled: boolean): void {
+  sensorGateGloballyDisabled = disabled
+}
+
+export function isSensorGateGloballyDisabled(): boolean {
+  return sensorGateGloballyDisabled
+}
+
 // ─── Persona Round Tracking ────────────────────────────────────
 const personaRoundMap = new Map<SessionID, number>()
 

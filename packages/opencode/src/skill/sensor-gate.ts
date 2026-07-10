@@ -299,7 +299,10 @@ export function evaluateSpawnNecessity(
   // Trivial prompts include: short status checks ("alive?", "done?"), single-word
   // confirmations ("ok", "thanks", "looks good"), quick commands, and simple edits.
   const TRIVIAL_PROMPT_RE = /^(?:(?:alive|done|ready|good|ok|okay|yes|no|thanks|ty|np|👍|✅)\s*)?$/i
-  const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade|check|run|bump|bump\s|pin|drop)\s/i
+  // Catch both conventional commands AND status/observation prompts.
+  // Prompts like "A valid API key is required" or "it still says Nara error"
+  // are simple observational statements that don't need specialist spawns.
+  const simplicityPatterns = /\b(fix|update|change|add|remove|bump|upgrade|downgrade|check|run|pin|drop|it says|it still|still|error:|status:|why|how do|what does|test)\s/i
   const isSimpleTask = (result.confidence >= 0.8
     && result.risk_level === "low"
     && uniqueDomains <= 1
@@ -310,6 +313,14 @@ export function evaluateSpawnNecessity(
 
   if (isSimpleTask) {
     return { shouldSpawn: false, reason: "Simple high-confidence task — agent handles directly", suggestedCount: 0 }
+  }
+
+  // NEW: Config/provider task detection — short-circuit spawning for configuration prompts.
+  // Prompts about /connect, API keys, base URLs, provider setup, etc. are routine config
+  // tasks that don't need specialist personas. The agent handles them directly.
+  const CONFIG_TASK_RE = /\b(configure?|setup?|auth|connect|provider|api.?key|base.?url|token|credential|login|logout)\b/i
+  if (CONFIG_TASK_RE.test(prompt) && uniqueDomains <= 2 && result.risk_level !== "high") {
+    return { shouldSpawn: false, reason: "Configuration task — agent handles directly", suggestedCount: 0 }
   }
 
   // NEW: Incorporate question complexity into spawn count
@@ -338,11 +349,10 @@ export function evaluateSpawnNecessity(
     score += 2
   }
 
-  // Filter "always" skills (like breakthrough-overdrive-innovation) from chain-length scoring.
+  // Filter "always" skills from chain-length scoring.
   // deep-research is a workflow skill that manages its own subagents — it should NOT inflate
   // the spawn score, otherwise it causes persona spawning alongside workflow spawning (infinite loop).
-  const alwaysSkills = new Set(["breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning", "lint-fixer", "context-compactor", "deep-research"])
-  const effectiveChainLen = result.chain.filter((s) => !alwaysSkills.has(s)).length
+  const effectiveChainLen = result.chain.filter((s) => !ALWAYS_SKILLS.has(s)).length
   if (effectiveChainLen >= 2) {
     reasons.push("Complex skill chain — parallel analysis beneficial")
     score += effectiveChainLen >= 4 ? 3 : 2
@@ -369,13 +379,20 @@ export function evaluateSpawnNecessity(
   }
 }
 
+const ALWAYS_SKILLS = new Set([
+  "breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning",
+  "lint-fixer", "context-compactor", "deep-research",
+])
+
 export function depthScore(result: SensorGateResult): number {
-  // Compute task depth from multiple signals on a 1-5 scale
+  // Compute task depth from multiple signals on a 1-5 scale.
+  // CRITICAL: Filter "always" skills from chain length — they're present on
+  // every chain and inflate the depth score, causing over-spawning.
   const tags = result.domain_tags.filter(Boolean).length
-  const chainLen = result.chain.filter(Boolean).length
+  const effectiveChainLen = result.chain.filter((s) => !ALWAYS_SKILLS.has(s)).length
   const risk = result.risk_level === "high" ? 3 : result.risk_level === "medium" ? 2 : 1
   const tagDiversity = Math.min(tags, 5)
-  const chainDepth = Math.min(chainLen, 4)
+  const chainDepth = Math.min(effectiveChainLen, 4)
   return Math.max(0, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
 }
 
@@ -406,8 +423,10 @@ export function selectPersonas(result: SensorGateResult): Persona[] {
     return { profile, score }
   })
 
-  // Minimum score threshold — require at least 1 tag match to justify a persona
-  const eligible = scored.filter((s) => s.score >= 1).sort((a, b) => b.score - a.score)
+  // Minimum score threshold — require at least 2 tag matches to justify a persona.
+  // With threshold < 2, almost every profile scores >= 1 from generic chain skills
+  // like "neuro" (tags: "audit", "examine"), making nearly all 14 profiles eligible.
+  const eligible = scored.filter((s) => s.score >= 2).sort((a, b) => b.score - a.score)
 
   // For simple/low-risk tasks, skip personas entirely
   if (complexityScore <= 1 && mode !== "DREAM_INNOVATION" && eligible.length === 0) {
@@ -605,8 +624,11 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
 // Re-export resolveSkillsDir and resolveScript from python-resolver for backward compatibility
 export { resolveSkillsDir, resolveScript } from "./python-resolver"
 
-const INITIAL_TIMEOUT_MS = 150_000
-const RETRY_TIMEOUT_MS = 300_000
+// Reduced timeouts: sensor gate is a quick Python classification (pattern matching only).
+// 30s/60s is generous for a pure pattern-matching script. Previous 150s/300s was causing
+// users to wait 2.5-5 minutes before seeing fallback persona generation (over-spawning).
+const INITIAL_TIMEOUT_MS = 30_000
+const RETRY_TIMEOUT_MS = 60_000
 
 /** Shared retry-with-timeout: runs the effect with INITIAL_TIMEOUT, then RETRY_TIMEOUT on null. */
 function retryWithTimeout<T>(run: (timeoutMs: number) => Effect.Effect<T | null>): Effect.Effect<T | null> {
@@ -846,13 +868,12 @@ export const layer = Layer.effect(
         // Generate personas from TypeScript when Python script doesn't output them
         if (result.personas.length === 0) {
           result.personas = selectPersonas(result)
-          // Fallback: when Python script fails (empty domain_tags = default result),
-          // selectPersonas() returns [] because there are no tags to match.
-          // Generate fallback personas so natural prompts can still trigger spawning.
-          // Defense-in-depth: also check the raw prompt for social greetings, since Python's
-          // social greeting early-return produces empty stdout and is_social_greeting is false.
+          // Fallback: ONLY when Python script produced NO domain_tags (empty/default result).
+          // If Python produced domain_tags but no personas, the tag matching failed legitimately
+          // and we should NOT override Python's classification with a blind fallback.
+          // Defense-in-depth: also check the raw prompt for social greetings.
           const promptIsSocialGreeting = result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())
-          if (result.personas.length === 0 && !promptIsSocialGreeting) {
+          if (result.personas.length === 0 && result.domain_tags.length === 0 && !promptIsSocialGreeting) {
             // Use question complexity to determine fallback count instead of hardcoded 3.
             // If we have active rated questions, use their max complexity; otherwise default to medium.
             const complexity: ComplexityLevel = result.complexity === "high" ? "high"
@@ -860,8 +881,9 @@ export const layer = Layer.effect(
               : result.risk_level === "high" ? "high"
               : result.risk_level === "medium" ? "medium"
               : "low"
-            const spawnConfig = COMPLEXITY_SPAWN_MAP[complexity]
-            const fallbackMax = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
+            // Use midpoint (spawnCountForComplexity) not max — prevents always spawning
+            // max count when Python fails. E.g. medium complexity → 2 not 3.
+            const fallbackMax = Math.min(spawnCountForComplexity(complexity), PERSONA_PROFILES.length)
             // Use depthScore + minComplexity to select relevant personas instead of blind first-N.
             // Simple tasks (depth 1-2) get only foundation personas (minComplexity=1).
             // Complex tasks (depth 3-5) get specialized and advanced personas too.

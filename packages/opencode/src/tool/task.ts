@@ -240,7 +240,7 @@ export const TaskTool = Tool.define(
       // Total session spawn limit — prevents sequential re-spawning from bypassing
       // the concurrent cap. Once a session has spawned this many subagents total
       // (including finished ones), no more are allowed.
-      const maxTotal = cfg.experimental?.max_total_subagents_per_session ?? 20
+      const maxTotal = cfg.experimental?.max_total_subagents_per_session ?? Infinity
       const totalMap = yield* Ref.get(totalSpawnedPerSession)
       const totalSpawned = totalMap.get(ctx.sessionID) ?? 0
       if (totalSpawned >= maxTotal) {

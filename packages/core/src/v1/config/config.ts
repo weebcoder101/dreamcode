@@ -188,6 +188,12 @@ export const Info = Schema.Struct({
       max_subagents_per_parent: Schema.optional(NonNegativeInt).annotate({
         description: "Maximum concurrent subagents per parent session via the task tool (default: 8)",
       }),
+      max_total_subagents_per_session: Schema.optional(NonNegativeInt).annotate({
+        description: "Maximum total subagents allowed per session lifecycle (default: Infinity / unlimited)",
+      }),
+      sensor_gate_disabled: Schema.optional(Schema.Boolean).annotate({
+        description: "Skip sensor gate classification on all prompts but still run the skill chain pipeline",
+      }),
     }),
   ),
 }).annotate({ identifier: "Config" })

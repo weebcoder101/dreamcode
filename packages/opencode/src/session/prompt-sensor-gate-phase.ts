@@ -543,6 +543,25 @@ export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePh
       synthetic: true,
     }
     yield* sessions.updatePart(synthesisPart)
+
+    // ─── Persona Window Capping ─────────────────────────────
+    // Only keep the last 50 persona assistant messages to prevent
+    // UI lag/clogging. Persona messages are identified by their
+    // "tool_call" mode and "general" agent.
+    const MAX_PERSONA_WINDOWS = 50
+    const capMsgs = yield* sessions.messages({ sessionID }).pipe(Effect.catch(() => Effect.succeed([])))
+    if (capMsgs.length > 0) {
+      const personaMsgs = (capMsgs as any[]).filter(
+        (m) => m.info?.mode === "tool_call" && m.info?.agent === "general",
+      )
+      if (personaMsgs.length > MAX_PERSONA_WINDOWS) {
+        const toDelete = personaMsgs.slice(0, personaMsgs.length - MAX_PERSONA_WINDOWS)
+        for (const oldMsg of toDelete) {
+          yield* sessions.removeMessage({ sessionID, messageID: oldMsg.info.id }).pipe(Effect.catch(() => Effect.void))
+        }
+        yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Capped persona windows: deleted ${toDelete.length} old persona messages, keeping last ${MAX_PERSONA_WINDOWS}`)
+      }
+    }
   }
 
   return {

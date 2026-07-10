@@ -342,6 +342,16 @@ export function RunFooterView(props: RunFooterViewProps) {
   const shell = createMemo(() => prompt() && composer.shell())
   const menu = createMemo(() => prompt() && composer.visible())
   const stateStatus = createMemo(() => props.state().status.trim())
+  const [sensorGateOn, setSensorGateOn] = createSignal(true)
+  const toggleSensorGate = () => {
+    const next = !sensorGateOn()
+    setSensorGateOn(next)
+    // Update module-level state so prompt.ts reads the toggle.
+    // prompt-state.ts exports setSensorGateGloballyDisabled/isSensorGateGloballyDisabled.
+    import("@/session/prompt-state").then(mod => {
+      mod.setSensorGateGloballyDisabled(!next)
+    }).catch(() => {})
+  }
   const modeLabel = createMemo(() => {
     if (exiting()) {
       return "EXIT"
@@ -360,6 +370,8 @@ export function RunFooterView(props: RunFooterViewProps) {
 
     return theme().highlight
   })
+  const gateColor = createMemo(() => sensorGateOn() ? theme().success : theme().warning)
+  const gateLabel = createMemo(() => sensorGateOn() ? "GATE" : "GATE OFF")
   const statusText = createMemo(() => {
     if (exiting()) {
       return `Press ${clearShortcut() || "ctrl+c"} again to exit`
@@ -835,6 +847,21 @@ export function RunFooterView(props: RunFooterViewProps) {
                 >
                   <text wrapMode="none" truncate>
                     <span style={{ fg: modeColor(), bold: true }}>{modeLabel()}</span>
+                  </text>
+                </box>
+
+                <box
+                  id="run-direct-footer-statusline-gate"
+                  paddingLeft={1}
+                  paddingRight={1}
+                  backgroundColor={theme().status}
+                  flexShrink={0}
+                  clickable
+                  onPointerDown={toggleSensorGate}
+                  cursor="pointer"
+                >
+                  <text wrapMode="none" truncate>
+                    <span style={{ fg: gateColor(), bold: true }}>{gateLabel()}</span>
                   </text>
                 </box>
 
