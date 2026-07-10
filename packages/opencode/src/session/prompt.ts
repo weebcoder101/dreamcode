@@ -664,16 +664,22 @@ Before every response, verify your reasoning:
             if (synthesisText) {
               extraMsgs.push({ role: "user" as const, content: synthesisText })
             }
+            let preTurnBlocked = false
             const skillEnforcerGate = storedGateResultMap.get(sessionID)
             if (skillEnforcerGate && skillEnforcerGate.chain.length > 0) {
               const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
               const unloaded = skillEnforcerGate.chain.filter((name: string) => !loaded.has(name))
               if (unloaded.length > 0 && !acknowledged) {
                 yield* Effect.logWarning(`[SKILL-ENFORCER] Pre-turn block: ${unloaded.length} unloaded chain skills: ${unloaded.join(", ")}`)
+                // Use "user" role so the model interprets this as a direct
+                // instruction rather than its own prior message (which is
+                // easier to ignore or overwrite). Assistant-role context has
+                // no normative force — the model can freely contradict it.
                 extraMsgs.push({
-                  role: "assistant" as const,
+                  role: "user" as const,
                   content: buildUnloadedChainBlockMessage(unloaded),
                 })
+                preTurnBlocked = true
               }
             }
             // Task tool is ALWAYS available. Cost control is handled by the
@@ -729,8 +735,11 @@ Before every response, verify your reasoning:
             }
             // ─── Post-Turn Skill Loading Validation ───────────────────
             // After the LLM responds, check if chain skills were loaded
-            // in the current turn. If the agent finished without loading
-            // them, log a warning for diagnostics.
+            // in the current turn. If the pre-turn block fired AND the
+            // agent finished without loading skills, re-enforce by
+            // overwriting the response content with a re-asserted
+            // hard-block message. This ensures the persisted message
+            // reflects the enforcement even if SSE already streamed.
             if (storedGateResultMap.has(sessionID)) {
               const storedGate = storedGateResultMap.get(sessionID)!
               if (storedGate.chain.length > 0 && handle.message.finish !== "tool-calls") {
@@ -740,6 +749,19 @@ Before every response, verify your reasoning:
                   yield* Effect.logWarning(
                     `[SKILL-ENFORCER] Post-turn: agent finished without loading ${unloaded.length} chain skills: ${unloaded.join(", ")}`
                   )
+                  // Re-enforce: if the pre-turn block was active and the agent
+                  // still ignored it, overwrite the response's text parts with
+                  // a re-asserted hard-block. The model MUST acknowledge this
+                  // before the user can get an actual response.
+                  if (preTurnBlocked) {
+                    const reEnforcement = buildUnloadedChainBlockMessage(unloaded)
+                    for (const part of handle.message.parts) {
+                      if (part.type === "text") {
+                        part.text = reEnforcement
+                      }
+                    }
+                    yield* sessions.updateMessage(handle.message)
+                  }
                 }
               }
             }
