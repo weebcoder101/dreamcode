@@ -72,34 +72,33 @@ def load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 PATTERN_RULES = [
-    # NOTE: Leading \b ensures word-start matching. Trailing \b is intentionally
-    # OMITTED to match inflected forms (e.g. "fix" matches "fixes", "fixed", "fixing";
-    # "bug" matches "bugs"; "refactor" matches "refactoring", "refactored").
-    # The pattern still won't match inside compound words like "prefix" because \b
-    # requires a word/non-word transition before the match.
-    (r'\b(fix|bug|error|issue|crash|broken)', "debugging", "high"),
-    (r'\b(refactor|restructure|reorganize|cleanup)', "refactoring", "medium"),
-    (r'\b(test|tests|testing|coverage|assert)', "testing", "medium"),
-    (r'\b(security|auth|token|secret|vulnerability)', "security", "high"),
-    (r'\b(performance|slow|optimize|speed|latency)', "performance", "medium"),
-    (r'\b(deploy|docker|ci|cd|pipeline|build)', "devops", "medium"),
-    (r'\b(git|commit|branch|merge|pr|pull request)', "git", "low"),
-    (r'\b(api|endpoint|route|rest|graphql)', "api", "medium"),
-    (r'\b(python|django|flask|fastapi)', "python", "low"),
-    (r'\b(react|jsx|tsx|component|hooks?)', "react", "low"),
-    (r'\b(frontend|ui|css|tailwind|style)', "frontend", "low"),
-    (r'\b(quantum|qaoa|qae|qubit)', "quantum", "medium"),
-    (r'\b(data|pandas|numpy|analysis)', "data", "medium"),
-    (r'\b(plan|planning|roadmap|sprint)', "planning", "medium"),
-    (r'\b(architect|architecture|design|pattern)', "architecture", "high"),
-    (r'\b(product|feature|user|requirement)', "product", "medium"),
-    (r'\b(document|documentation|readme|doc)', "documentation", "low"),
-    (r'\b(explain|describe|how does|what is)', "communication", "low"),
-    (r'\b(research|investigate|explore|analyze)', "research", "medium"),
-    (r'\b(automate|automation|pipeline|workflow)', "automation", "medium"),
-    (r'\b(innovate|innovation|breakthrough|novel)', "breakthrough-overdrive-innovation", "high"),
-    (r'\b(review|audit|examine|inspect)', "neuro", "high"),
-    (r'\b(improve|enhance|better)', "neuro", "medium"),
+    # All patterns use both leading and trailing \b to prevent partial-word matches.
+    # E.g. "api" must NOT match "api key" as subword — it must match the word "api".
+    # Inflected forms are listed explicitly (fix/fixes/fixed/fixing) instead of relying
+    # on unbounded suffix matching that causes false positives like "classification" matching "fix".
+    (r'\b(fix(?:es|ed|ing)?|bugs?|error|issue|crash(?:es|ed|ing)?|broken)\b', "debugging", "high"),
+    (r'\b(refactor(?:s|ed|ing)?|restructure(?:s|ed|ing)?|reorganize(?:s|ed|ing)?|cleanup)\b', "refactoring", "medium"),
+    (r'\b(test(?:s|ed|ing)?|coverage|assert(?:s|ed|ing)?)\b', "testing", "medium"),
+    (r'\b(security|auth(?:s|ing)?|token(?:s)?|secret(?:s)?|vulnerabilit(?:y|ies))\b', "security", "high"),
+    (r'\b(performance|slow(?:ly|er|est)?|optimize(?:s|ed|ing)?|speed(?:s|ed|ing|y|ier)?|latenc(?:y|ies))\b', "performance", "medium"),
+    (r'\b(deploy(?:s|ed|ing|ment)?|docker|ci|cd|pipeline(?:s)?|build(?:s|ing|s)?)\b', "devops", "medium"),
+    (r'\b(git|commit(?:s|ed|ing)?|branch(?:s|ed|ing)?|merge(?:s|ed|ing)?|pr|pull request(?:s)?)\b', "git", "low"),
+    (r'\b(api|endpoint(?:s)?|route(?:s|ed|ing)?|rest|graphql)\b', "api", "medium"),
+    (r'\b(python|django|flask|fastapi)\b', "python", "low"),
+    (r'\b(react|jsx|tsx|component(?:s)?|hook(?:s)?)\b', "react", "low"),
+    (r'\b(frontend|ui|css|tailwind|style(?:s)?)\b', "frontend", "low"),
+    (r'\b(quantum|qaoa|qae|qubit(?:s)?)\b', "quantum", "medium"),
+    (r'\b(data|pandas|numpy|analys(?:is|es))\b', "data", "medium"),
+    (r'\b(plan(?:s|ned|ning)?|roadmap(?:s)?|sprint(?:s)?)\b', "planning", "medium"),
+    (r'\b(architect(?:s|ed|ing|ure)?|design(?:s|ed|ing)?|pattern(?:s)?)\b', "architecture", "high"),
+    (r'\b(product(?:s)?|feature(?:s)?|user(?:s)?|requirement(?:s)?)\b', "product", "medium"),
+    (r'\b(document(?:s|ed|ing|ation)?|readme|doc(?:s)?)\b', "documentation", "low"),
+    (r'\b(explain(?:s|ed|ing)?|describe(?:s|ed|ing)?|how does|what is)\b', "communication", "low"),
+    (r'\b(research(?:es|ed|ing)?|investigate(?:s|ed|ing)?|explore(?:s|ed|ing)?|analyz(?:e|es|ed|ing))\b', "research", "medium"),
+    (r'\b(automate(?:s|ed|ing)?|automation|pipeline(?:s)?|workflow(?:s)?)\b', "automation", "medium"),
+    (r'\b(innovate(?:s|ed|ing)?|innovation|breakthrough(?:s)?|novel)\b', "breakthrough-overdrive-innovation", "high"),
+    (r'\b(review(?:s|ed|ing)?|audit(?:s|ed|ing)?|examine(?:s|ed|ing)?|inspect(?:s|ed|ing)?)\b', "neuro", "high"),
+    (r'\b(improve(?:s|ed|ing|ment)?|enhance(?:s|ed|ing)?|better)\b', "neuro", "medium"),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -220,7 +219,7 @@ def build_dynamic_graph(prompt: str) -> dict:
     # Only include dream/innovation when task actually requires it
     # (not for trivial communication-only tasks)
     task_types = {t["task_type"] for t in tasks}
-    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
+    INNOVATION_TASKS = {"refactoring", "security", "performance", "architecture", "quantum", "automation"}
     if task_types & INNOVATION_TASKS:
         needed_skills.add("breakthrough-overdrive-innovation")
     
@@ -441,12 +440,13 @@ def generate_personas(chain_result: dict, prompt: str) -> str:
     chain = chain_result.get("chain", [])
     complexity = chain_result.get("complexity", "low")
 
-    # Collect all relevant domain tags from tasks and chain
+    # Collect relevant domain tags ONLY from detected tasks — NOT from chain dependencies.
+    # Chain skills like "testing", "security", "lint-fixer" are injected by dependency
+    # resolution, not by user intent. Adding them here leaks persona tags for skills
+    # the user never asked about (e.g. "The Examiner" appearing for an API endpoint fix).
     all_tags = set(domain_tags)
     for task in detected_tasks:
         all_tags.add(task)
-    for skill in chain:
-        all_tags.add(skill)
 
     # Match tags to persona templates
     matched_personas = []
@@ -474,8 +474,8 @@ def generate_personas(chain_result: dict, prompt: str) -> str:
             matched_personas.append(analyst)
             num_personas += 1
 
-    # Cap at MAX_PERSONAS
-    matched_personas = matched_personas[:MAX_PERSONAS]
+    # Cap at computed num_personas (respects complexity-based limit), never exceeding MAX_PERSONAS
+    matched_personas = matched_personas[:min(num_personas, MAX_PERSONAS)]
 
     if not matched_personas:
         matched_personas = [{"name": "The Analyst", "role": "General Analysis Specialist", "focus": "holistic review and analysis"}]

@@ -285,14 +285,15 @@ export function evaluateSpawnNecessity(
     }
   }
 
-  // HARD RULE: DREAM_INNOVATION always spawns — creative tasks need multiple perspectives
-  if (result.mode === "DREAM_INNOVATION") {
-    return {
-      shouldSpawn: true,
-      reason: "DREAM_INNOVATION mode — mandatory multi-perspective analysis",
-      suggestedCount: Math.max(3, Math.min(5, Math.ceil(depthScore(result) * 1.5))),
-    }
-  }
+  // NOTE: DREAM_INNOVATION early-return was REMOVED. The mode boost at line 350
+  // already handles DREAM_INNOVATION by adding +2 to spawn score. Keeping the early
+  // return here would bypass the simplicity check below, meaning any prompt containing
+  // "fix" would force DREAM_INNOVATION mode (via debugging → INNOVATION_TASKS) and
+  // skip the simplicity check entirely. The cascading failure chain was:
+  //   "fix" → debugging task → INNOVATION_TASKS → DREAM_INNOVATION mode → early return
+  //   → simplicity check NEVER reached → always spawns 3-5 agents.
+  // The root cause (debugging in INNOVATION_TASKS) is fixed in sensor_gate.py.
+  // The mode boost at line 350 provides the correct scoring uplift.
 
   // Simplicity threshold: high confidence + low risk + single domain + simple phrasing
   // Trivial prompts include: short status checks ("alive?", "done?"), single-word
