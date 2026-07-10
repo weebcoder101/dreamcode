@@ -387,10 +387,10 @@ export const layer = Layer.effect(
         }
       } catch { /* dir doesn't exist — globalEmpty stays true */ }
       if (!globalEmpty) return
-      const source = (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-        ? installSkillsDir
-        : (await stat(repoSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-          ? repoSkillsDir
+      const source = (await stat(repoSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+        ? repoSkillsDir
+        : (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+          ? installSkillsDir
           : undefined
       if (!source) return
       await mkdir(globalSkillsDir, { recursive: true })
