@@ -12,7 +12,7 @@ import * as Tool from "./tool"
 import * as path from "path"
 import * as fs from "fs"
 import DESCRIPTION from "./skill.txt"
-import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "@/skill/python-resolver"
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, resolveSkillDirName, HOME, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "@/skill/python-resolver"
 
 const SKILLS_DIR = resolveSkillsDir()
 const CHAIN_LOG = path.join(HOME, ".dreamcode", "chain_log.jsonl")
@@ -346,7 +346,8 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
             }
           }
 
-          const skillDir = path.join(SKILLS_DIR, skillName)
+          const resolvedName = resolveSkillDirName(skillName) || skillName
+          const skillDir = path.join(SKILLS_DIR, resolvedName)
           const skillScript = path.join(skillDir, "scripts", `${skillName}.py`)
           const skillMd = path.join(skillDir, "SKILL.md")
 

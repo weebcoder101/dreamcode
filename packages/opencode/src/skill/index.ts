@@ -364,7 +364,28 @@ export const layer = Layer.effect(
     const repoSkillsDir = path.join(global.home, "dreamcode", ".dreamcode", "skills")
     yield* Effect.tryPromise(async (_signal: AbortSignal) => {
       const { stat, mkdir, readdir, cp } = await import("fs/promises")
-      const globalEmpty = !(await stat(globalSkillsDir).then((s) => s.isDirectory()).catch(() => false))
+      // Check if global dir exists AND has content (at least one SKILL.md).
+      // An empty directory (created by a prior run that exited before syncing)
+      // should NOT count as "not empty" — it needs to be re-populated.
+      let globalEmpty = true
+      try {
+        const s = await stat(globalSkillsDir)
+        if (s.isDirectory()) {
+          const entries = await readdir(globalSkillsDir)
+          // Check for any subdirectory that contains a SKILL.md file
+          let hasContent = false
+          for (const entry of entries) {
+            try {
+              const subStat = await stat(path.join(globalSkillsDir, entry))
+              if (subStat.isDirectory()) {
+                const mdStat = await stat(path.join(globalSkillsDir, entry, "SKILL.md"))
+                if (mdStat.isFile()) { hasContent = true; break }
+              }
+            } catch { /* entry has no SKILL.md, skip */ }
+          }
+          globalEmpty = !hasContent
+        }
+      } catch { /* dir doesn't exist — globalEmpty stays true */ }
       if (!globalEmpty) return
       const source = (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
         ? installSkillsDir

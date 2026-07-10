@@ -7,7 +7,7 @@
  * This module also resolves the path to Python scripts that are installed
  * alongside the dreamcode binary.
  */
-import { existsSync, statSync, appendFileSync, mkdirSync, writeFileSync, mkdtempSync, chmodSync, unlinkSync, rmdirSync, realpathSync } from "fs"
+import { existsSync, statSync, readdirSync, appendFileSync, mkdirSync, writeFileSync, mkdtempSync, chmodSync, unlinkSync, rmdirSync, realpathSync } from "fs"
 import { join, dirname, sep, resolve, isAbsolute } from "path"
 import { homedir } from "os"
 
@@ -219,8 +219,21 @@ export function resolveSkillsDir(): string {
   for (const dir of candidates) {
     try {
       if (existsSync(dir) && statSync(dir).isDirectory()) {
-        debugLog("[python-resolver] found skills dir:", dir)
-        return dir
+        // Verify directory has at least one subdirectory with a SKILL.md file.
+        // Empty dirs (e.g. ~/.config/dreamcode/skills/ created by a prior run
+        // that exited before syncing) should NOT be accepted — they'd cause
+        // getAvailableSkills() to return [] and all skill lookups to fail.
+        const entries = readdirSync(dir)
+        const hasContent = entries.some((entry) => {
+          const subdir = join(dir, entry)
+          try { return statSync(subdir).isDirectory() && existsSync(join(subdir, "SKILL.md")) } catch { return false }
+        })
+        if (hasContent) {
+          debugLog("[python-resolver] found skills dir:", dir)
+          return dir
+        }
+        debugLog("[python-resolver] skills dir exists but empty:", dir)
+        continue // Don't stop at empty dirs — check next candidate
       }
       debugLog("[python-resolver] skills dir not found:", dir)
     } catch (e) {
