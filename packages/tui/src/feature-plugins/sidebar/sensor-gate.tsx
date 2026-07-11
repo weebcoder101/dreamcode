@@ -25,14 +25,30 @@ function View(props: { api: TuiPluginApi }) {
         </text>
       </box>
       <box flexDirection="row" gap={1}>
-        <text
-          clickable
-          onPointerDown={toggle}
-          cursor="pointer"
-          style={{ fg: enabled() ? theme().success : theme().warning, bold: true }}
+        <box
+          backgroundColor={enabled() ? theme().success : theme().backgroundElement}
+          borderStyle={enabled() ? "round" : "none"}
+          borderColor={enabled() ? theme().success : undefined}
+          paddingLeft={1}
+          paddingRight={1}
+          onMouseDown={() => { if (!enabled()) toggle() }}
         >
-          {enabled() ? "ON" : "OFF"}
-        </text>
+          <text bold fg={enabled() ? theme().background : theme().textMuted}>
+            ON
+          </text>
+        </box>
+        <box
+          backgroundColor={!enabled() ? theme().warning : theme().backgroundElement}
+          borderStyle={!enabled() ? "round" : "none"}
+          borderColor={!enabled() ? theme().warning : undefined}
+          paddingLeft={1}
+          paddingRight={1}
+          onMouseDown={() => { if (enabled()) toggle() }}
+        >
+          <text bold fg={!enabled() ? theme().background : theme().textMuted}>
+            OFF
+          </text>
+        </box>
         <text fg={theme().textMuted}>
           {enabled() ? "Sensor gate active" : "Gate disabled, skills still load"}
         </text>
