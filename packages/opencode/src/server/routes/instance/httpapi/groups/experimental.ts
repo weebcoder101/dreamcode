@@ -73,7 +73,11 @@ export class WorktreeApiError extends Schema.ErrorClass<WorktreeApiError>("Workt
   },
   { httpApiStatus: 400 },
 ) {}
-export const SessionListQuery = Schema.Struct({
+export const SensorGateTogglePayload = Schema.Struct({
+  enabled: Schema.Boolean,
+})
+
+const SessionListQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   roots: Schema.optional(QueryBoolean),
   start: Schema.optional(Schema.NumberFromString),
@@ -94,6 +98,7 @@ export const ExperimentalPaths = {
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
   resource: "/experimental/resource",
+  sensorGate: "/experimental/sensor-gate",
 } as const
 
 export const ExperimentalApi = HttpApi.make("experimental")
@@ -238,6 +243,17 @@ export const ExperimentalApi = HttpApi.make("experimental")
             identifier: "experimental.resource.list",
             summary: "Get MCP resources",
             description: "Get all available MCP resources from connected servers. Optionally filter by name.",
+          }),
+        ),
+        HttpApiEndpoint.post("sensorGate", ExperimentalPaths.sensorGate, {
+          query: WorkspaceRoutingQuery,
+          payload: SensorGateTogglePayload,
+          success: described(Schema.Boolean, "Sensor gate toggle success"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.sensorGate.toggle",
+            summary: "Toggle sensor gate",
+            description: "Enable or disable the sensor gate globally for all prompts.",
           }),
         ),
       )

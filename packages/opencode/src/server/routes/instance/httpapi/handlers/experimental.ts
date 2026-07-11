@@ -11,6 +11,7 @@ import type { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
+import { setSensorGateGloballyDisabled } from "@/session/prompt-state"
 import { Effect, Option } from "effect"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
@@ -170,6 +171,13 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return yield* mcp.resources()
     })
 
+    const sensorGate = Effect.fn("ExperimentalHttpApi.sensorGate")(function* (ctx: {
+      payload: typeof import("../groups/experimental").SensorGateTogglePayload.Type
+    }) {
+      setSensorGateGloballyDisabled(!ctx.payload.enabled)
+      return true
+    })
+
     return handlers
       .handle("console", getConsole)
       .handle("consoleOrgs", listConsoleOrgs)
@@ -183,5 +191,6 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
       .handle("resource", resource)
+      .handle("sensorGate", sensorGate)
   }),
 )
