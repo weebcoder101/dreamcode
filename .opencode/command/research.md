@@ -1,5 +1,6 @@
 ---
 description: Systematic research methodology for investigating topics, exploring codebases, and gathering information
+agent: explore
 subtask: true
 ---
 

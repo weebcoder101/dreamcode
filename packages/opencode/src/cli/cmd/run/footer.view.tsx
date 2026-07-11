@@ -28,6 +28,7 @@ import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { footerWidthPolicy } from "./footer.width"
+import { setSensorGateGloballyDisabled as setGateDisabled } from "@/session/prompt-state"
 import {
   formatKeyBindings,
   formatKeySequence,
@@ -346,11 +347,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const toggleSensorGate = () => {
     const next = !sensorGateOn()
     setSensorGateOn(next)
-    // Update module-level state so prompt.ts reads the toggle.
-    // prompt-state.ts exports setSensorGateGloballyDisabled/isSensorGateGloballyDisabled.
-    import("@/session/prompt-state").then(mod => {
-      mod.setSensorGateGloballyDisabled(!next)
-    }).catch(() => {})
+    setGateDisabled(!next)
   }
   const modeLabel = createMemo(() => {
     if (exiting()) {
@@ -856,9 +853,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                   paddingRight={1}
                   backgroundColor={theme().status}
                   flexShrink={0}
-                  clickable
-                  onPointerDown={toggleSensorGate}
-                  cursor="pointer"
+                  onMouseDown={toggleSensorGate}
                 >
                   <text wrapMode="none" truncate>
                     <span style={{ fg: gateColor(), bold: true }}>{gateLabel()}</span>

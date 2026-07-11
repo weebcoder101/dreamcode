@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import sys
 import threading
@@ -413,13 +414,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Deep Research — MCP-powered Web Research Harness"
     )
-    parser.add_argument("--query", "-q", required=True, help="Research query")
+    parser.add_argument("--query", "-q", help="Research query")
+    parser.add_argument("--prompt-file", help="Read query from file (used by chain executor)")
     parser.add_argument("--mode", "-m", default="deep",
                         choices=["quick", "deep", "exhaustive"])
     parser.add_argument("--output", "-o", help="Output file path")
     args = parser.parse_args()
 
-    report = run_research(args.query, args.mode, args.output)
+    # Resolve query from --query or --prompt-file
+    query = args.query
+    if not query and args.prompt_file:
+        query = Path(args.prompt_file).read_text(encoding="utf-8").strip()
+    if not query:
+        parser.error("Either --query or --prompt-file is required")
+
+    report = run_research(query, args.mode, args.output)
 
     print(json.dumps({
         "query": report.query,

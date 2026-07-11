@@ -1,18 +1,22 @@
 ---
 description: Deep multi-step research harness — decomposes queries, searches in parallel, iteratively refines, and synthesizes cited reports
-subtask: true
+agent: deep-research
+subtask: false
 ---
 
-Load the `deep-research` skill and execute deep research on the following topic:
+Load the `deep-research` skill.
+
+Decompose the following research query into 2-3 complementary sub-questions, spawn a `deep-research` subagent for each via the Task tool (`subagent_type: "deep-research"`), collect their findings, and synthesize a final cited report.
+
+If web search returns 0 sources, fall back to manual web search tools.
+
+## Query
 
 $ARGUMENTS
 
-Follow the deep-research harness methodology:
-1. PHASE 1: PLANNING — Decompose the query into 5-8 sub-questions
-2. PHASE 2: PARALLEL SEARCH — Search for each sub-question using web search tools
-3. PHASE 3: DEEP READ — Fetch key URLs and extract relevant content
-4. PHASE 4: GAP DETECTION — Analyze coverage, identify missing angles, generate follow-ups
-5. PHASE 5: SYNTHESIS — Cluster findings by theme, resolve contradictions, build cited report
-6. PHASE 6: SELF-CRITIQUE — Check completeness, verify citations, improve clarity
-
-Use `standard` mode unless the user specifies otherwise. If web search returns 0 sources, fall back to manual web search tools. Produce a final report with executive summary, key findings, contradictions, and sourced citations.
+## Rules
+- Never do research yourself — always delegate to deep-research subagents via the Task tool
+- Hard cap: 3 subagents max
+- Each subagent gets ONE sub-question as their research topic
+- After all subagents complete, produce a synthesized executive summary with key findings, contradictions, and sourced citations
+- The `$ARGUMENTS` text is the FULL user query — decompress and use it as-is
