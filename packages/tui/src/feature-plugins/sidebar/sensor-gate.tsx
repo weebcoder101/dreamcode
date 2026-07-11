@@ -14,7 +14,7 @@ function View(props: { api: TuiPluginApi }) {
     // Call the server endpoint to toggle sensor gate globally
     props.api.client
       .post({ url: "/experimental/sensor-gate", body: { enabled: next } })
-      .catch(() => {})
+      .catch((err) => console.warn("[sensor-gate] toggle POST failed:", err))
   }
 
   return (

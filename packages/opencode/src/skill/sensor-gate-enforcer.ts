@@ -215,6 +215,10 @@ export async function SensorGateEnforcerPlugin(_input: PluginInput): Promise<Hoo
 
       // --- experimental.chat.system.transform: inject questions ---
       "experimental.chat.system.transform": async (_input, output) => {
+        // Check if sensor gate is disabled via the system-prompt signal.
+        // This avoids a cross-package import from skill/ → session/.
+        if (output.system?.some((s: string) => s.includes('<sensor-gate state="disabled">'))) return
+
         type InputWithClient = { client?: { directory?: string }; sessionID?: string }
         const sessionKey = `${(_input as InputWithClient).client?.directory ?? "__default__"}:${(_input as InputWithClient).sessionID ?? "global"}`
         const state = sessionStates.get(sessionKey)

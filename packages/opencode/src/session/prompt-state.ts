@@ -14,6 +14,14 @@ let sensorGateGloballyDisabled = false
 
 export function setSensorGateGloballyDisabled(disabled: boolean): void {
   sensorGateGloballyDisabled = disabled
+  // When toggling OFF, clear all stored gate results so stale chain
+  // enforcement doesn't persist across turns. When toggling back ON,
+  // the gate re-classifies on the next prompt — no data lost.
+  if (disabled) {
+    storedGateResultMap.clear()
+    storedScriptResultsMap.clear()
+    storedContentResultsMap.clear()
+  }
 }
 
 export function isSensorGateGloballyDisabled(): boolean {

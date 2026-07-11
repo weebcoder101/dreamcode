@@ -592,6 +592,10 @@ Before every response, verify your reasoning:
              // the model with conflicting skill-loading instructions.
              // Only in root sessions — subagents must NOT re-enter persona spawning.
              // Skip after synthesis — synthesis should NOT auto-spawn subagents.
+             // Sensor Gate Toggle: resolved OUTSIDE the step===1 conditional
+            // block so it's accessible to per-turn enforcement and pre-turn
+            // hard-block sections that follow.
+            const sensorGateToggledOff = isSensorGateGloballyDisabled()
              if (step === 1 && !session.parentID) {
               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
@@ -631,11 +635,12 @@ Before every response, verify your reasoning:
               } else {
                 yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=1 bypassed isSessionBusy check — fire gate for every new user message`)
               }
-              // Sensor Gate Toggle: user can disable sensor gate classification
-              // via the TUI toggle button. When disabled, the skill chain pipeline
-              // still runs (using the stored gate result from a previous turn).
-              const sensorGateToggledOff = isSensorGateGloballyDisabled()
               yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy} isCompactionContinue=${isCompactionContinue} sensorGateToggledOff=${sensorGateToggledOff}`)
+              // Inject gate-disabled signal so enforcer plugins and downstream
+              // code can detect the toggle state from the system prompt alone.
+              if (sensorGateToggledOff) {
+                system.push('<sensor-gate state="disabled">Classification and skill chain enforcement are disabled by the user. Do NOT enforce any prior chain. Respond directly.</sensor-gate>')
+              }
               if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy && !isCompactionContinue && !sensorGateToggledOff) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>
@@ -653,13 +658,15 @@ Before every response, verify your reasoning:
                   synthesisText = sgpResult.synthesisText
                 }
               }
-            }
-            // ─── End Sensor Gate ────────────────────────────────────────
+            }             // ─── End Sensor Gate ────────────────────────────────────────
             // ─── Per-Turn Chain Enforcement ────────────────────────────
             // After the gate fires on the first turn, re-inject chain
             // enforcement on EVERY turn so the agent is constantly reminded
             // to load chain skills via the `skill` tool.
-            {
+            // NOTE: When the sensor gate is toggled OFF, skip ALL chain
+            // enforcement — the stored gate result is stale and the user
+            // explicitly wants no gate interference.
+            if (!sensorGateToggledOff) {
               const storedGate = storedGateResultMap.get(sessionID)
               if (storedGate) {
                 const storedScripts = storedScriptResultsMap.get(sessionID) ?? []
@@ -673,26 +680,29 @@ Before every response, verify your reasoning:
             // NOT yet loaded all skills via the `skill` tool, inject a
             // hard-block assistant message as context. The agent MUST
             // load skills before the LLM responds to the user query.
+            // NOTE: Same toggle check — when OFF, do not block the agent.
             let extraMsgs: Array<{ role: "user" | "assistant"; content: string }> = []
             if (synthesisText) {
               extraMsgs.push({ role: "user" as const, content: synthesisText })
             }
             let preTurnBlocked = false
-            const skillEnforcerGate = storedGateResultMap.get(sessionID)
-            if (skillEnforcerGate && skillEnforcerGate.chain.length > 0) {
-              const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
-              const unloaded = skillEnforcerGate.chain.filter((name: string) => !loaded.has(name))
-              if (unloaded.length > 0 && !acknowledged) {
-                yield* Effect.logWarning(`[SKILL-ENFORCER] Pre-turn block: ${unloaded.length} unloaded chain skills: ${unloaded.join(", ")}`)
-                // Use "user" role so the model interprets this as a direct
-                // instruction rather than its own prior message (which is
-                // easier to ignore or overwrite). Assistant-role context has
-                // no normative force — the model can freely contradict it.
-                extraMsgs.push({
-                  role: "user" as const,
-                  content: buildUnloadedChainBlockMessage(unloaded),
-                })
-                preTurnBlocked = true
+            if (!sensorGateToggledOff) {
+              const skillEnforcerGate = storedGateResultMap.get(sessionID)
+              if (skillEnforcerGate && skillEnforcerGate.chain.length > 0) {
+                const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
+                const unloaded = skillEnforcerGate.chain.filter((name: string) => !loaded.has(name))
+                if (unloaded.length > 0 && !acknowledged) {
+                  yield* Effect.logWarning(`[SKILL-ENFORCER] Pre-turn block: ${unloaded.length} unloaded chain skills: ${unloaded.join(", ")}`)
+                  // Use "user" role so the model interprets this as a direct
+                  // instruction rather than its own prior message (which is
+                  // easier to ignore or overwrite). Assistant-role context has
+                  // no normative force — the model can freely contradict it.
+                  extraMsgs.push({
+                    role: "user" as const,
+                    content: buildUnloadedChainBlockMessage(unloaded),
+                  })
+                  preTurnBlocked = true
+                }
               }
             }
             // Task tool is ALWAYS available. Cost control is handled by the
@@ -753,7 +763,8 @@ Before every response, verify your reasoning:
             // overwriting the response content with a re-asserted
             // hard-block message. This ensures the persisted message
             // reflects the enforcement even if SSE already streamed.
-            if (storedGateResultMap.has(sessionID)) {
+            // NOTE: Skip when sensor gate is toggled OFF — no chain to enforce.
+            if (!sensorGateToggledOff && storedGateResultMap.has(sessionID)) {
               const storedGate = storedGateResultMap.get(sessionID)!
               if (storedGate.chain.length > 0 && handle.message.finish !== "tool-calls") {
                 const { loaded } = scanForSkillToolCalls(msgs)
