@@ -220,9 +220,11 @@ export function resolveSkillsDir(): string {
     join(dirname(process.execPath), "skills"),
     // 2. Global config dir (XDG): ~/.config/dreamcode/skills
     join(HOME, ".config", "dreamcode", "skills"),
-    // 3. Project-local dir: ./.dreamcode/skills (for development within dreamcode repo)
+    // 3. Legacy config dir: ~/.dreamcode/skills (backward compat for old installs)
+    join(HOME, ".dreamcode", "skills"),
+    // 4. Project-local dir: ./.dreamcode/skills (for development within dreamcode repo)
     join(process.cwd(), ".dreamcode", "skills"),
-    // 4. Source tree path (for development / unbundled installs)
+    // 5. Source tree path (for development / unbundled installs)
     join(process.cwd(), "packages", "opencode", "src", "skill", "dreamcode", "skills"),
   ]
   for (const dir of candidates) {
@@ -319,11 +321,13 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
   const allowedGlobal = skillsDir ? resolve(skillsDir) : null
   const allowedBinary = resolve(dirname(process.execPath), "skills")
   const allowedXdg = resolve(HOME, ".config", "dreamcode", "skills")
+  const allowedLegacy = resolve(HOME, ".dreamcode", "skills")
   const allowedProject = resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
   return (
     (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
     isUnderPrefix(realpath, allowedBinary) ||
     isUnderPrefix(realpath, allowedXdg) ||
+    isUnderPrefix(realpath, allowedLegacy) ||
     isUnderPrefix(realpath, allowedProject)
   )
 }

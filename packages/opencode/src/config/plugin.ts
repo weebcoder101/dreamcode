@@ -34,16 +34,21 @@ export async function load(dir: string) {
     }
   }
 
-  // 1. CWD plugins (local project)
+  // 1. CWD plugins (local project: ./plugins/)
   await addPlugins(path.join(dir, "plugins")).catch(() => {})
 
-  // 2. Binary-bundled plugins dir (release artifact)
+  // 2. CWD .opencode plugins (local development: ./.opencode/plugins/)
+  await addPlugins(path.join(dir, ".opencode", "plugins")).catch(() => {})
+
+  // 3. Binary-bundled plugins dir (release artifact: dirname(process.execPath)/plugins/)
   await addPlugins(path.join(path.dirname(process.execPath), "plugins")).catch(() => {})
 
-  // 3. XDG config plugins dir (~/.config/dreamcode/plugins)
+  // 4. XDG config plugins dir (~/.config/dreamcode/plugins/)
   const home = process.env.HOME || process.env.USERPROFILE || ""
   if (home) {
     await addPlugins(path.join(home, ".config", "dreamcode", "plugins")).catch(() => {})
+    // 5. Legacy config dir (~/.dreamcode/plugins/) — backward compat for old installs
+    await addPlugins(path.join(home, ".dreamcode", "plugins")).catch(() => {})
   }
 
   return plugins

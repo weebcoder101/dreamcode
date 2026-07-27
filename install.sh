@@ -185,6 +185,37 @@ else
   echo -e "${GREEN}Sandbox: OFF (full filesystem access)${NC}"
 fi
 
+# ─── Python 3 ────────────────────────────────────────────────────────
+PYTHON_OK=false
+if command -v python3 &> /dev/null; then
+  PY_VER=$(python3 --version 2>&1 | sed 's/Python //' | cut -d. -f1,2)
+  if [ -n "$PY_VER" ]; then
+    PYTHON_OK=true
+    echo -e "${GREEN}Python 3 found: python3 (${PY_VER})${NC}"
+  fi
+elif command -v python &> /dev/null; then
+  PY_VER=$(python --version 2>&1 | sed 's/Python //' | cut -d. -f1,2)
+  if [ -n "$PY_VER" ]; then
+    PYTHON_OK=true
+    echo -e "${GREEN}Python 3 found: python (${PY_VER})${NC}"
+  fi
+fi
+if [ "$PYTHON_OK" = false ]; then
+  echo ""
+  echo -e "${RED}WARNING: Python 3 not found on your system!${NC}"
+  echo -e "${ORANGE}The persona/skill/chain features require Python 3.${NC}"
+  echo ""
+  echo -e "${CYAN}To install Python 3:${NC}"
+  echo -e "  Ubuntu/Debian:  ${MUTED}sudo apt install python3 python3-pip${NC}"
+  echo -e "  macOS:          ${MUTED}brew install python3${NC}"
+  echo -e "  Fedora/RHEL:    ${MUTED}sudo dnf install python3${NC}"
+  echo ""
+  echo -e "${ORANGE}Or install via your package manager, then re-run this script.${NC}"
+  echo -e "${MUTED}Without Python, you can still use DreamCode for basic tasks.${NC}"
+  echo -e "${MUTED}Personas and skill chains will be disabled.${NC}"
+  echo ""
+fi
+
 # ─── Bun ──────────────────────────────────────────────────────────────
 if ! command -v bun &> /dev/null; then
   echo -e "${CYAN}Installing bun...${NC}"
@@ -305,6 +336,19 @@ if [ -f "$REAL_TARGET" ] && [ -x "$REAL_TARGET" ]; then
 else
   echo -e "${RED}ERROR: Symlink target is missing or not executable: $REAL_TARGET${NC}"
   exit 1
+fi
+
+# ─── Copy skills/plugins alongside binary (binary-bundled fallback) ──
+# The resolver checks dirname(process.execPath)/skills first. Copying here
+# ensures skills/plugins work even if XDG config is cleared.
+REAL_BIN_DIR="$(dirname "$REAL_TARGET")"
+if [ -d "$CONFIG_SKILLS" ] && [ "$REAL_BIN_DIR" != "$CONFIG_SKILLS" ]; then
+  cp -r "$CONFIG_SKILLS" "$REAL_BIN_DIR/skills" 2>/dev/null || true
+  echo -e "${GREEN}Copied skills alongside binary: $REAL_BIN_DIR/skills${NC}"
+fi
+if [ -d "$CONFIG_PLUGINS" ] && [ "$REAL_BIN_DIR" != "$CONFIG_PLUGINS" ]; then
+  cp -r "$CONFIG_PLUGINS" "$REAL_BIN_DIR/plugins" 2>/dev/null || true
+  echo -e "${GREEN}Copied plugins alongside binary: $REAL_BIN_DIR/plugins${NC}"
 fi
 
 # ─── PATH for current session ─────────────────────────────────────────

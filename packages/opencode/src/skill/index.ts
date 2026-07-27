@@ -403,6 +403,36 @@ export const layer = Layer.effect(
       Effect.catch((e) => Effect.logWarning("skill sync to global config failed (non-fatal)", { error: String(e) })),
     )
 
+    // First-run plugin sync: if global config plugins dir is empty, try to copy
+    // from the binary-bundled plugins dir so plugins work from any CWD.
+    const globalPluginsDir = path.join(global.home, ".config", "dreamcode", "plugins")
+    const binaryPluginsDir = path.join(path.dirname(process.execPath), "plugins")
+    yield* Effect.tryPromise(async (_signal: AbortSignal) => {
+      const { stat, mkdir, readdir, cp } = await import("fs/promises")
+      let globalEmpty = true
+      try {
+        const s = await stat(globalPluginsDir)
+        if (s.isDirectory()) {
+          const entries = await readdir(globalPluginsDir)
+          globalEmpty = !entries.some((e) => e.endsWith(".ts") || e.endsWith(".js"))
+        }
+      } catch { /* dir doesn't exist */ }
+      if (!globalEmpty) return
+      const source = (await stat(binaryPluginsDir).then((s) => s.isDirectory()).catch(() => false))
+        ? binaryPluginsDir
+        : undefined
+      if (!source) return
+      await mkdir(globalPluginsDir, { recursive: true })
+      const entries = await readdir(source)
+      for (const entry of entries) {
+        const src = path.join(source, entry)
+        const dst = path.join(globalPluginsDir, entry)
+        await cp(src, dst, { recursive: true }).catch((e) => console.warn("plugin: copy to global config failed", e))
+      }
+    }).pipe(
+      Effect.catch((e) => Effect.logWarning("plugin sync to global config failed (non-fatal)", { error: String(e) })),
+    )
+
     const discovered = yield* InstanceState.make(
       Effect.fn("Skill.discovery")(function* (ctx) {
         return yield* discoverSkills(

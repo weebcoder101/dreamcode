@@ -283,6 +283,32 @@ if ($pluginsSource) {
   Write-Color "WARN: No plugins source found." $ORANGE
 }
 
+# ─── Copy skills/plugins alongside binary (binary-bundled fallback) ──
+# The resolver checks dirname(process.execPath)/skills first. Copying here
+# ensures skills/plugins work even if XDG config is cleared.
+if (Test-Path "$BIN_DIR\$APP.exe") {
+  if (Test-Path $CONFIG_SKILLS) {
+    $binSkills = "$BIN_DIR\skills"
+    try {
+      New-Item -ItemType Directory -Force -Path $binSkills | Out-Null
+      Copy-Item -Path "$CONFIG_SKILLS\*" -Destination $binSkills -Recurse -Force
+      Write-Color "Copied skills alongside binary: $binSkills" $GREEN
+    } catch {
+      Write-Color "WARN: Failed to copy skills alongside binary: $_" $ORANGE
+    }
+  }
+  if (Test-Path $CONFIG_PLUGINS) {
+    $binPlugins = "$BIN_DIR\plugins"
+    try {
+      New-Item -ItemType Directory -Force -Path $binPlugins | Out-Null
+      Copy-Item -Path "$CONFIG_PLUGINS\*" -Destination $binPlugins -Recurse -Force
+      Write-Color "Copied plugins alongside binary: $binPlugins" $GREEN
+    } catch {
+      Write-Color "WARN: Failed to copy plugins alongside binary: $_" $ORANGE
+    }
+  }
+}
+
 # ─── Phase 1e: Verify Python availability ─────────────────────────────
 # Check if Python is available on the system
 $pythonAvailable = $false
