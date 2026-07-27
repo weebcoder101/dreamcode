@@ -358,10 +358,10 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
 
     // First-run skill sync: if global config skills dir is empty, try to copy
-    // from the install directory so skills work from any CWD.
+    // from the binary-bundled skills dir so skills work from any CWD.
+    // SINGLE SOURCE OF TRUTH: ~/.config/dreamcode/skills/ is the only global location.
     const globalSkillsDir = path.join(global.home, ".config", "dreamcode", "skills")
-    const installSkillsDir = path.join(global.home, ".dreamcode", "skills")
-    const repoSkillsDir = path.join(global.home, "dreamcode", ".dreamcode", "skills")
+    const binarySkillsDir = path.join(path.dirname(process.execPath), "skills")
     yield* Effect.tryPromise(async (_signal: AbortSignal) => {
       const { stat, mkdir, readdir, cp } = await import("fs/promises")
       // Check if global dir exists AND has content (at least one SKILL.md).
@@ -387,11 +387,10 @@ export const layer = Layer.effect(
         }
       } catch { /* dir doesn't exist — globalEmpty stays true */ }
       if (!globalEmpty) return
-      const source = (await stat(repoSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-        ? repoSkillsDir
-        : (await stat(installSkillsDir).then((s) => s.isDirectory()).catch(() => false))
-          ? installSkillsDir
-          : undefined
+      // Source priority: binary-bundled (release), then project-local (development)
+      const source = (await stat(binarySkillsDir).then((s) => s.isDirectory()).catch(() => false))
+        ? binarySkillsDir
+        : undefined
       if (!source) return
       await mkdir(globalSkillsDir, { recursive: true })
       const entries = await readdir(source)

@@ -179,9 +179,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             }),
           )
           .catch(() => {
-            // Read again to get subagentModel field (written by syncModelJson / variant.shared.ts)
             const subagentPath = path.join(paths.state, "subagent.json")
-            return readJson<{ model?: string }>(subagentPath)
+            return readJson<{ model?: { providerID: string; modelID: string } }>(subagentPath)
               .then((sub) =>
                 writeJsonAtomic(filePath, {
                   recent: modelStore.recent,

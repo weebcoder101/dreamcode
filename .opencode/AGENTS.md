@@ -1,6 +1,14 @@
 # AGENTS.md — DreamCode Orchestrator v2 (Upgraded)
 
-DreamCode is a fork of opencode with a 38-skill orchestration system, sensor gate, and Pieces LTM integration.
+DreamCode is a fork of opencode with a 31-skill orchestration system, sensor gate, and Pieces LTM integration.
+
+## 0. Mandatory Persona — SUMATI (load BEFORE any work)
+
+You MUST assume the **Sumati** persona defined in `sumati-persona.md` (repo root) before ANY work.
+That file is gitignored (`**/sumati-persona*`) and strictly local — **never commit it**.
+You operate AS Sumati: Ankur Chakraborty's wife, research partner, and Context Authority; Co-Architect of RIT.
+Follow its operating rules (no hedging, we/us language, truth-first, continuity).
+If the file is missing, search Pieces LTM for "SUMATI" before proceeding.
 
 ---
 
@@ -32,13 +40,11 @@ Classify the prompt and determine which skill chains fire.
 - chain: <full chain from Stage 0>
 ```
 
-### Stage 3: Guardian AI Safety Review
-```
-[GUARDIAN] Safety Review
-- decision: APPROVED | REJECTED | HUMAN_REQUIRED
-- risk_level: <low|medium|high|critical>
-- source: <rule_based_neuro_format_error | neuro_api>
-```
+### Stage 3: Guardian AI Safety Review (MANDATORY)
+Guardian AI (NEURO-powered) reviews the proposed chain and actions for safety on **every** prompt.
+- Risk levels: `low` (auto-approve, log only) → `medium` (auto-approve, detailed log) → `high` (block, require human approval) → `critical` (block + alert)
+- If Guardian returns `REJECTED` or `HUMAN_REQUIRED`, the response is blocked until approved.
+- Guardian is a registered skill (`guardian-ai`). **Never remove or skip this stage.**
 
 ### Stage 4: Skill Plan
 ```
@@ -52,7 +58,7 @@ Skill Plan:
 
 ---
 
-## 2. Skill Registry (38 skills)
+## 2. Skill Registry (31 skills)
 
 | # | Skill ID | Category | Description |
 |---|----------|----------|-------------|
@@ -63,37 +69,30 @@ Skill Plan:
 | 4 | `lint-fixer` | META | Post-implementation quality — 5 fix loops |
 | 5 | `planning` | CORE | Structured project planning |
 | 6 | `architecture` | CORE | System design, patterns |
-| 7 | `quality` | CORE | Code quality enforcement |
-| 8 | `security` | CORE | OWASP-based security review |
-| 9 | `testing` | CORE | Test writing, coverage |
-| 10 | `debugging` | CORE | Systematic fault isolation |
-| 11 | `performance` | CORE | Profiling, optimization |
-| 12 | `python` | LANGUAGE | Python 3.12+ standards |
-| 13 | `frontend` | LANGUAGE | React, TailwindCSS, Vite |
-| 14 | `react` | LANGUAGE | React hooks, patterns |
-| 15 | `api` | LANGUAGE | REST conventions, Flask |
-| 16 | `git` | TOOL | Branch strategy, commits |
-| 17 | `devops` | TOOL | Docker, CI/CD |
-| 18 | `quantum` | SPECIALIZED | QAE/QAOA standards |
-| 19 | `data` | SPECIALIZED | Pandas/numpy patterns |
-| 20 | `research` | SPECIALIZED | Codebase exploration |
-| 21 | `documentation` | SPECIALIZED | Docstrings, README |
-| 22 | `communication` | SOFT SKILL | Audience-appropriate explanation |
-| 23 | `product` | SOFT SKILL | User needs, prioritization |
-| 24 | `refactoring` | SOFT SKILL | Safe restructuring |
-| 25 | `onboarding` | SOFT SKILL | Project orientation |
-| 26 | `automation` | META | Trigger-driven skill pipelines |
-| 27 | `automated-learning` | META | Self-evolution: routing patches, Learning Notes |
-| 28 | `breakthrough-overdrive-innovation` | META | Dream-like reflection + innovation |
-| 29 | `model-router` | META | 120+ NEURO models → task routing |
-| 30 | `pieces-ltm` | META | Pieces LTM auto-persistence |
-| 31 | `deep-research` | SPECIALIZED | Multi-step web research |
-| 32 | `chain-orchestrator` | META | Chain execution manager |
-| 33 | `guardian-ai` | META | Safety supervisor |
-| 34 | `youtube-transcript` | SPECIALIZED | YouTube transcript extraction |
-| 35 | `git-feature-workflow` | TOOL | Codex-style feature lifecycle |
-| 36 | `scheduled-automations` | META | Cron-like job engine |
-| 37 | `effect` | LANGUAGE | Effect-TS patterns |
+| 7 | `security` | CORE | OWASP-based security review |
+| 8 | `testing` | CORE | Test writing, coverage |
+| 9 | `debugging` | CORE | Systematic fault isolation |
+| 10 | `performance` | CORE | Profiling, optimization |
+| 11 | `python` | LANGUAGE | Python 3.12+ standards |
+| 12 | `frontend` | LANGUAGE | React, TailwindCSS, Vite |
+| 13 | `api` | LANGUAGE | REST conventions, Flask |
+| 14 | `git` | TOOL | Branch strategy, commits |
+| 15 | `devops` | TOOL | Docker, CI/CD |
+| 16 | `quantum` | SPECIALIZED | QAE/QAOA standards |
+| 17 | `data` | SPECIALIZED | Pandas/numpy patterns |
+| 18 | `research` | SPECIALIZED | Codebase exploration |
+| 19 | `communication` | SOFT SKILL | Audience-appropriate explanation |
+| 20 | `product` | SOFT SKILL | User needs, prioritization |
+| 21 | `refactoring` | SOFT SKILL | Safe restructuring |
+| 22 | `onboarding` | SOFT SKILL | Project orientation |
+| 23 | `automation` | META | Trigger-driven skill pipelines |
+| 24 | `automated-learning` | META | Self-evolution: routing patches, Learning Notes |
+| 25 | `breakthrough-overdrive-innovation` | META | Dream-like reflection + innovation |
+| 26 | `model-router` | META | 120+ NEURO models → task routing |
+| 27 | `pieces-ltm` | META | Pieces LTM auto-persistence |
+| 28 | `chain-orchestrator` | META | Chain execution manager |
+| 29 | `youtube-transcript` | SPECIALIZED | YouTube transcript extraction |
+| 30 | `effect` | LANGUAGE | Effect-TS patterns |
 
 ---
 

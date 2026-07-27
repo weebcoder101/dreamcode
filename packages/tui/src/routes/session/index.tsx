@@ -18,6 +18,7 @@ import {
 import { Dynamic } from "solid-js/web"
 import path from "node:path"
 import { mkdir, writeFile } from "node:fs/promises"
+import { appendFileSync } from "node:fs"
 import { useRoute, useRouteData } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
@@ -1388,7 +1389,7 @@ export function Session() {
             <ErrorBoundary
               fallback={(error) => {
                 try {
-                  fs.appendFileSync(
+                  appendFileSync(
                     "/tmp/dreamcode-diag.log",
                     `[${Date.now()}] RENDER-ERROR sidebar sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
                   )

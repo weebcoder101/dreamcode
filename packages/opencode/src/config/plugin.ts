@@ -17,15 +17,35 @@ export type Origin = {
 
 export async function load(dir: string) {
   const plugins: ConfigPluginV1.Spec[] = []
+  const seen = new Set<string>()
 
-  for (const item of await Glob.scan("{plugin,plugins}/*.{ts,js}", {
-    cwd: dir,
-    absolute: true,
-    dot: true,
-    symlink: true,
-  })) {
-    plugins.push(pathToFileURL(item).href)
+  const addPlugins = async (pluginsDir: string) => {
+    for (const item of await Glob.scan("*.{ts,js}", {
+      cwd: pluginsDir,
+      absolute: true,
+      dot: true,
+      symlink: true,
+    }).catch(() => [])) {
+      const fileUrl = pathToFileURL(item).href
+      if (!seen.has(fileUrl)) {
+        seen.add(fileUrl)
+        plugins.push(fileUrl)
+      }
+    }
   }
+
+  // 1. CWD plugins (local project)
+  await addPlugins(path.join(dir, "plugins")).catch(() => {})
+
+  // 2. Binary-bundled plugins dir (release artifact)
+  await addPlugins(path.join(path.dirname(process.execPath), "plugins")).catch(() => {})
+
+  // 3. XDG config plugins dir (~/.config/dreamcode/plugins)
+  const home = process.env.HOME || process.env.USERPROFILE || ""
+  if (home) {
+    await addPlugins(path.join(home, ".config", "dreamcode", "plugins")).catch(() => {})
+  }
+
   return plugins
 }
 

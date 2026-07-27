@@ -82,7 +82,7 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
               Object.entries(result.models).filter(([, model]) => result.pickerEnabled.has(model.api.id)),
             )
           })
-          .catch((error) => {
+          .catch((_error) => {
             models = {}
             return Object.fromEntries(
               Object.entries(provider.models).map(([id, model]) => [id, fix(model, base(auth.enterpriseUrl))]),
@@ -160,6 +160,7 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
 
             const headers: Record<string, string> = {
               "x-initiator": isAgent ? "agent" : "user",
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
               ...(init?.headers as Record<string, string>),
               "User-Agent": `opencode/${InstallationVersion}`,
               Authorization: `Bearer ${info.refresh}`,
@@ -227,7 +228,7 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
 
             if (deploymentType === "enterprise") {
               const enterpriseUrl = inputs.enterpriseUrl
-              domain = normalizeDomain(enterpriseUrl!)
+              domain = normalizeDomain(enterpriseUrl)
             }
 
             const urls = getUrls(domain)
@@ -249,7 +250,12 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
               throw new Error("Failed to initiate device authorization")
             }
 
-            const deviceData = (await deviceResponse.json()) as {
+            const deviceData: {
+              verification_uri: string
+              user_code: string
+              device_code: string
+              interval: number
+            } = await deviceResponse.json() as unknown as { // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion
               verification_uri: string
               user_code: string
               device_code: string
@@ -278,13 +284,17 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
 
                   if (!response.ok) return { type: "failed" as const }
 
-                  const data = (await response.json()) as {
+                  const data: {
                     access_token?: string
                     error?: string
                     interval?: number
-                  }
-
-                  if (data.access_token) {
+                  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                  } = await response.json() as unknown as {
+                      access_token?: string
+                      error?: string
+                      interval?: number
+                    }
+                    if (data.access_token) {
                     const result: {
                       type: "success"
                       refresh: string

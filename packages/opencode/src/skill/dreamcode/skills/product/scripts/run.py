@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Product / product-thinking analysis harness — analyzes prompts for product strategy, user needs, and feature prioritization."""
+"""Product / product analysis harness — analyzes prompts for product strategy, user needs, and feature prioritization."""
 
 import json
 import re

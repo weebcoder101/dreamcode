@@ -233,12 +233,17 @@ describe("evaluateSpawnNecessity", () => {
     expect(eval_.suggestedCount).toBe(5)
   })
 
-  test("DREAM_INNOVATION always spawns with min 3", () => {
-    const result = makeResult({ mode: "DREAM_INNOVATION" })
-    const eval_ = evaluateSpawnNecessity(result, "innovate something")
+  test("DREAM_INNOVATION boosts spawn count", () => {
+    const result = makeResult({
+      mode: "DREAM_INNOVATION",
+      domain_tags: ["auth", "database", "frontend"],
+      risk_level: "high",
+      chain: ["security", "neuro", "code-hardener"],
+    })
+    const eval_ = evaluateSpawnNecessity(result, "innovate a new authentication system")
     expect(eval_.shouldSpawn).toBe(true)
-    expect(eval_.suggestedCount).toBeGreaterThanOrEqual(3)
-    expect(eval_.reason).toContain("DREAM_INNOVATION")
+    expect(eval_.suggestedCount).toBeGreaterThanOrEqual(2)
+    expect(eval_.reason).toContain("Innovation mode")
   })
 
   test("simple high-confidence task → no spawn", () => {
@@ -298,6 +303,55 @@ describe("evaluateSpawnNecessity", () => {
     const eval_ = evaluateSpawnNecessity(result, "small change")
     // effectiveChainLen = 0, so no chain scoring
     expect(eval_.shouldSpawn).toBe(false)
+  })
+
+  test("CPU-heavy task caps at 2 personas", () => {
+    const result = makeResult({
+      domain_tags: ["typescript"],
+      risk_level: "medium",
+      confidence: 0.5,
+    })
+    const eval_ = evaluateSpawnNecessity(result, "fix the typecheck error in the build")
+    expect(eval_.shouldSpawn).toBe(true)
+    expect(eval_.suggestedCount).toBeLessThanOrEqual(2)
+    expect(eval_.reason).toContain("CPU-heavy")
+  })
+
+  test("config task → no spawn for low-risk config prompts", () => {
+    const result = makeResult({
+      domain_tags: ["api"],
+      risk_level: "low",
+      confidence: 0.3,
+    })
+    const eval_ = evaluateSpawnNecessity(result, "how do I configure the API key for openrouter")
+    expect(eval_.shouldSpawn).toBe(false)
+    expect(eval_.reason).toContain("Configuration")
+  })
+
+  test("simple prompt with fix keyword → no spawn (regression: simplicity check)", () => {
+    const result = makeResult({
+      domain_tags: ["typescript"],
+      risk_level: "low",
+      confidence: 0.9,
+      complexity: "low",
+    })
+    const eval_ = evaluateSpawnNecessity(result, "fix the login button color")
+    expect(eval_.shouldSpawn).toBe(false)
+    expect(eval_.reason).toContain("Simple high-confidence")
+  })
+
+  test("multi-domain high-risk → spawn with high count", () => {
+    const result = makeResult({
+      domain_tags: ["auth", "database", "frontend", "security"],
+      risk_level: "high",
+      confidence: 0.4,
+      complexity: "high",
+    })
+    const eval_ = evaluateSpawnNecessity(result, "redesign the authentication system with new DB schema")
+    expect(eval_.shouldSpawn).toBe(true)
+    expect(eval_.suggestedCount).toBeGreaterThanOrEqual(2)
+    expect(eval_.reason).toContain("High risk")
+    expect(eval_.reason).toContain("Multi-domain")
   })
 })
 

@@ -180,12 +180,15 @@ function createLayer(fs = FSUtil.defaultLayer) {
             delete next[key]
           }
 
-          yield* file
-            .writeJson(MODEL_FILE, {
-              ...current,
-              variant: next,
-            })
-            .pipe(Effect.orElseSucceed(() => undefined))
+          yield* Effect.sync(() => {
+            const dir = path.dirname(MODEL_FILE)
+            if (!fs.existsSync(dir)) {
+              fs.mkdirSync(dir, { recursive: true })
+            }
+            const tmp = MODEL_FILE + ".tmp"
+            fs.writeFileSync(tmp, JSON.stringify({ ...current, variant: next }, null, 2))
+            fs.renameSync(tmp, MODEL_FILE)
+          }).pipe(Effect.orElseSucceed(() => undefined))
         })
 
         return Service.of({

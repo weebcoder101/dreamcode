@@ -70,4 +70,4 @@ Pipelines compose skills sequentially. Each step can be:
 | Add Test Coverage | GitHub PR | testing → quality → python | PR comment |
 | Find Critical Bugs | Cron | exhaustive-crosscheck → debugging → code-hardener | Draft PR + log |
 | Generate Docs | CLI | documentation → communication | Git commit |
-| Weekly Summary | Cron | communication → data-science | File report |
+| Weekly Summary | Cron | communication → data | File report |

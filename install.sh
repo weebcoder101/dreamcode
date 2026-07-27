@@ -362,6 +362,7 @@ echo -e "${GREEN}Created dreamcode directories at $INSTALL_DIR${NC}"
 
 # ─── Install skills to global config ──────────────────────────────────
 CONFIG_SKILLS="$HOME/.config/dreamcode/skills"
+CONFIG_PLUGINS="$HOME/.config/dreamcode/plugins"
 REPO_SKILLS="$INSTALL_DIR/.dreamcode/skills"
 REPO_SKILLS_ALT="$INSTALL_DIR/.opencode/skills"
 mkdir -p "$CONFIG_SKILLS"
@@ -376,6 +377,18 @@ elif [ -d "$REPO_SKILLS_ALT" ]; then
 else
   echo -e "${ORANGE}WARN: No skills found in repo to install${NC}"
 fi
+
+# ─── Install plugins to global config ─────────────────────────────────
+REPO_PLUGINS="$INSTALL_DIR/.opencode/plugins"
+mkdir -p "$CONFIG_PLUGINS"
+if [ -d "$REPO_PLUGINS" ]; then
+  cp -r "$REPO_PLUGINS/"* "$CONFIG_PLUGINS/" 2>/dev/null || true
+  PLUGIN_COUNT=$(ls "$REPO_PLUGINS/"*.ts 2>/dev/null | wc -l)
+  echo -e "${GREEN}Installed $PLUGIN_COUNT plugins to $CONFIG_PLUGINS${NC}"
+else
+  echo -e "${ORANGE}WARN: No plugins found in repo to install${NC}"
+fi
+
 # Also copy scripts and automations if they exist
 if [ -d "$INSTALL_DIR/.dreamcode/scripts" ]; then
   cp -r "$INSTALL_DIR/.dreamcode/scripts/"* "$INSTALL_DIR/scripts/" 2>/dev/null || true

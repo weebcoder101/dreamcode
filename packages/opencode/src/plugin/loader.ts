@@ -186,7 +186,8 @@ export namespace PluginLoader {
 
     // The default behavior is to return the successfully loaded plugin as-is, but callers can
     // provide a finisher to adapt the result into a more specific runtime shape.
-    if (!finish) return { value: loaded.value as R, retry: false }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    if (!finish) return { value: loaded.value as unknown as R, retry: false }
     const value = await finish(loaded.value, candidate.origin, retry)
     return { value, retry: false }
   }
@@ -217,7 +218,7 @@ export namespace PluginLoader {
       for (let i = 0; i < candidates.length; i++) {
         const previous = out[i]
         if (previous?.value !== undefined) continue
-        if (previous?.retry !== true) continue
+        if (!previous?.retry) continue
 
         // Only pre-import file plugin setup failures are retried. Bun caches failed dynamic imports,
         // so dependency waiting cannot fix load/build/runtime/shape failures in this process.

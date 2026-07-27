@@ -2,7 +2,7 @@
 name: youtube-transcript
 description: Fetch, analyze, and summarize YouTube video transcripts. Use when the user wants to extract transcript from a YouTube video, summarize a video's content, or use video transcripts as coding context.
 category: SPECIALIZED
-chains_with: [documentation, communication, deep-research]
+chains_with: [communication, research]
 ---
 
 # YouTube Transcript Skill

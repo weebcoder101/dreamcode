@@ -1,5 +1,5 @@
 ---
-name: git-workflow
+name: git
 description: "Git operations, branching strategy, commit conventions, and PR workflow. Use for all git operations. Enforces clean history and conventional commits."
 chains_with:
   - quality

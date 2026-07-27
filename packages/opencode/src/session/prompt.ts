@@ -3,14 +3,12 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import path from "path"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import os from "os"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
-import { type Tool as AITool, tool, jsonSchema } from "ai"
-import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
@@ -19,68 +17,48 @@ import MAX_STEPS from "../session/prompt/max-steps.txt"
 import { ToolRegistry } from "@/tool/registry"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
-import { ulid } from "ulid"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import * as Stream from "effect/Stream"
 import { Command } from "../command"
-import { pathToFileURL, fileURLToPath } from "url"
+import { pathToFileURL } from "url"
 import { Config } from "@/config/config"
 import { ConfigMarkdown } from "@/config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
-import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
-import { SensorGate, evaluateSpawnNecessity, type Persona, type SensorGateResult } from "@/skill/sensor-gate"
-import { SOCIAL_GREETING_RE } from "@/skill/question-complexity-schema"
-import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
-import { SelfEvolve, type LearningSignal } from "@/skill/self-evolve"
-import { debugLog } from "@/skill/python-resolver"
-import * as PersonaTracker from "./persona-tracker"
+import { SensorGate, type SensorGateResult } from "@/skill/sensor-gate"
+import { ChainExecutor } from "@/skill/chain-executor"
+import { SelfEvolve } from "@/skill/self-evolve"
 import { ContextCompressor } from "./context-compressor"
 import { PiecesLTM } from "@/pieces-ltm"
-import { extractSubagentContext, buildSubagentContextPrompt } from "./subagent-context"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
-import { Shell } from "@/shell/shell"
-import { ShellID } from "@/tool/shell/id"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
-import { decodeDataUrl } from "@/util/data-url"
-import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
-import { TaskTool, type TaskPromptOps } from "@/tool/task"
+import type { TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { dieSyncError } from "@/effect/sync-error"
 import { Database } from "@opencode-ai/core/database/database"
-import { SessionEvent } from "@opencode-ai/core/session/event"
-import { SessionMessage } from "@opencode-ai/core/session/message"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { AgentAttachment, FileAttachment, Prompt, Source } from "@opencode-ai/core/session/prompt"
-import * as DateTime from "effect/DateTime"
+import type { ModelV2 } from "@opencode-ai/core/model"
+import type { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
-import { LLMEvent } from "@opencode-ai/llm"
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 import {
   DEFAULT_KNOWLEDGE_BLOCK,
-  sanitizeForSystemPrompt,
-  normalizeTokens,
   isOrphanedInterruptedTool,
-  injectChainGapDetection,
   injectSkillLoadingGap,
   injectSkillChainObligation,
-  getUnloadedChainSkills,
   buildUnloadedChainBlockMessage,
   scanForSkillToolCalls,
 } from "./prompt-utils"
@@ -97,10 +75,6 @@ import {
   ShellInput,
   CommandInput,
   createStructuredOutputTool,
-  bashRegex,
-  argsRegex,
-  placeholderRegex,
-  quoteTrimRegex,
   STRUCTURED_OUTPUT_SYSTEM_PROMPT,
 } from "./prompt-schemas"
 import {
@@ -109,15 +83,21 @@ import {
   storedContentResultsMap,
   personaRoundMap,
   spawnHistory,
-  checkRateLimit,
-  recordSpawn,
   parseExplicitSpawnCount,
-  RATE_MAX_SPAWNS,
-  isSensorGateGloballyDisabled,
+  isSensorGateEnabled,
+  SENSOR_GATE_MINIMAL_SIGNAL,
 } from "./prompt-state"
 import { summarizeTaste, refreshProfile } from "./prompt-taste"
-const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
-const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+
+// ─── Cost-Aware Task Complexity Assessment ─────────────────────
+// Determines task complexity for model routing hints. Simple tasks
+// can use cheaper/faster models for subagents. Complex tasks need
+// the most capable model available.
+function assessTaskComplexity(result: SensorGateResult): "simple" | "medium" | "complex" {
+  if (result.mode === "TRIVIAL" || result.complexity === "low") return "simple"
+  if (result.mode === "DREAM_INNOVATION" || result.complexity === "high" || result.risk_level === "high") return "complex"
+  return "medium"
+}
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -160,7 +140,7 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-    const skillService = yield* Skill.Service
+    const _skillService = yield* Skill.Service
     const chainExecutor = yield* ChainExecutor.Service
     const selfEvolve = yield* SelfEvolve.Service
     const piecesLTM = yield* PiecesLTM.PiecesLTM
@@ -293,6 +273,7 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
     const createUserMessage = (input: PromptInput): Effect.Effect<SessionV1.WithParts, Image.Error> =>
+      // eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       createUserMessageFn({
         ...input,
         sessions,
@@ -595,9 +576,22 @@ Before every response, verify your reasoning:
              // Sensor Gate Toggle: resolved OUTSIDE the step===1 conditional
             // block so it's accessible to per-turn enforcement and pre-turn
             // hard-block sections that follow.
-            const sensorGateToggledOff = isSensorGateGloballyDisabled()
-             if (step === 1 && !session.parentID) {
-              const userText = msgs
+              // NOTE: sensorGateEnabled = true when the user has toggled the gate
+              // ON (green "GATE" indicator). ON = full mode: classification, chain,
+              // enforcement, and persona spawning all run.
+              // When OFF = minimal cost mode: classification/chain/enforcement
+              // still execute, but persona spawning is skipped.
+              const sensorGateEnabled = isSensorGateEnabled()
+              // Inject gate-minimal signal so enforcer plugins and downstream
+              // code can detect the toggle state from the system prompt alone.
+              // When gate is OFF, agent runs in minimal cost mode (no personas).
+              // This runs on EVERY turn (not just step===1) so that tool-call
+              // turns and retries also carry the signal for enforcer plugins.
+              if (!sensorGateEnabled) {
+                system.push(SENSOR_GATE_MINIMAL_SIGNAL + 'Persona spawning is disabled (minimal cost mode). Skills and chain still execute normally.</sensor-gate>')
+              }
+              if (step === 1 && !session.parentID) {
+               const userText = msgs
                 .filter((m) => m.info.role === "user" && m.info.id === lastUser.id)
                 .flatMap((m) => m.parts)
                 .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
@@ -623,6 +617,7 @@ Before every response, verify your reasoning:
               // NOT trigger any skill chain or sensor gate classification.
               const isCompactionContinue = lastUserMsg?.parts.some(
                 (p): p is typeof p & { metadata: { compaction_continue: boolean } } =>
+                  // eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion
                   p.type === "text" && (p as any).metadata?.compaction_continue === true,
               ) ?? false
               // Skip sensor gate if session has active subagents running.
@@ -635,27 +630,55 @@ Before every response, verify your reasoning:
               } else {
                 yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=1 bypassed isSessionBusy check — fire gate for every new user message`)
               }
-              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy} isCompactionContinue=${isCompactionContinue} sensorGateToggledOff=${sensorGateToggledOff}`)
-              // Inject gate-disabled signal so enforcer plugins and downstream
-              // code can detect the toggle state from the system prompt alone.
-              if (sensorGateToggledOff) {
-                system.push('<sensor-gate state="disabled">Classification and skill chain enforcement are disabled by the user. Do NOT enforce any prior chain. Respond directly.</sensor-gate>')
-              }
-              if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy && !isCompactionContinue && !sensorGateToggledOff) {
+              yield* Effect.logWarning(`[SENSOR-GATE-DIAG] step=${step} parentID=${session.parentID} isSynthesis=${isSynthesis} isSlashCommand=${isSlashCommand} isSessionBusy=${isSessionBusy} isCompactionContinue=${isCompactionContinue} sensorGateEnabled=${sensorGateEnabled}`)
+              if (userText.trim() && !isSynthesis && !isSlashCommand && !isSessionBusy && !isCompactionContinue) {
                 const gateResult = yield* sensorGate.classify(userText).pipe(
                   Effect.catchCause((cause) =>
-                    Effect.as(Effect.logError("Sensor gate unavailable", { cause }), null),
+                    Effect.as(Effect.logError("Sensor gate unavailable", { cause }), {
+                      intent: userText.slice(0, 200),
+                      domain_tags: [],
+                      risk_level: "medium",
+                      confidence: 0.5,
+                      complexity: "medium",
+                      time_sensitivity: "medium",
+                      requires_tools: "files",
+                      deliverable_type: "multi",
+                      is_social_greeting: false,
+                      primary_skill: "",
+                      support_skills: [],
+                      automation: "none",
+                      mode: "STANDARD",
+                      chain: [],
+                      personas: [],
+                      guardian_decision: "APPROVED",
+                      guardian_risk: "low",
+                      skill_plan: "",
+                      raw_output: "",
+                    } satisfies SensorGateResult),
                   ),
                 )
                 const explicitSpawnCount = parseExplicitSpawnCount(userText)
-                if (gateResult && !gateResult.is_social_greeting) {
+                if (!gateResult.is_social_greeting) {
                   const sgpResult = yield* processSensorGatePhase({
                     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
                     instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
                     personaRoundMap, spawnHistory, compaction, chainExecutor, sys,
+                    taskComplexity: assessTaskComplexity(gateResult),
                   })
                   synthesisText = sgpResult.synthesisText
+                  // Post-spawn fallback verification: detect silent gate miswires.
+                  // Gate ON but no personas spawned → possible bypass.
+                  // Gate OFF but synthesis produced → possible enforcement leak.
+                  if (sensorGateEnabled && !sgpResult.synthesisText) {
+                    yield* Effect.logWarning(
+                      `[SENSOR-GATE-DIAG] Gate ON but no personas spawned — possible fallback miswire`
+                    )
+                  } else if (!sensorGateEnabled && sgpResult.synthesisText) {
+                    yield* Effect.logWarning(
+                      `[SENSOR-GATE-DIAG] Gate OFF but synthesis was produced — possible bypass`
+                    )
+                  }
                 }
               }
             }             // ─── End Sensor Gate ────────────────────────────────────────
@@ -663,16 +686,18 @@ Before every response, verify your reasoning:
             // After the gate fires on the first turn, re-inject chain
             // enforcement on EVERY turn so the agent is constantly reminded
             // to load chain skills via the `skill` tool.
-            // NOTE: When the sensor gate is toggled OFF, skip ALL chain
-            // enforcement — the stored gate result is stale and the user
-            // explicitly wants no gate interference.
-            if (!sensorGateToggledOff) {
+            // Enforcement runs regardless of gate state — only persona
+            // spawning is affected by the toggle.
+            {
               const storedGate = storedGateResultMap.get(sessionID)
               if (storedGate) {
                 const storedScripts = storedScriptResultsMap.get(sessionID) ?? []
                 const storedContent = storedContentResultsMap.get(sessionID) ?? []
-                injectSkillLoadingGap(system, storedGate, msgs)
-                injectSkillChainObligation(system, storedGate, storedScripts, storedContent)
+                injectSkillLoadingGap(system, storedGate, msgs, [
+                  ...storedScripts.map(r => r.name),
+                  ...storedContent.map(r => r.name),
+                ])
+                injectSkillChainObligation(system, storedGate, storedScripts, storedContent, msgs)
               }
             }
             // ─── Pre-Turn Hard Block: unloaded chain skills ──────────
@@ -680,16 +705,20 @@ Before every response, verify your reasoning:
             // NOT yet loaded all skills via the `skill` tool, inject a
             // hard-block assistant message as context. The agent MUST
             // load skills before the LLM responds to the user query.
-            // NOTE: Same toggle check — when OFF, do not block the agent.
+            // Pre-turn block always runs — only persona spawning is gated.
             let extraMsgs: Array<{ role: "user" | "assistant"; content: string }> = []
             if (synthesisText) {
               extraMsgs.push({ role: "user" as const, content: synthesisText })
             }
             let preTurnBlocked = false
-            if (!sensorGateToggledOff) {
+            {
               const skillEnforcerGate = storedGateResultMap.get(sessionID)
               if (skillEnforcerGate && skillEnforcerGate.chain.length > 0) {
                 const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
+                // Pre-executed skills are already in context (authoritative record
+                // in session state) — count them as loaded so the hard-block does
+                // not fire for skills the agent already has.
+                for (const r of [...(storedScriptResultsMap.get(sessionID) ?? []), ...(storedContentResultsMap.get(sessionID) ?? [])]) loaded.add(r.name)
                 const unloaded = skillEnforcerGate.chain.filter((name: string) => !loaded.has(name))
                 if (unloaded.length > 0 && !acknowledged) {
                   yield* Effect.logWarning(`[SKILL-ENFORCER] Pre-turn block: ${unloaded.length} unloaded chain skills: ${unloaded.join(", ")}`)
@@ -763,11 +792,15 @@ Before every response, verify your reasoning:
             // overwriting the response content with a re-asserted
             // hard-block message. This ensures the persisted message
             // reflects the enforcement even if SSE already streamed.
-            // NOTE: Skip when sensor gate is toggled OFF — no chain to enforce.
-            if (!sensorGateToggledOff && storedGateResultMap.has(sessionID)) {
+            // Post-turn validation always runs — only persona spawning is gated.
+            if (storedGateResultMap.has(sessionID)) {
               const storedGate = storedGateResultMap.get(sessionID)!
               if (storedGate.chain.length > 0 && handle.message.finish !== "tool-calls") {
                 const { loaded } = scanForSkillToolCalls(msgs)
+                // Pre-executed skills are already in context — count them as
+                // loaded so post-turn re-enforcement does not overwrite the
+                // agent's response for skills it already has.
+                for (const r of [...(storedScriptResultsMap.get(sessionID) ?? []), ...(storedContentResultsMap.get(sessionID) ?? [])]) loaded.add(r.name)
                 const unloaded = storedGate.chain.filter((name: string) => !loaded.has(name))
                 if (unloaded.length > 0) {
                   yield* Effect.logWarning(
@@ -811,18 +844,24 @@ Before every response, verify your reasoning:
         return yield* lastAssistant(sessionID)
       },
     )
+    /* eslint-disable typescript-eslint/no-unsafe-type-assertion */
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = (Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
       return yield* (state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID) as any) as any)
     }) as any)
+    /* eslint-enable typescript-eslint/no-unsafe-type-assertion */
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
-      return yield* (state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready) as unknown as Effect.Effect<SessionV1.WithParts, never>, ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>)
+      return yield* (
+        // eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion, typescript-eslint/no-unnecessary-type-assertion, typescript-eslint/no-unnecessary-type-arguments
+        state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready) as unknown as Effect.Effect<SessionV1.WithParts, never>, ready) as Effect.Effect<SessionV1.WithParts, Session.BusyError>
+      )
     })
     const command = (input: CommandInput): Effect.Effect<SessionV1.WithParts, Image.Error> =>
+      // eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       commandFn({
         ...input,
         sessions,
@@ -890,6 +929,7 @@ export const defaultLayer = Layer.suspend(() =>
 
 const sensorGateNode = LayerNode.make(SensorGate.defaultLayer, [])
 const chainExecutorNode = LayerNode.make(ChainExecutor.defaultLayer, [])
+// eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion
 export const node = (LayerNode.make as any)(layer, [
   SessionStatus.node,
   Session.node,

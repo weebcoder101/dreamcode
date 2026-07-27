@@ -218,13 +218,14 @@ if ($BuildFromSource) {
   }
 }
 
-# ─── Phase 1d: Install Python scripts to skills directory ─────────────
-# The Python scripts (sensor_gate.py, neuro_harness.py, etc.) are needed
-# for persona/skill/chain functionality. The resolver checks
-# %USERPROFILE%\.dreamcode\skills (among others) at runtime.
-$SKILLS_DST = "$env:USERPROFILE\.dreamcode\skills"
+# ─── Phase 1d: Install skills and plugins to config directory ────────
+# The Python scripts (sensor_gate.py, neuro_harness.py, etc.) and plugins
+# (sensor-gate-enforcer.ts, etc.) are needed for skill/chain/sensor-gate
+# functionality. The resolver checks ~/.config/dreamcode/skills at runtime.
+$CONFIG_SKILLS = "$env:USERPROFILE\.config\dreamcode\skills"
+$CONFIG_PLUGINS = "$env:USERPROFILE\.config\dreamcode\plugins"
 
-# Source candidates:
+# Skills source candidates:
 #   1. Bundled alongside the binary in the extracted archive (pre-built)
 #   2. Source repo path (BuildFromSource)
 $bundledSkills = "$extractDir\skills"
@@ -240,27 +241,46 @@ if (-not $BuildFromSource -and (Test-Path $bundledSkills)) {
 }
 
 if ($skillsSource) {
-  Write-Color "Installing Python scripts to skills directory..." $CYAN
+  Write-Color "Installing skills to $CONFIG_SKILLS ..." $CYAN
   try {
-    # Create destination if it doesn't exist
-    New-Item -ItemType Directory -Force -Path $SKILLS_DST | Out-Null
-    
-    # Copy all skill directories recursively
-    Copy-Item -Path "$skillsSource\*" -Destination $SKILLS_DST -Recurse -Force
-    
-    # Count installed scripts
-    $scriptCount = (Get-ChildItem -Path $SKILLS_DST -Filter "*.py" -Recurse).Count
-    Write-Color "Installed $scriptCount Python scripts to $SKILLS_DST" $GREEN
+    New-Item -ItemType Directory -Force -Path $CONFIG_SKILLS | Out-Null
+    Copy-Item -Path "$skillsSource\*" -Destination $CONFIG_SKILLS -Recurse -Force
+    $skillCount = (Get-ChildItem -Path $CONFIG_SKILLS -Directory).Count
+    Write-Color "Installed $skillCount skills to $CONFIG_SKILLS" $GREEN
   } catch {
-    Write-Color "WARN: Failed to install Python scripts: $_" $ORANGE
-    Write-Color "Personas and skill chains may not work without Python scripts." $ORANGE
+    Write-Color "WARN: Failed to install skills: $_" $ORANGE
+    Write-Color "Skill chains may not work without skills." $ORANGE
   }
 } else {
-  Write-Color "WARN: No Python skills source found." $ORANGE
-  Write-Color "If using a pre-built release, the skills should be bundled in the archive." $ORANGE
-  Write-Color "If building from source, ensure the repo is complete." $ORANGE
-  Write-Color "Personas and skill chains will be disabled without Python scripts." $ORANGE
-  Write-Color "To fix: download a full release or set `$env:DREAMCODE_DIR to your repo root." $ORANGE
+  Write-Color "WARN: No skills source found." $ORANGE
+  Write-Color "Skill chains will be disabled without skills." $ORANGE
+}
+
+# Plugins source candidates
+$bundledPlugins = "$extractDir\plugins"
+$repoPlugins = "$INSTALL_DIR\.opencode\plugins"
+$pluginsSource = $null
+
+if (-not $BuildFromSource -and (Test-Path $bundledPlugins)) {
+  $pluginsSource = $bundledPlugins
+  Write-Color "Found bundled plugins in release archive." $MUTED
+} elseif ($BuildFromSource -and (Test-Path $repoPlugins)) {
+  $pluginsSource = $repoPlugins
+  Write-Color "Found plugins in source repo." $MUTED
+}
+
+if ($pluginsSource) {
+  Write-Color "Installing plugins to $CONFIG_PLUGINS ..." $CYAN
+  try {
+    New-Item -ItemType Directory -Force -Path $CONFIG_PLUGINS | Out-Null
+    Copy-Item -Path "$pluginsSource\*" -Destination $CONFIG_PLUGINS -Recurse -Force
+    $pluginCount = (Get-ChildItem -Path $CONFIG_PLUGINS -Filter "*.ts" -Recurse).Count
+    Write-Color "Installed $pluginCount plugins to $CONFIG_PLUGINS" $GREEN
+  } catch {
+    Write-Color "WARN: Failed to install plugins: $_" $ORANGE
+  }
+} else {
+  Write-Color "WARN: No plugins source found." $ORANGE
 }
 
 # ─── Phase 1e: Verify Python availability ─────────────────────────────
@@ -371,11 +391,19 @@ if (Test-Path $fullPath) {
 }
 
 # Verify skills installation
-$skillsInstalled = Test-Path "$SKILLS_DST\chain-orchestrator\scripts\sensor_gate.py"
+$skillsInstalled = Test-Path "$CONFIG_SKILLS\chain-orchestrator\scripts\sensor_gate.py"
 if ($skillsInstalled) {
-  Write-Color "  Skills: $SKILLS_DST (installed)" $GREEN
+  Write-Color "  Skills: $CONFIG_SKILLS (installed)" $GREEN
 } else {
-  Write-Color "  Skills: $SKILLS_DST (not found)" $ORANGE
+  Write-Color "  Skills: $CONFIG_SKILLS (not found)" $ORANGE
+}
+
+# Verify plugins installation
+$pluginsInstalled = Test-Path "$CONFIG_PLUGINS\sensor-gate-enforcer.ts"
+if ($pluginsInstalled) {
+  Write-Color "  Plugins: $CONFIG_PLUGINS (installed)" $GREEN
+} else {
+  Write-Color "  Plugins: $CONFIG_PLUGINS (not found)" $ORANGE
 }
 
 # Verify Python

@@ -269,6 +269,15 @@ for (const item of targets) {
     console.log(`Bundled ${pyCount} Python skill scripts for ${name}`)
   }
 
+  // Bundle plugins alongside the binary (sensor-gate-enforcer, etc.)
+  const pluginsSrc = path.resolve(import.meta.dir, "../../../.opencode/plugins")
+  const pluginsDest = path.resolve(`dist/${name}/bin/plugins`)
+  if (fs.existsSync(pluginsSrc)) {
+    fs.cpSync(pluginsSrc, pluginsDest, { recursive: true, force: true })
+    const pluginCount = (fs.readdirSync(pluginsDest, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts") || f.endsWith(".js")).length
+    console.log(`Bundled ${pluginCount} plugins for ${name}`)
+  }
+
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/dreamcode`
     console.log(`Running smoke test: ${binaryPath} --version`)

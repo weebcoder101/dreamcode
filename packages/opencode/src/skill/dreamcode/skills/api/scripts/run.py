@@ -62,7 +62,7 @@ def analyze_prompt(prompt: str) -> dict:
     protocol_estimate = "graphql" if "graphql" in prompt_lower else ("grpc" if "grpc" in prompt_lower else "rest")
 
     return {
-        "analysis_type": "api-design",
+        "analysis_type": "api",
         "findings_count": len(findings),
         "findings": findings,
         "suggestions": suggestions,

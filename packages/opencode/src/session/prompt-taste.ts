@@ -1,9 +1,13 @@
 import { Effect } from "effect"
 import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename } from "path"
+import { Global } from "@opencode-ai/core/global"
 import { homedir } from "os"
 
-const EVOLUTION_DIR = join(homedir(), ".dreamcode", "evolution")
+// Backward compatibility: check old ~/.dreamcode/evolution path first,
+// then fall back to XDG data path (~/.local/share/dreamcode/evolution).
+const oldEvolutionDir = join(homedir(), ".dreamcode", "evolution")
+const EVOLUTION_DIR = existsSync(oldEvolutionDir) ? oldEvolutionDir : join(Global.Path.data, "evolution")
 const TASTE_LOG = join(EVOLUTION_DIR, "taste.jsonl")
 const PROFILE_FILE = join(EVOLUTION_DIR, "profile.json")
 

@@ -1,5 +1,5 @@
 ---
-name: python-best-practices
+name: python
 description: "Python development standards, typing, imports, and project structure. Use for all Python code in the project. Covers modern Python tooling with ruff, mypy, pytest."
 chains_with:
   - quality

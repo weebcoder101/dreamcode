@@ -33,6 +33,10 @@ export function selectWebSearchProvider(sessionID: string, flags = { exa: false,
   if (flags.parallel) return "parallel"
   if (flags.exa) return "exa"
 
+  // Exa's hosted MCP service is keyless; Parallel requires PARALLEL_API_KEY.
+  // Default to Exa so searches don't intermittently fail when Parallel is unconfigured.
+  if (!process.env.PARALLEL_API_KEY) return "exa"
+
   return Number.parseInt(checksum(sessionID) ?? "0", 36) % 2 === 0 ? "exa" : "parallel"
 }
 

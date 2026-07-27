@@ -102,6 +102,14 @@ async function sensorGateEnforcer(input: any, options?: any) {
     },
 
     "experimental.chat.system.transform": async (ctx: any, output: any) => {
+      // Skip chain enforcement blocks when gate is OFF (minimal mode).
+      // The <sensor-gate state="minimal"> signal is injected by prompt.ts
+      // on every turn when the gate toggle is OFF.
+      const gateOff = output.system?.some(
+        (s: string) => s.includes('<sensor-gate state="minimal">')
+      )
+      if (gateOff) return
+
       const gateInfo = extractSensorGate(output.system)
       if (!gateInfo || gateInfo.chain.length === 0) return
       if (gateInfo.chain.length === 1 && gateInfo.chain[0] === "context-compactor") return

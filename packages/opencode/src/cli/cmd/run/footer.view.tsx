@@ -28,7 +28,7 @@ import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { footerWidthPolicy } from "./footer.width"
-import { setSensorGateGloballyDisabled as setGateDisabled } from "@/session/prompt-state"
+import { isSensorGateEnabled, setSensorGateEnabled } from "@/session/prompt-state"
 import {
   formatKeyBindings,
   formatKeySequence,
@@ -343,11 +343,14 @@ export function RunFooterView(props: RunFooterViewProps) {
   const shell = createMemo(() => prompt() && composer.shell())
   const menu = createMemo(() => prompt() && composer.visible())
   const stateStatus = createMemo(() => props.state().status.trim())
-  const [sensorGateOn, setSensorGateOn] = createSignal(true)
+  // Sync with persisted server state on mount.
+  // isSensorGateEnabled() returns true when gate is ON (full mode).
+  // sensorGateOn follows the UI convention: true = ON (green), false = OFF (warning).
+  const [sensorGateOn, setSensorGateOn] = createSignal(isSensorGateEnabled())
   const toggleSensorGate = () => {
     const next = !sensorGateOn()
     setSensorGateOn(next)
-    setGateDisabled(!next)
+    setSensorGateEnabled(next)
   }
   const modeLabel = createMemo(() => {
     if (exiting()) {

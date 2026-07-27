@@ -470,11 +470,11 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                 init.headers.forEach((value, key) => headers.set(key, value))
               } else if (Array.isArray(init.headers)) {
                 for (const [key, value] of init.headers) {
-                  if (value !== undefined) headers.set(key, String(value))
+                  if (value !== undefined) headers.set(key, value)
                 }
               } else {
                 for (const [key, value] of Object.entries(init.headers)) {
-                  if (value !== undefined) headers.set(key, String(value))
+                  if (value !== undefined) headers.set(key, value)
                 }
               }
             }
@@ -547,7 +547,12 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
 
             if (!deviceResponse.ok) throw new Error("Failed to initiate device authorization")
 
-            const deviceData = (await deviceResponse.json()) as {
+            const deviceData: {
+              device_auth_id: string
+              user_code: string
+              interval: string
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            } = await deviceResponse.json() as unknown as {
               device_auth_id: string
               user_code: string
               interval: string
@@ -573,7 +578,11 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                   })
 
                   if (response.ok) {
-                    const data = (await response.json()) as {
+                    const data: {
+                      authorization_code: string
+                      code_verifier: string
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                    } = await response.json() as unknown as {
                       authorization_code: string
                       code_verifier: string
                     }
