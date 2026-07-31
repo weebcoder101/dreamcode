@@ -254,6 +254,27 @@ def ncd(x, y):
 5. Emit OOXML with styles, spacing, indents
 6. **Export modes**: "Retain Flowing Text" (best editability) vs "Retain Page Layout" (positioned boxes)
 
+### Adobe Patent Portfolio (Key Patents)
+- **US11200413B2**: Table recognition via NMF clustering of virtual whitespace+ruled lines
+- **US11176310B2**: Reading order via region adjacency + x-overlap → horizontal/vertical zones
+- **US10372821B2**: Reading order via probabilistic language models (n-gram/LSTM)
+- **US11783610B2**: Structure classification with post-processing error correction
+- **US6298357**: List/heading detection via presentation attributes (numbering, indentation, font)
+- **US6915484**: Text reflow preserving spatial relationships and vertical whitespace
+- **US11710262B2**: Font synthesis for missing fonts (descriptor comparison + glyph synthesis)
+- **US12597281B2**: Deep-learning table recognition (encoder + 3 decoders)
+- **ICDAR 2019**: Deep Splitting & Merging for merged cell detection (Adobe Research)
+
+### Converter v5 Status (2026-07-31)
+- **Table**: 6×5, identical structure, header, and data ✅
+- **Merged cells**: Rows 3-5 correctly handled ✅
+- **Heading 1**: "Customer ID" and "Note:" correctly classified ✅
+- **List items**: 5/7 split correctly ✅
+- **Styles**: 3/4 matched (Heading 1, List Paragraph, Normal)
+- **Body Text**: Adobe-only style, not yet mapped
+- **Paragraph count**: 23/36 (63%) — OCR limitation
+- **Font detection**: PDF rawdict for bold/italic flags ✅
+
 ## Version History
 - **v5** (2026-07-31): Multi-signal hybrid architecture — OCR + vector structure detection for vectorized PDFs. Table detection from thin filled rectangles. Coordinate space conversion.
 - **v4**: Fixed pipe-separated column splitting, reduced cell assignment tolerance
