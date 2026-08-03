@@ -355,6 +355,8 @@ export const BASE_SUBPROCESS_ENV: Record<string, string | undefined> = {
   PATH: process.env.PATH,
   HOME: process.env.HOME,
   PYTHONPATH: process.env.PYTHONPATH ?? "",
+  PYTHONIOENCODING: "utf-8",
+  PYTHONUTF8: "1",
 }
 
 

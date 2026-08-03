@@ -248,14 +248,27 @@ if ($BuildFromSource) {
 $CONFIG_SKILLS = "$env:USERPROFILE\.config\dreamcode\skills"
 $CONFIG_PLUGINS = "$env:USERPROFILE\.config\dreamcode\plugins"
 
-# Skills source candidates:
+# Skills/plugins source candidates:
 #   1. Bundled alongside the binary in the extracted archive (pre-built)
+#      Layout varies: flat zip → $extractDir/skills
+#                      tar.gz   → $extractDir/<name>/bin/skills
+#      Solution: find skills relative to the exe we already located.
 #   2. Source repo path (BuildFromSource)
-$bundledSkills = "$extractDir\skills"
+$bundledSkills = $null
+$bundledPlugins = $null
 $repoSkills = "$INSTALL_DIR\packages\opencode\src\skill\dreamcode\skills"
 $skillsSource = $null
 
-if (-not $BuildFromSource -and (Test-Path $bundledSkills)) {
+# Locate skills/plugins relative to the installed exe (archive-layout-agnostic)
+$exeCandidate = Get-ChildItem -Path $extractDir -Recurse -Filter "$APP.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $BuildFromSource -and $exeCandidate) {
+  $exeDir = Split-Path $exeCandidate.FullName -Parent
+  $bundledSkills = Join-Path $exeDir "skills"
+  $bundledPlugins = Join-Path $exeDir "plugins"
+  Write-Color "Probing skills at: $bundledSkills" $MUTED
+}
+
+if (-not $BuildFromSource -and $bundledSkills -and (Test-Path $bundledSkills)) {
   $skillsSource = $bundledSkills
   Write-Color "Found bundled skills in release archive." $MUTED
 } elseif ($BuildFromSource -and (Test-Path $repoSkills)) {
@@ -279,12 +292,11 @@ if ($skillsSource) {
   Write-Color "Skill chains will be disabled without skills." $ORANGE
 }
 
-# Plugins source candidates
-$bundledPlugins = "$extractDir\plugins"
+# Plugins source candidates (same logic as skills above)
 $repoPlugins = "$INSTALL_DIR\.opencode\plugins"
 $pluginsSource = $null
 
-if (-not $BuildFromSource -and (Test-Path $bundledPlugins)) {
+if (-not $BuildFromSource -and $bundledPlugins -and (Test-Path $bundledPlugins)) {
   $pluginsSource = $bundledPlugins
   Write-Color "Found bundled plugins in release archive." $MUTED
 } elseif ($BuildFromSource -and (Test-Path $repoPlugins)) {
