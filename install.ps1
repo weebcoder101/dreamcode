@@ -61,20 +61,28 @@ if (-not $BuildFromSource) {
     $tag = $release.tag_name
     Write-Color "Latest release: $tag" $MUTED
 
-    # Find the windows-x64 asset (build system produces .zip for Windows)
-    $assetName = "dreamcode-windows-x64.zip"
-    $downloadUrl = "https://github.com/$OWNER/$REPO/releases/download/$tag/$assetName"
-    $tempArchive = "$tempDir\$assetName"
-    $extractDir = "$tempDir\extracted"
-
-    New-Item -ItemType Directory -Force -Path $tempDir, $extractDir | Out-Null
-
-    try {
-      Download-File $downloadUrl $tempArchive
-    } catch {
-      Write-Color "ERROR: Failed to download $downloadUrl" $RED
+    # Find the windows-x64 asset — try .tar.gz first (v1.4.0+), then .zip (v1.3.x and earlier)
+    $winAsset = $release.assets | Where-Object { $_.name -match "windows-x64(?!.*baseline)" } | Sort-Object -Property name | Select-Object -First 1
+    if (-not $winAsset) {
+      Write-Color "ERROR: No windows-x64 asset found in release $tag" $RED
       Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
       $BuildFromSource = $true
+    } else {
+      $assetName = $winAsset.name
+      $downloadUrl = $winAsset.browser_download_url
+      $tempArchive = "$tempDir\$assetName"
+      $extractDir = "$tempDir\extracted"
+      Write-Color "Found asset: $assetName" $MUTED
+
+      New-Item -ItemType Directory -Force -Path $tempDir, $extractDir | Out-Null
+
+      try {
+        Download-File $downloadUrl $tempArchive
+      } catch {
+        Write-Color "ERROR: Failed to download $downloadUrl" $RED
+        Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
+        $BuildFromSource = $true
+      }
     }
   } catch {
     Write-Color "ERROR: Failed to fetch latest release from GitHub API." $RED
@@ -85,11 +93,26 @@ if (-not $BuildFromSource) {
 
 # ─── Phase 1b: Extract pre-built binary ───────────────────────────────
 if (-not $BuildFromSource -and (Test-Path $tempArchive)) {
-  Write-Color "Extracting..." $CYAN
+  Write-Color "Extracting $assetName..." $CYAN
 
-  # Use native PowerShell Expand-Archive (works on all Windows versions)
+  # Handle both .tar.gz (v1.4.0+) and .zip (v1.3.x and earlier)
   try {
-    Expand-Archive -Path $tempArchive -DestinationPath $extractDir -Force
+    if ($assetName -match "\.tar\.gz$|\.tgz$") {
+      # tar.gz: use built-in tar (Windows 10+ includes tar.exe)
+      if (Get-Command tar -ErrorAction SilentlyContinue) {
+        & tar -xzf $tempArchive -C $extractDir
+      } else {
+        Write-Color "WARN: tar not found — trying 7z..." $ORANGE
+        if (Get-Command 7z -ErrorAction SilentlyContinue) {
+          & 7z x $tempArchive -o"$extractDir" -y
+        } else {
+          throw "Neither tar nor 7z found. Install 7-Zip or use Windows 10+ (includes tar)."
+        }
+      }
+    } else {
+      # .zip: use native PowerShell Expand-Archive
+      Expand-Archive -Path $tempArchive -DestinationPath $extractDir -Force
+    }
   } catch {
     Write-Color "WARN: Extraction failed — falling back to source build: $_" $ORANGE
     $BuildFromSource = $true
