@@ -15,6 +15,7 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Session as SessionNs } from "@/session/session"
 import { SessionID } from "@/session/schema"
+import { SessionStatus } from "@/session/status"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { EventSequenceTable } from "@opencode-ai/core/event/sql"
 import { resetDatabase } from "../fixture/db"
@@ -61,6 +62,7 @@ const workspaceLayer = (experimentalWorkspaces: boolean) =>
     Layer.provide(PiecesLTM.defaultLayer),
     Layer.provide(SelfEvolve.defaultLayer),
     Layer.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))),
+    Layer.provide(SessionStatus.defaultLayer),
   )
 
 const testServerLayer = Layer.mergeAll(

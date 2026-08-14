@@ -28,6 +28,7 @@ type Active = {
   tail: Deferred.Deferred<void>
   promoted: Deferred.Deferred<Info>
   onPromote?: Effect.Effect<void>
+  onComplete?: (info: Info) => Effect.Effect<void, unknown, unknown>
 }
 
 type State = {
@@ -39,6 +40,7 @@ type FinishResult = {
   info?: Info
   done?: Deferred.Deferred<Info>
   scope?: Scope.Closeable
+  onComplete?: (info: Info) => Effect.Effect<void, unknown, unknown>
 }
 
 type PromoteResult = {
@@ -66,6 +68,12 @@ export type StartInput = {
   title?: string
   metadata?: Record<string, unknown>
   onPromote?: Effect.Effect<void>
+  /**
+   * Fired exactly once when the job reaches a final status (completed/error/
+   * cancelled), forked into the registry scope so it survives the scope that
+   * started the job. Cleared on promotion — the promoter owns the result.
+   */
+  onComplete?: (info: Info) => Effect.Effect<void, unknown, unknown>
   run: Effect.Effect<string, unknown>
 }
 
@@ -150,6 +158,7 @@ export const make = Effect.gen(function* () {
       const next = {
         ...job,
         onPromote: undefined,
+        onComplete: undefined,
         pending: 0,
         output,
         info: {
@@ -160,9 +169,22 @@ export const make = Effect.gen(function* () {
           ...(Exit.isFailure(exit) ? { error: errorText(Cause.squash(exit.cause)) } : {}),
         },
       }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
+      return [
+        { info: snapshot(next), done: job.done, scope: job.scope, onComplete: job.onComplete },
+        new Map(jobs).set(id, next),
+      ]
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
+    if (result.onComplete && result.info) {
+      // Fork into the registry scope: the job completes after the owner's turn
+      // scope is gone, and the result still needs to reach the parent agent.
+      // The cast drops the effect's requirement/env — the registry scope's
+      // context (inherited from the job's run fiber) provides them at runtime.
+      yield* (result.onComplete(result.info) as Effect.Effect<void>).pipe(
+        Effect.ignore,
+        Effect.forkIn(state.scope, { startImmediately: true }),
+      )
+    }
     if (result.scope) {
       yield* Scope.close(result.scope, Exit.void).pipe(Effect.forkIn(state.scope, { startImmediately: true }))
     }
@@ -232,6 +254,7 @@ export const make = Effect.gen(function* () {
               tail,
               promoted,
               onPromote: input.onPromote,
+              onComplete: input.onComplete,
             }
             return [{ info: snapshot(job), scope, token }, new Map(jobs).set(id, job)] as readonly [
               StartResult,
@@ -317,6 +340,7 @@ export const make = Effect.gen(function* () {
         const next = {
           ...job,
           onPromote: undefined,
+          onComplete: undefined,
           info: {
             ...job.info,
             metadata: { ...job.info.metadata, background: true },

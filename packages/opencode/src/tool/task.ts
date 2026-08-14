@@ -8,7 +8,7 @@ import { SessionID, MessageID, PartID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
-import type { SessionPrompt } from "../session/prompt"
+import type { PromptInput } from "../session/prompt"
 import { Config } from "@/config/config"
 import fs from "fs/promises"
 import path from "path"
@@ -22,13 +22,14 @@ import { Database } from "@opencode-ai/core/database/database"
 import { GlobalBus } from "@/bus/global"
 import { Log } from "@/util"
 import { extractSubagentContext, buildSubagentContextPrompt } from "@/session/subagent-context"
+import { SessionStatus } from "../session/status"
 
 const log = Log.create({ service: "tool.task" })
 
 export interface TaskPromptOps {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly resolvePromptParts: (template: string) => Effect.Effect<SessionPrompt.PromptInput["parts"]>
-  readonly prompt: (input: SessionPrompt.PromptInput) => Effect.Effect<SessionV1.WithParts>
+  readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts>
   readonly disableTaskTool?: boolean
 }
 
@@ -115,6 +116,7 @@ export const TaskTool = Tool.define(
   Effect.gen(function* () {
     const agent = yield* Agent.Service
     const background = yield* BackgroundJob.Service
+    const sessionStatus = yield* SessionStatus.Service
     const config = yield* Config.Service
     const sessions = yield* Session.Service
     const scope = yield* Scope.Scope
@@ -380,6 +382,89 @@ export const TaskTool = Tool.define(
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 
+      const buildParts = (state: "completed" | "error", text: string) =>
+        [
+          {
+            type: "text" as const,
+            synthetic: true as const,
+            text: renderOutput({
+              sessionID: nextSession.id,
+              state,
+              summary:
+                state === "completed"
+                  ? `Background task completed: ${params.description}`
+                  : `Background task failed: ${params.description}`,
+              text,
+            }),
+          },
+        ]
+
+      // Durable fallback: write a synthetic user message directly into the parent
+      // session so the result is never lost — the next turn's loop picks it up
+      // from history (and processes it if it ends up being the last message).
+      const queueSynthetic = Effect.fn("TaskTool.queueSyntheticMessage")(function* (
+        parent: Session.Info,
+        parts: ReturnType<typeof buildParts>,
+        childCost: number,
+        childTokens: {
+          input: number
+          output: number
+          reasoning?: number
+          cache?: { read: number; write: number }
+        } | undefined,
+      ) {
+        const lastUser = yield* MessageV2.stream(ctx.sessionID).pipe(
+          Effect.map((msgs) => msgs.findLast((m) => m.info.role === "user")),
+        )
+        const extraModel = ctx.extra?.model as
+          | { providerID: ProviderV2.ID; modelID: ModelV2.ID; variant?: string }
+          | undefined
+        const msg = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: ctx.sessionID,
+          time: { created: Date.now() },
+          agent: parent.agent ?? ctx.agent,
+          model:
+            (lastUser?.info as SessionV1.User | undefined)?.model ??
+            ({
+              providerID: extraModel?.providerID ?? ("provider" as ProviderV2.ID),
+              modelID: extraModel?.modelID ?? ("model" as ModelV2.ID),
+              variant: extraModel?.variant,
+            } satisfies SessionV1.User["model"]),
+        })
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: msg.id,
+          sessionID: ctx.sessionID,
+          type: "text",
+          synthetic: true,
+          text:
+            (parts.find((p) => p.type === "text") as SessionV1.TextPart | undefined)?.text ?? "",
+          time: { start: Date.now(), end: Date.now() },
+        })
+        if (childCost > 0) {
+          yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: msg.id,
+            sessionID: ctx.sessionID,
+            type: "step-finish",
+            reason: "completed",
+            cost: childCost,
+            tokens: {
+              input: childTokens?.input ?? 0,
+              output: childTokens?.output ?? 0,
+              reasoning: childTokens?.reasoning ?? 0,
+              cache: {
+                read: childTokens?.cache?.read ?? 0,
+                write: childTokens?.cache?.write ?? 0,
+              },
+            },
+          } satisfies SessionV1.StepFinishPart)
+        }
+        yield* Effect.logInfo(`[TaskTool] background result queued as synthetic message in ${ctx.sessionID}`)
+      })
+
       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
         state: "completed" | "error",
         text: string,
@@ -388,26 +473,22 @@ export const TaskTool = Tool.define(
         const childCost = yield* Ref.get(costRef)
         const childTokens = yield* Ref.get(tokensRef)
         const currentParent = yield* sessions.get(ctx.sessionID)
+        const parts = buildParts(state, text)
+        const busy = yield* sessionStatus
+          .get(ctx.sessionID)
+          .pipe(Effect.catch(() => Effect.succeed({ type: "idle" as const })))
+        if (busy.type === "busy") {
+          // Session is mid-turn — a synthetic prompt would corrupt the running
+          // loop; queue durably instead. The next turn sees the result.
+          yield* queueSynthetic(currentParent, parts, childCost, childTokens)
+          return
+        }
         yield* ops
           .prompt({
             sessionID: ctx.sessionID,
             agent: currentParent.agent ?? ctx.agent,
             variant,
-            parts: [
-              {
-                type: "text",
-                synthetic: true,
-                text: renderOutput({
-                  sessionID: nextSession.id,
-                  state,
-                  summary:
-                    state === "completed"
-                      ? `Background task completed: ${params.description}`
-                      : `Background task failed: ${params.description}`,
-                  text,
-                }),
-              },
-            ],
+            parts,
           })
           .pipe(
             // After the prompt creates the message, add a step-finish part so the
@@ -434,21 +515,32 @@ export const TaskTool = Tool.define(
               }
               return Effect.void
             }),
-            Effect.ignore,
-            Effect.forkIn(scope, { startImmediately: true }),
+            // Never lose the result: if the jump-start prompt fails, fall back
+            // to the durable synthetic message.
+            Effect.catch(() => queueSynthetic(currentParent, parts, childCost, childTokens)),
           )
       })
 
-      const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
-        yield* background.wait({ id: jobID }).pipe(
+      // Delivers a finished background job's output to the parent agent. Runs
+      // either in the registry scope (via onComplete, survives the turn) or in
+      // the turn scope (via notify) — the caller owns the fork.
+      const deliver = Effect.fn("TaskTool.deliverBackgroundResult")(function* (info: BackgroundJob.Info) {
+        if (info.status === "completed") return yield* inject("completed", info.output ?? "")
+        if (info.status === "error") return yield* inject("error", info.error ?? "")
+        return yield* Effect.void
+      })
+
+      const notify = (jobID: string): Effect.Effect<void> =>
+        background.wait({ id: jobID }).pipe(
           Effect.flatMap((result) => {
             if (result.info?.status === "completed") return inject("completed", result.info.output ?? "")
             if (result.info?.status === "error") return inject("error", result.info.error ?? "")
             return Effect.void
           }),
+          // forkIn keeps the effect's requirements; the tool scope provides them
+          // at runtime (background/job registry is instance-scoped), so erase.
           Effect.forkIn(scope, { startImmediately: true }),
-        )
-      })
+        ) as unknown as Effect.Effect<void>
 
       // Try to extend existing background job. If it exists, the new runTask is queued
       // and we fall through to wait for it — no early return (avoids stale cost).
@@ -461,6 +553,9 @@ export const TaskTool = Tool.define(
           type: id,
           title: params.description,
           metadata,
+          // Fired from the registry scope when the job finishes — survives the
+          // parent's turn and delivers the full output back to the parent agent.
+          onComplete: (jobInfo) => deliver(jobInfo),
           onPromote: ctx.metadata({
             title: params.description,
             metadata: { ...metadata, background: true, jobId: nextSession.id },
@@ -474,7 +569,6 @@ export const TaskTool = Tool.define(
         })
 
         if (runInBackground) {
-          yield* notify(info.id)
           return {
             title: params.description,
             metadata: {
