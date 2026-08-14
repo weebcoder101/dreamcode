@@ -37,6 +37,32 @@ import { ToolOutput, Usage, type LLMEvent } from "@opencode-ai/llm"
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
 
+/**
+ * Canonical fingerprint of a tool input for doom-loop detection. Bytes in the
+ * raw stream can differ (key order, whitespace, number formatting) while the
+ * semantic call is identical. This normalizes object key order, trims strings,
+ * and collapses duplicate whitespace so semantically-equal calls are caught.
+ */
+function normalizeToolInput(input: unknown): string {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize)
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {}
+      for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+        out[key] = normalize((value as Record<string, unknown>)[key])
+      }
+      return out
+    }
+    if (typeof value === "string") return value.trim().replace(/\s+/g, " ")
+    return value
+  }
+  try {
+    return JSON.stringify(normalize(input))
+  } catch {
+    return JSON.stringify(input)
+  }
+}
+
 export interface Handle {
   readonly message: SessionV1.Assistant
   readonly updateToolCall: (
@@ -530,7 +556,7 @@ export const layer = Layer.effect(
                   part.type === "tool" &&
                   part.tool === value.name &&
                   part.state.status !== "pending" &&
-                  JSON.stringify(part.state.input) === JSON.stringify(input),
+                  normalizeToolInput(part.state.input) === normalizeToolInput(input),
               )
             ) {
               return
@@ -1008,6 +1034,10 @@ export const layer = Layer.effect(
               ctx.currentTextID = undefined
               ctx.reasoningMap = {}
               yield* status.set(ctx.sessionID, { type: "busy" })
+              // Checkpoint before dispatch (DeepSeek Harness session-checkpoint
+              // pattern): settle all in-flight v2 fragments so a crash mid-request
+              // loses at most the in-flight stream, never un-flushed history.
+              yield* flushV2Fragments()
               const stream = llm.stream(streamInput)
               return yield* stream.pipe(
                 Stream.tap((event) => handleEvent(event)),

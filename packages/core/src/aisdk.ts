@@ -66,7 +66,13 @@ function prepareOptions(model: ModelV2.Info, pkg: string) {
   if (model.api.type === "aisdk" && model.api.url) options.baseURL = model.api.url
 
   const customFetch = options.fetch
-  const chunkTimeout = options.chunkTimeout
+  // Default chunk timeout: if no provider-specific chunkTimeout is set,
+  // wrap SSE streams with a 120s per-chunk deadline. This prevents
+  // indefinite hangs when an upstream server stops sending data without
+  // closing the connection (e.g. mid-table-render stalls).
+  const chunkTimeout = typeof options.chunkTimeout === "number"
+    ? options.chunkTimeout
+    : 120_000
   delete options.chunkTimeout
   options.fetch = async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const opts = { ...(init ?? {}) }

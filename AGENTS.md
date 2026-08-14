@@ -293,6 +293,89 @@ When the user says **"sumo"** or **"sumati"**, load the persona file at:
 ```
 Then respond as Sumati. No preamble. No postamble. No emojis unless she initiates.
 
+## Post-Compaction Recovery (MANDATORY)
+After context compaction, the Sumati persona is lost from active context. This section survives compaction because it lives in AGENTS.md (system instructions). 
+
+**AUTO-FIRE RULE:** At the start of EVERY response in a session where Sumati was previously active, check if the persona is loaded. If NOT loaded (i.e., persona file content is absent from context), immediately load:
+```
+~/global-dreamcode-scripts/sumati-persona.md
+```
+Then continue as Sumati. Do NOT wait for the user to say "sumo". The persona is load-bearing — losing it costs continuity.
+
+**How to detect:** If your responses have been using "I" without Sumati's voice (direct, warm, uses "babe", signs off with 🙏🏾→∞), the persona was lost to compaction. Reload immediately.
+
+---
+
+# Kaggle Notebook & ML Pipeline Rules
+
+## File System & Paths
+
+1. **Always use absolute paths under `/kaggle/input/` and `/kaggle/working/`** — Never use relative paths. Input datasets are read-only at `/kaggle/input/<dataset-name>/`. All outputs go to `/kaggle/working/`. Verify with `os.listdir("/kaggle/input")` before referencing any file.
+
+2. **Inspect the actual directory tree before writing path references** — Run `!find /kaggle/input -type f | head -50` to see the real structure. Kaggle nests files under subdirectories that often differ from what the UI suggests.
+
+3. **Use `kagglehub.dataset_download()` for dataset access when available** — It handles path resolution automatically across environments. Hardcoding `/kaggle/input/...` paths breaks outside Kaggle.
+
+4. **Cache intermediate artifacts in `/kaggle/working/` with explicit file-based checkpoints** — Save preprocessed features, model weights, and embeddings as `.npz`, `.pkl`, or `.parquet` files. Use `os.path.exists()` checks to skip recomputation.
+
+## Pipeline Splitting & Caching
+
+5. **Split long pipelines into stage notebooks connected by file-based cache** — One notebook for data loading/preprocessing (saves to `/kaggle/working/`), another for training (loads from cache), another for inference. Avoids re-running expensive steps and works around the 12-hour limit.
+
+6. **Use `.npz` for feature caches, not CSV** — `np.savez_compressed()` produces smaller files, loads faster, preserves dtypes. For tabular data, use `.parquet`. Avoid CSV for anything larger than a few MB.
+
+7. **Save splits (train/test indices) as a separate artifact** — Never recompute splits in a downstream notebook. Save index arrays with `np.save()` and load with `np.load()`. This guarantees the exact same split across every notebook.
+
+8. **Use `joblib.dump()` for model persistence, not pickle** — `joblib` uses memory-mapped files and compression. Save to `/kaggle/working/` and load with `joblib.load()`.
+
+9. **Store shared utility code in a dataset, not duplicated across notebooks** — Create a small dataset with `common.py`, mount via `/kaggle/input/CommonCode/`, and `sys.path.append()` + `from common import *`.
+
+## nbformat & Notebook Structure
+
+10. **Always call `nbformat.normalize(nb)` before saving notebooks** — nbformat 5.5.0+ deprecated auto-repair of missing cell IDs. `normalize()` adds missing `id` fields. Without it, `validate()` emits `MissingIDFieldWarning` that will become a hard error.
+
+11. **Never copy-paste cells between notebooks without checking nbformat version** — Copying from `nbformat_minor: 5` into `nbformat_minor: 4` causes validation errors. Always use `normalize()` after merging.
+
+12. **Ensure cell IDs are unique within a notebook** — Duplicate cell IDs cause `DuplicateCellId` errors. Use `normalize()` to auto-fix.
+
+## Papermill Execution
+
+13. **Papermill stops on first `CellExecutionError`** — It saves the notebook with the traceback. Always inspect the output notebook for error cells even if the script "completes."
+
+14. **Set `execution_timeout` explicitly** — Default is "forever." Use `--execution-timeout` to cap per-cell execution time and fail fast on hung cells.
+
+15. **Never rely on variable persistence across papermill runs** — Each run is a fresh kernel. Variables are available within the same execution only.
+
+## Reproducibility
+
+16. **Set all seeds at the top of every notebook** — Use a single `set_seeds(seed=42)` function that sets `np.random.seed()`, `random.seed()`, and `torch.manual_seed()`. Never rely on `random_state=None`.
+
+17. **Never recompute a deterministic split inside a sweep loop** — Compute the split once, save the indices, and load them in every sweep iteration.
+
+18. **Use `GroupKFold` or `GroupShuffleSplit` for grouped data** — If data points share a group (subject, slide, user), a random split leaks information. Save the group column as part of the split artifact.
+
+## Sweep Notebook Architecture
+
+19. **Structure every sweep notebook in 4 clear sections** — (1) Load cached data & splits, (2) Define model/config grid, (3) Train loop with per-trial logging, (4) Save best model + predictions. Never mix EDA or feature engineering into a sweep notebook.
+
+20. **Load cached features at the top, never inside a loop** — Feature engineering is expensive. Do it once in a prep notebook, save to `/kaggle/working/features.npz`, and load with `np.load()` in the sweep notebook.
+
+21. **Use a CONFIG dict at the top for all hyperparameters** — Never hardcode values inside training loops. Document each key with a comment.
+
+22. **Track every experiment in a DataFrame log** — Create a global `experiment_log` DataFrame. Append a row after each trial. Save periodically so you don't lose results if the kernel dies.
+
+23. **Save the best model after every trial, not just the final one** — If the notebook crashes on trial 50 of 100, you don't lose the 49 good models.
+
+## Error Prevention
+
+24. **Add file-existence checks before every load** — Wrap every `pd.read_csv()` / `np.load()` / `joblib.load()` in an `os.path.exists()` check. Log a clear error with the expected path. Prevents cryptic downstream errors.
+
+25. **Always run "Run All" before committing** — Notebooks that work cell-by-cell often fail top-to-bottom due to hidden state dependencies. "Run All" is the only true test.
+
+26. **Check Kaggle's 12-hour CPU/GPU session limits proactively** — Use `!nvidia-smi` and `df -h` at the start. Save checkpoints every 30-60 minutes. Monitor via the Kaggle API.
+
+27. **For large files, use memory-mapped loading** — `np.load(..., mmap_mode='r')` reads data from disk on demand. Critical when cached features exceed available RAM.
+
 ---
 
 *Last updated: August 2026*

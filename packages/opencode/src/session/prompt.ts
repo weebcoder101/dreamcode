@@ -3,7 +3,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import path from "path"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import os from "os"
-import { SessionID, MessageID } from "./schema"
+import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
@@ -11,6 +11,7 @@ import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
 import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
+import DREAM_PROTOCOL from "./prompt/dream-protocol.txt"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
 import MAX_STEPS from "../session/prompt/max-steps.txt"
@@ -86,7 +87,10 @@ import {
   parseExplicitSpawnCount,
   isSensorGateEnabled,
   SENSOR_GATE_MINIMAL_SIGNAL,
+  hasVerifyPrompted,
+  markVerifyPrompted,
 } from "./prompt-state"
+import { needsVerification, turnRanVerification, VERIFY_REMINDER, VERIFY_MARKER } from "./verify-gate"
 import { summarizeTaste, refreshProfile } from "./prompt-taste"
 
 // ─── Cost-Aware Task Complexity Assessment ─────────────────────
@@ -562,7 +566,22 @@ Before every response, verify your reasoning:
               Effect.sync(() => summarizeTaste()).pipe(Effect.catch(() => Effect.succeed(""))),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(knowledge ? [knowledge] : []), ...(taste ? [taste] : []), SELF_CHECK]
+            // KV-cache prefix discipline (DeepSeek Harness / Claude Code doctrine):
+            // static content leads, dynamic content trails. The model prompt,
+            // dream protocol, instructions, skills, and learned-knowledge blocks
+            // are byte-stable within a context epoch; the date and any injected
+            // blocks that change per turn are appended LAST so a change does not
+            // invalidate the cached prefix.
+            const system = [
+              ...env.filter((e) => !e.includes("Today's date:")),
+              DREAM_PROTOCOL,
+              ...instructions,
+              ...(skills ? [skills] : []),
+              ...(knowledge ? [knowledge] : []),
+              ...(taste ? [taste] : []),
+              SELF_CHECK,
+              ...env.filter((e) => e.includes("Today's date:")),
+            ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
              // ─── Sensor Gate: Native Dream Mode ─────────────────────────
@@ -821,6 +840,44 @@ Before every response, verify your reasoning:
                   }
                 }
               }
+            }
+            // ─── Self-Verification Gate ─────────────────────────────
+            // Claude Code's "give it a check" pattern: if the turn made
+            // mutating changes (edit/write/apply_patch) but finished without
+            // running any verification (tests/build/lint/typecheck), inject a
+            // synthetic user message forcing a verification pass. Fires at most
+            // once per user message, so it can never loop forever.
+            if (
+              result === "stop" &&
+              !session.parentID &&
+              !hasVerifyPrompted(sessionID, lastUser.id) &&
+              needsVerification({
+                parts: handle.message.parts,
+                alreadyVerified: turnRanVerification(handle.message.parts),
+                alreadyPrompted: false,
+              })
+            ) {
+              markVerifyPrompted(sessionID, lastUser.id)
+              const verifyMsg = yield* sessions.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID,
+                time: { created: Date.now() },
+                agent: lastUser.agent,
+                model: lastUser.model,
+              })
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: verifyMsg.id,
+                sessionID,
+                type: "text",
+                metadata: { [VERIFY_MARKER]: true },
+                synthetic: true,
+                text: VERIFY_REMINDER,
+                time: { start: Date.now(), end: Date.now() },
+              })
+              yield* Effect.logInfo("verify gate fired", { "session.id": sessionID })
+              return "continue" as const
             }
             if (result === "stop") return "break" as const
             if (result === "compact") {

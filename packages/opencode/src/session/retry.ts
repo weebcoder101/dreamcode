@@ -27,9 +27,23 @@ export const RETRY_INITIAL_DELAY = 2000
 export const RETRY_BACKOFF_FACTOR = 2
 export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
+export const RETRY_JITTER_RATIO = 0.2 // full jitter: ±20% around the backoff delay
 
 function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
+}
+
+/**
+ * Exponential backoff with full jitter (DeepSeek Harness llm-retry pattern).
+ * Jitter de-synchronizes retry storms: without it, N agents hitting a 429
+ * all retry in lockstep, multiplying the load that caused the 429.
+ * Applied at the policy level (actual wait), not inside `delay()`, so the
+ * deterministic schedule tests keep passing.
+ */
+export function jittered(delayMs: number) {
+  const ratio = RETRY_JITTER_RATIO
+  const jittered = delayMs * (1 - ratio + 2 * ratio * Math.random())
+  return cap(jittered)
 }
 
 export function delay(attempt: number, error?: SessionV1.APIError) {
@@ -40,6 +54,7 @@ export function delay(attempt: number, error?: SessionV1.APIError) {
       if (retryAfterMs) {
         const parsedMs = Number.parseFloat(retryAfterMs)
         if (!Number.isNaN(parsedMs)) {
+          // Provider-specified delay is authoritative — do not jitter it.
           return cap(parsedMs)
         }
       }
@@ -72,7 +87,24 @@ export function retryable(error: Err, provider: string) {
     const status = error.data.statusCode
     // 5xx errors are transient server failures and should always be retried,
     // even when the provider SDK doesn't explicitly mark them as retryable.
-    if (!error.data.isRetryable && !(status !== undefined && status >= 500)) return undefined
+    if (!error.data.isRetryable && !(status !== undefined && status >= 500)) {
+      // DeepSeek's OpenAI-compatible API returns a structured JSON body with a
+      // `code` field (e.g. RATE_LIMIT, SERVER_ERROR, QUOTA_EXCEEDED,
+      // INSUFFICIENT_BALANCE is NOT retryable). Classify the known transient
+      // codes here so 429-style responses without an HTTP 429 still retry.
+      const body = parseJSON(error.data.responseBody)
+      const code = isRecord(body) && typeof body.code === "string" ? body.code.toUpperCase() : ""
+      if (code) {
+        const transient = ["RATE_LIMIT", "SERVER_ERROR", "SERVER", "TIMEOUT", "QUOTA_EXCEEDED", "BUSY"]
+        if (transient.includes(code)) {
+          return { message: error.data.message || `Provider error: ${code}` }
+        }
+        if (code === "INSUFFICIENT_BALANCE" || code === "INVALID_REQUEST" || code === "AUTHENTICATION_FAILED") {
+          return undefined
+        }
+      }
+      return undefined
+    }
     if (error.data.responseBody?.includes("FreeUsageLimitError")) {
       return {
         message: GO_UPSELL_MESSAGE,
@@ -184,7 +216,12 @@ export function policy(opts: {
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
-        const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
+        const base = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
+        // Jitter the wait UNLESS the provider supplied an authoritative
+        // Retry-After (already surfaced by delay() as the header value —
+        // delay() caps non-header delays at RETRY_MAX_DELAY_NO_HEADERS, so
+        // only jitter when the base delay stayed under that cap).
+        const wait = base <= RETRY_MAX_DELAY_NO_HEADERS ? jittered(base) : base
         const now = yield* Clock.currentTimeMillis
         yield* opts.set({
           attempt: meta.attempt,

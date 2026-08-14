@@ -165,6 +165,23 @@ export {
   parseExplicitSpawnCount,
 }
 
+// ─── Self-Verification Gate per Session ─────────────────────────
+// Tracks whether the self-verification gate has prompted for the current
+// user message. Fires at most once per user message (no infinite loops).
+const verifyPromptedMap = new Map<SessionID, string>()
+
+export function hasVerifyPrompted(sessionID: SessionID, userMessageID: string): boolean {
+  return verifyPromptedMap.get(sessionID) === userMessageID
+}
+
+export function markVerifyPrompted(sessionID: SessionID, userMessageID: string): void {
+  verifyPromptedMap.set(sessionID, userMessageID)
+}
+
+export function resetVerifyPrompted(sessionID: SessionID): void {
+  verifyPromptedMap.delete(sessionID)
+}
+
 // ─── Token Budget per Session ───────────────────────────────────
 // Prevents runaway token consumption from persona subagents.
 // Limits are per-session and reset when a new session starts.

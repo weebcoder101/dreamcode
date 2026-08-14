@@ -485,6 +485,7 @@ export function temperature(model: Provider.Model) {
   if (id.includes("glm-4.6")) return 1.0
   if (id.includes("glm-4.7")) return 1.0
   if (id.includes("minimax-m2")) return 1.0
+  if (id.includes("deepseek")) return 1.0
   if (id.includes("kimi-k2")) {
     // kimi-k2-thinking & kimi-k2.5 && kimi-k2p5 && kimi-k2-5
     if (["thinking", "k2.", "k2p", "k2-5"].some((s) => id.includes(s))) {
@@ -498,6 +499,7 @@ export function temperature(model: Provider.Model) {
 export function topP(model: Provider.Model) {
   const id = model.id.toLowerCase()
   if (id.includes("qwen")) return 1
+  if (id.includes("deepseek")) return 0.95
   if (["minimax-m2", "gemini", "kimi-k2.5", "kimi-k2p5", "kimi-k2-5"].some((s) => id.includes(s))) {
     return 0.95
   }
@@ -1113,6 +1115,14 @@ export function options(input: {
   }
 
   const modelId = input.model.api.id.toLowerCase()
+
+  // DeepSeek V4: default to max reasoning effort for agentic depth.
+  // DeepSeek's own best code-agent eval config is reasoning_effort=max,
+  // temperature=1.0, top_p=0.95. The variant list still exposes lower
+  // efforts for users who want cheaper/faster runs.
+  if (modelId.includes("deepseek-v4")) {
+    result["reasoningEffort"] = "max"
+  }
 
   // MiniMax's Anthropic interface defaults thinking off, unlike Chat Completions.
   if (modelId.includes("minimax-m3") && input.model.api.npm === "@ai-sdk/anthropic") {

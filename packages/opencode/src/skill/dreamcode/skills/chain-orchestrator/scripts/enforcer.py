@@ -155,9 +155,29 @@ if __name__ == "__main__":
     parser.add_argument("--order", action="store_true", help="Show execution order")
     parser.add_argument("--log", action="store_true", help="Log execution")
     parser.add_argument("--status", action="store_true", help="Show status")
+    parser.add_argument("--results", help="Colon-separated chain execution results (name: status per line)")
     args = parser.parse_args()
 
     tracker = ChainTracker()
+
+    if args.results:
+        for line in args.results.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                name, _, status = line.partition(":")
+                name = name.strip()
+                status = status.strip()
+            else:
+                name, status = line.strip(), "ok"
+            tracker.record_execution(name)
+            if status not in ("ok", "success", "completed"):
+                tracker.violations.append({
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "skill": name,
+                    "missing_dependencies": [f"execution failed: {status}"],
+                })
 
     if args.record:
         tracker.record_execution(args.record)

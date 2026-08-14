@@ -20,6 +20,26 @@ import { PartID } from "./schema"
 import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { gateToolCall } from "./dream-gate"
+import { repairToolInput } from "./tool-repair"
+import { deadline, timeoutOf } from "@/util/timeout"
+
+// Per-tool timeout ceilings (ms). A hung tool must never hang the whole turn:
+// the deadline converts a stuck execution into a structured, recoverable
+// TOOL_TIMEOUT result the model can react to. Mirrors DeepSeek Harness
+// guard/timeout-policy.
+const TOOL_TIMEOUT_MS: Record<string, number> = {
+  bash: 300_000,
+  task: 900_000,
+  apply_patch: 120_000,
+  patch: 120_000,
+  edit: 120_000,
+  write: 120_000,
+  webfetch: 60_000,
+  websearch: 60_000,
+}
+const TOOL_TIMEOUT_DEFAULT_MS = 300_000
+const TOOL_TIMEOUT_CODE = "TOOL_TIMEOUT"
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -37,6 +57,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
+
+  // Per-assistant-message gate state: the Dream Protocol gate fires at most
+  // once per message (a course-correction signal, never a deadlock).
+  let dreamGated = false
+  const gateState = {
+    alreadyGated: () => dreamGated,
+    markGated: () => {
+      dreamGated = true
+    },
+  }
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
@@ -84,13 +114,70 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
-            const ctx = context(args, options)
+            const gate = gateToolCall({
+              tool: item.id,
+              message: input.processor.message,
+              bypassAgentCheck: input.bypassAgentCheck,
+              ...gateState,
+            })
+            if (gate.kind === "block") {
+              yield* input.processor.completeToolCall(options.toolCallId, gate.output)
+              return gate.output
+            }
+            // Tool-call repair: DeepSeek-family models repeat a small set of
+            // argument mistakes (null optionals, stringified arrays, bare
+            // strings where arrays are expected, markdown-linked paths).
+            // Repair them after the model produces them; tag the result so
+            // the model learns for next time.
+            const repaired = repairToolInput(item.id, args, schema)
+            const ctx = context(repaired.args, options)
+            if (repaired.notes.length > 0) {
+              yield* input.processor.updateToolCall(options.toolCallId, (match) => {
+                if (!["running", "pending"].includes(match.state.status)) return match
+                return {
+                  ...match,
+                  state: {
+                    ...match.state,
+                    input: repaired.args,
+                  },
+                }
+              })
+            }
             yield* plugin.trigger(
               "tool.execute.before",
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
-            const result = yield* item.execute(args, ctx)
+            // Tool timeout enforcement: a hung tool must never hang the turn.
+            // Arm a deadline on the tool's signal; if OUR timer wins, replace
+            // the result with a structured TOOL_TIMEOUT error the model can
+            // recover from. The upstream signal is restored afterwards.
+            const timeoutMs = TOOL_TIMEOUT_MS[item.id] ?? TOOL_TIMEOUT_DEFAULT_MS
+            const d = deadline(options.abortSignal, timeoutMs, TOOL_TIMEOUT_CODE)
+            let rawResult: Awaited<ReturnType<typeof item.execute>>
+            try {
+              rawResult = yield* item.execute(repaired.args, { ...ctx, abort: d.signal } as any)
+              if (timeoutOf(d, TOOL_TIMEOUT_CODE) !== undefined) {
+                rawResult = {
+                  title: `Tool timed out after ${timeoutMs}ms`,
+                  metadata: { tool_timeout: true, timeoutMs, tool: item.id },
+                  output: `Error: tool call "${item.id}" timed out after ${timeoutMs}ms. The operation was aborted. Diagnose why (is the command waiting for input? does it need a flag?) and try a focused alternative — do NOT retry the identical call.`,
+                } as any
+              }
+            } finally {
+              d[Symbol.dispose]()
+            }
+            const result =
+              repaired.notes.length > 0
+                ? {
+                    ...rawResult,
+                    metadata: {
+                      ...rawResult.metadata,
+                      tool_input_repaired: item.id,
+                    },
+                    output: appendRepairNote(rawResult.output, repaired.notes),
+                  }
+                : rawResult
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({
@@ -204,5 +291,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   return tools
 })
+
+function appendRepairNote(output: string | undefined, notes: string[]): string {
+  if (notes.length === 0) return output ?? ""
+  const note = `\n\nNote: I received ${notes.join(" ")} Corrected call executed as shown.`
+  return output ? `${output}${note}` : note.trimStart()
+}
 
 export * as SessionTools from "./tools"
