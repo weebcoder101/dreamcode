@@ -3,7 +3,7 @@ import { useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useBindings, useKeymapSelector } from "@opentui/keymap/solid"
 import { RGBA, VignetteEffect, type KeyEvent, type Renderable } from "@opentui/core"
 import { createBindingLookup, type BindingConfig } from "@opentui/keymap/extras"
-import type { TuiPlugin, TuiPluginApi, TuiPluginMeta, TuiPluginModule, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi, TuiPluginMeta, TuiPluginModule, TuiSlotPlugin, TuiSlotProps } from "@opencode-ai/plugin/tui"
 
 const tabs = ["overview", "counter", "help"]
 const command = {
@@ -708,7 +708,13 @@ const Modal = (props: {
   )
 }
 
-const home = (api: TuiPluginApi, input: Cfg) => ({
+type HomeSlots = {
+  home_prompt: { workspace_id?: string }
+  home_prompt_right: { workspace_id?: string }
+  smoke_prompt_right: { workspace_id?: string; label?: string }
+}
+
+const home = (api: TuiPluginApi, input: Cfg): TuiSlotPlugin<HomeSlots> => ({
   slots: {
     home_logo(ctx) {
       const map = ctx.theme.current
@@ -762,11 +768,10 @@ const home = (api: TuiPluginApi, input: Cfg) => ({
 
       return (
         <Prompt
-          workspaceID={value.workspace_id}
           hint={hint}
           right={
             <box flexDirection="row" gap={1}>
-              <Slot name="home_prompt_right" workspace_id={value.workspace_id} />
+              <Slot {...({ name: "home_prompt_right", workspace_id: value.workspace_id } as TuiSlotProps<"home_prompt_right"> & { workspace_id?: string })} />
               <Slot name="smoke_prompt_right" workspace_id={value.workspace_id} label={input.label} />
             </box>
           }

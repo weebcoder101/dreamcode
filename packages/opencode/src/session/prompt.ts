@@ -298,10 +298,10 @@ export const layer = Layer.effect(
                 const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: {
                   gateResult: any; explicitSpawnCount: number; sessionID: SessionID;
                   msgs: any[]; system: string[]; model: any; ctx: any;
-                  handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
+                  instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
                   sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
                   personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
-                  chainExecutor: any;
+                  chainExecutor: any; sys: any; taskComplexity?: "simple" | "medium" | "complex";
                 }) {
                   return yield* processSensorGatePhaseFn({ ...input, sys })
                 })
@@ -554,7 +554,7 @@ Before every response, verify your reasoning:
                 }
               }
             }
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs as unknown as { info: import("@opencode-ai/sdk").Message; parts: import("@opencode-ai/sdk").Part[] }[] })
             const [skills, env, knowledge, instructions, taste, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
@@ -831,9 +831,13 @@ Before every response, verify your reasoning:
                   // before the user can get an actual response.
                   if (preTurnBlocked) {
                     const reEnforcement = buildUnloadedChainBlockMessage(unloaded)
-                    for (const part of handle.message.parts) {
+                    const parts = yield* MessageV2.parts(handle.message.id).pipe(
+                      Effect.provideService(Database.Service, database),
+                    )
+                    for (const part of parts) {
                       if (part.type === "text") {
                         part.text = reEnforcement
+                        yield* sessions.updatePart(part)
                       }
                     }
                     yield* sessions.updateMessage(handle.message)
@@ -847,13 +851,16 @@ Before every response, verify your reasoning:
             // running any verification (tests/build/lint/typecheck), inject a
             // synthetic user message forcing a verification pass. Fires at most
             // once per user message, so it can never loop forever.
+            const assistantParts = yield* MessageV2.parts(handle.message.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
             if (
               result === "stop" &&
               !session.parentID &&
               !hasVerifyPrompted(sessionID, lastUser.id) &&
               needsVerification({
-                parts: handle.message.parts,
-                alreadyVerified: turnRanVerification(handle.message.parts),
+                parts: assistantParts,
+                alreadyVerified: turnRanVerification(assistantParts),
                 alreadyPrompted: false,
               })
             ) {
@@ -892,7 +899,7 @@ Before every response, verify your reasoning:
             return "continue" as const
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
-            Effect.onInterrupt(() => finalizeInterruptedAssistant),
+            Effect.onInterrupt(() => finalizeInterruptedAssistant()),
           )
           if (outcome === "break") break
           continue
