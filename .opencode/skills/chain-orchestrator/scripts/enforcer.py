@@ -7,10 +7,12 @@ were properly executed. Logs violations.
 """
 
 import json
-from datetime import UTC, datetime
+import os
+from datetime import datetime, timezone
+UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
 from pathlib import Path
 
-PROJECT_ROOT = Path.cwd() if (Path.cwd() / ".opencode").is_dir() else next(p for p in [Path.cwd()] + list(Path.cwd().parents) if (p / ".opencode").is_dir())
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 LOG_PATH = PROJECT_ROOT / "evolution" / "chain_execution.jsonl"
 
 
@@ -27,28 +29,28 @@ CHAIN_DEPENDENCIES = {
     "lint-fixer": ["code-hardener"],
     "pieces-ltm": ["lint-fixer"],
     "automated-learning": ["pieces-ltm", "lint-fixer"],
-    "quality": ["lint-fixer"],
+    "testing": ["lint-fixer"],
     "security": ["code-hardener"],
     "testing": ["lint-fixer"],
     "debugging": ["code-hardener"],
     "performance": ["code-hardener"],
     "architecture": ["neuro"],
     "planning": ["architecture"],
-    "python": ["quality"],
-    "frontend": ["quality"],
-    "react": ["quality"],
+    "python": ["testing"],
+    "frontend": ["testing"],
+    "frontend": ["testing"],
     "api": ["security"],
-    "git": ["quality"],
+    "git": ["testing"],
     "devops": ["security"],
-    "data": ["quality"],
+    "data": ["testing"],
     "quantum": ["performance"],
     "product": ["planning"],
-    "research": ["documentation"],
-    "documentation": ["communication"],
+    "research": ["communication"],
+    "communication": ["communication"],
     "communication": [],
     "refactoring": ["code-hardener"],
-    "onboarding": ["documentation"],
-    "automation": ["quality"],
+    "onboarding": ["communication"],
+    "automation": ["testing"],
     "breakthrough-overdrive-innovation": ["neuro"],
 }
 
@@ -153,9 +155,29 @@ if __name__ == "__main__":
     parser.add_argument("--order", action="store_true", help="Show execution order")
     parser.add_argument("--log", action="store_true", help="Log execution")
     parser.add_argument("--status", action="store_true", help="Show status")
+    parser.add_argument("--results", help="Colon-separated chain execution results (name: status per line)")
     args = parser.parse_args()
 
     tracker = ChainTracker()
+
+    if args.results:
+        for line in args.results.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                name, _, status = line.partition(":")
+                name = name.strip()
+                status = status.strip()
+            else:
+                name, status = line.strip(), "ok"
+            tracker.record_execution(name)
+            if status not in ("ok", "success", "completed"):
+                tracker.violations.append({
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "skill": name,
+                    "missing_dependencies": [f"execution failed: {status}"],
+                })
 
     if args.record:
         tracker.record_execution(args.record)

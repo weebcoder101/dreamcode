@@ -33,6 +33,8 @@ import {
   formatKeyBindings,
   formatKeySequence,
   useKeymapSelector,
+  OPENCODE_BASE_MODE,
+  useBindings,
   type OpenTuiKeymap,
 } from "@opencode-ai/tui/keymap"
 import type {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import * as PersonaTracker from "../../src/session/persona-tracker"
 
 describe("persona-tracker pure functions", () => {
@@ -66,7 +67,7 @@ describe("persona-tracker pure functions", () => {
 
   describe("create tracker", () => {
     test("create returns a tracker with correct sessionID", () => {
-      const tracker = PersonaTracker.create("test-session", 3)
+      const tracker = Effect.runSync(PersonaTracker.create("test-session", 3))
       expect(tracker.sessionID).toBe("test-session")
       expect(typeof tracker.remaining).toBe("function")
       expect(typeof tracker.complete).toBe("function")
@@ -74,31 +75,27 @@ describe("persona-tracker pure functions", () => {
     })
 
     test("getAll() returns empty array for fresh tracker", () => {
-      const tracker = PersonaTracker.create("test-session", 3)
+      const tracker = Effect.runSync(PersonaTracker.create("test-session", 3))
       // getAll is an Effect, we test it via runSync
-      const { Effect } = require("effect")
       const results = Effect.runSync(tracker.getAll())
       expect(results).toEqual([])
     })
 
     test("remaining() returns total for fresh tracker", () => {
-      const tracker = PersonaTracker.create("test-session", 3)
-      const { Effect } = require("effect")
+      const tracker = Effect.runSync(PersonaTracker.create("test-session", 3))
       const remaining = Effect.runSync(tracker.remaining())
       expect(remaining).toBe(3)
     })
 
     test("complete decrements remaining count", () => {
-      const { Effect } = require("effect")
-      const tracker = PersonaTracker.create("test-session", 2)
+      const tracker = Effect.runSync(PersonaTracker.create("test-session", 2))
       Effect.runSync(tracker.complete("Alice", "QA", "All clear", "completed"))
       const remaining = Effect.runSync(tracker.remaining())
       expect(remaining).toBe(1)
     })
 
     test("getAll returns accumulated results after completes", () => {
-      const { Effect } = require("effect")
-      const tracker = PersonaTracker.create("test-session", 2)
+      const tracker = Effect.runSync(PersonaTracker.create("test-session", 2))
       Effect.runSync(tracker.complete("Alice", "QA", "All clear", "completed", {
         task: "test the feature",
         goals: ["find bugs"],

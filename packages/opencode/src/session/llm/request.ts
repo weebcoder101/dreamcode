@@ -117,8 +117,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       sessionID: input.sessionID,
       agent: input.agent.name,
       model: input.model,
-      provider: input.provider,
-      message: input.user,
+      provider: { source: input.provider.source, info: input.provider, options: input.provider.options },
+      message: input.user as any,
     },
     {
       temperature: input.model.capabilities.temperature
@@ -137,8 +137,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       sessionID: input.sessionID,
       agent: input.agent.name,
       model: input.model,
-      provider: input.provider,
-      message: input.user,
+      provider: { source: input.provider.source, info: input.provider, options: input.provider.options },
+      message: input.user as any,
     },
     {
       headers: {},

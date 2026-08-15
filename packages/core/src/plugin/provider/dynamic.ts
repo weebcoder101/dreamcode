@@ -1,3 +1,4 @@
+import path from "node:path"
 import { Npm } from "../../npm"
 import { Effect, Option, Config } from "effect"
 import { pathToFileURL } from "url"

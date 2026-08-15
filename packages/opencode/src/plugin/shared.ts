@@ -26,7 +26,7 @@ export function parsePluginSpecifier(spec: string) {
   const hit = parse(spec)
   if (hit?.type === "alias" && !hit.name) {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    const sub = (hit as { subSpec: npa.Result }).subSpec
+    const sub = (hit as unknown as { subSpec: npa.Result }).subSpec
     if (sub?.name) {
       const version = !sub.rawSpec || sub.rawSpec === "*" ? "latest" : sub.rawSpec
       return { pkg: sub.name, version }

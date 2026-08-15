@@ -21,7 +21,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { gateToolCall } from "./dream-gate"
-import { repairToolInput } from "./tool-repair"
+import { repairToolInput, type JsonSchema } from "./tool-repair"
 import { deadline, timeoutOf } from "@/util/timeout"
 
 // Per-tool timeout ceilings (ms). A hung tool must never hang the whole turn:
@@ -72,12 +72,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     sessionID: input.session.id,
     abort: options.abortSignal!,
     messageID: input.processor.message.id,
-    callID: options.toolCallId,
+    callID: options.toolCallId ?? "",
     extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
     agent: input.agent.name,
     messages: input.messages,
     metadata: (val) =>
-      input.processor.updateToolCall(options.toolCallId, (match) => {
+      input.processor.updateToolCall(options.toolCallId ?? "", (match) => {
         if (!["running", "pending"].includes(match.state.status)) return match
         return {
           ...match,
@@ -95,7 +95,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         .ask({
           ...req,
           sessionID: input.session.id,
-          tool: { messageID: input.processor.message.id, callID: options.toolCallId },
+          tool: { messageID: input.processor.message.id, callID: options.toolCallId ?? "" },
           ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
         })
         .pipe(Effect.orDie),
@@ -116,12 +116,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           Effect.gen(function* () {
             const gate = gateToolCall({
               tool: item.id,
-              message: input.processor.message,
+              parts: (input.processor.message as SessionV1.Assistant & { parts: SessionV1.Part[] }).parts,
               bypassAgentCheck: input.bypassAgentCheck,
               ...gateState,
             })
             if (gate.kind === "block") {
-              yield* input.processor.completeToolCall(options.toolCallId, gate.output)
+              yield* input.processor.completeToolCall(options.toolCallId ?? "", gate.output)
               return gate.output
             }
             // Tool-call repair: DeepSeek-family models repeat a small set of
@@ -129,10 +129,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             // strings where arrays are expected, markdown-linked paths).
             // Repair them after the model produces them; tag the result so
             // the model learns for next time.
-            const repaired = repairToolInput(item.id, args, schema)
-            const ctx = context(repaired.args, options)
+            const repaired = repairToolInput(item.id, args as Record<string, unknown>, schema as unknown as JsonSchema)
+            const ctx = context(repaired.args as Record<string, unknown>, options)
             if (repaired.notes.length > 0) {
-              yield* input.processor.updateToolCall(options.toolCallId, (match) => {
+              yield* input.processor.updateToolCall(options.toolCallId ?? "", (match) => {
                 if (!["running", "pending"].includes(match.state.status)) return match
                 return {
                   ...match,
@@ -140,12 +140,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                     ...match.state,
                     input: repaired.args,
                   },
-                }
+                } as SessionV1.ToolPart
               })
             }
             yield* plugin.trigger(
               "tool.execute.before",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID ?? "" },
               { args },
             )
             // Tool timeout enforcement: a hung tool must never hang the turn.
@@ -154,7 +154,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             // recover from. The upstream signal is restored afterwards.
             const timeoutMs = TOOL_TIMEOUT_MS[item.id] ?? TOOL_TIMEOUT_DEFAULT_MS
             const d = deadline(options.abortSignal, timeoutMs, TOOL_TIMEOUT_CODE)
-            let rawResult: Awaited<ReturnType<typeof item.execute>>
+            let rawResult: Effect.Success<ReturnType<typeof item.execute>>
             try {
               rawResult = yield* item.execute(repaired.args, { ...ctx, abort: d.signal } as any)
               if (timeoutOf(d, TOOL_TIMEOUT_CODE) !== undefined) {
@@ -189,11 +189,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
             yield* plugin.trigger(
               "tool.execute.after",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID ?? "", args },
               output,
             )
             if (options.abortSignal?.aborted) {
-              yield* input.processor.completeToolCall(options.toolCallId, output)
+              yield* input.processor.completeToolCall(options.toolCallId ?? "", output)
             }
             return output
           }),

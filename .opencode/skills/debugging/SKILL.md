@@ -20,6 +20,10 @@ Do not guess. Do not change random things. Follow the scientific method: hypothe
 - Production incident
 - User reports a bug
 
+## Protocol: LSP-First, Cheapest Validation First
+
+Read PROTOCOL.md in this skill directory and follow it. Summary: tool ladder lsp (50ms) > relations (1-3s) > grep (1-3s) > read > bash; validation ladder targeted-test > dev-run > fresh typecheck > full build LAST. State your hypothesis + the cheapest validation before any expensive command.
+
 ## Process
 
 ### Phase 1: Reproduce (10%)

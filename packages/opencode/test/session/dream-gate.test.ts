@@ -1,19 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { gateToolCall, DREAM_GATE_ERROR, type GateVerdict } from "../../src/session/dream-gate"
 
-function makeMessage(parts: Array<{ type: string; text?: string }> = []) {
-  return {
-    id: "msg-1",
-    role: "assistant",
-    parts: parts as any,
-  }
+function makeParts(parts: Array<{ type: string; text?: string }> = []) {
+  return parts as any
 }
 
 describe("dream-gate", () => {
   test("allows non-mutating tools", () => {
     const verdict = gateToolCall({
       tool: "grep",
-      message: makeMessage(),
+      parts: makeParts(),
       bypassAgentCheck: false,
       alreadyGated: () => false,
       markGated: () => {},
@@ -24,7 +20,7 @@ describe("dream-gate", () => {
   test("allows mutating tool when plan marker present", () => {
     const verdict = gateToolCall({
       tool: "edit",
-      message: makeMessage([{ type: "text", text: "## Approach\nRefactor the loop." }]),
+      parts: makeParts([{ type: "text", text: "## Approach\nRefactor the loop." }]),
       bypassAgentCheck: false,
       alreadyGated: () => false,
       markGated: () => {},
@@ -36,7 +32,7 @@ describe("dream-gate", () => {
     let gated = false
     const verdict = gateToolCall({
       tool: "write",
-      message: makeMessage([{ type: "text", text: "Let me just write the file." }]),
+      parts: makeParts([{ type: "text", text: "Let me just write the file." }]),
       bypassAgentCheck: false,
       alreadyGated: () => gated,
       markGated: () => {
@@ -56,7 +52,7 @@ describe("dream-gate", () => {
     let gated = false
     const first = gateToolCall({
       tool: "edit",
-      message: makeMessage(),
+      parts: makeParts(),
       bypassAgentCheck: false,
       alreadyGated: () => gated,
       markGated: () => {
@@ -67,7 +63,7 @@ describe("dream-gate", () => {
 
     const second = gateToolCall({
       tool: "edit",
-      message: makeMessage(),
+      parts: makeParts(),
       bypassAgentCheck: false,
       alreadyGated: () => gated,
       markGated: () => {},
@@ -78,7 +74,7 @@ describe("dream-gate", () => {
   test("bypasses gate for subagents (bypassAgentCheck)", () => {
     const verdict = gateToolCall({
       tool: "edit",
-      message: makeMessage(),
+      parts: makeParts(),
       bypassAgentCheck: true,
       alreadyGated: () => false,
       markGated: () => {},
@@ -96,7 +92,7 @@ describe("dream-gate", () => {
     ]) {
       const verdict = gateToolCall({
         tool: "edit",
-        message: makeMessage([{ type: "text", text }]),
+        parts: makeParts([{ type: "text", text }]),
         bypassAgentCheck: false,
         alreadyGated: () => false,
         markGated: () => {},

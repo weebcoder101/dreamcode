@@ -559,7 +559,7 @@ export const ProvidersLoginCommand = effectCmd({
           provider: {
             [provider]: {
               name: provider,
-              model,
+              models: { [model]: { name: model } },
               options: { baseURL },
             },
           },

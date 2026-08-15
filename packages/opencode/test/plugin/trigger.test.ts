@@ -77,7 +77,7 @@ const triggerSystemTransform = Effect.fn("PluginTriggerTest.triggerSystemTransfo
       model: {
         providerID: ProviderV2.ID.anthropic,
         modelID: ModelV2.ID.make("claude-sonnet-4-6"),
-      },
+      } as any,
     },
     out,
   )

@@ -137,7 +137,7 @@ function state(value: unknown): ModelState {
   }
 }
 
-function createLayer(fs = FSUtil.defaultLayer) {
+function createLayer(fsUtil = FSUtil.defaultLayer) {
   return Layer.fresh(
     Layer.effect(
       Service,
@@ -196,7 +196,7 @@ function createLayer(fs = FSUtil.defaultLayer) {
           saveVariant,
         })
       }),
-    ).pipe(Layer.provide(fs)),
+    ).pipe(Layer.provide(fsUtil)),
   )
 }
 

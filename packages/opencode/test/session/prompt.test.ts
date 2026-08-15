@@ -152,6 +152,10 @@ const lsp = Layer.succeed(
     prepareCallHierarchy: () => Effect.succeed([]),
     incomingCalls: () => Effect.succeed([]),
     outgoingCalls: () => Effect.succeed([]),
+    typeDefinition: () => Effect.succeed([]),
+    documentHighlight: () => Effect.succeed([]),
+    codeAction: () => Effect.succeed([]),
+    rename: () => Effect.succeed({}),
   }),
 )
 

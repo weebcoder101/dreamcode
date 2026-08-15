@@ -10,6 +10,10 @@ Supported operations:
 - prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)
 - incomingCalls: Find all functions/methods that call the function at a position
 - outgoingCalls: Find all functions/methods called by the function at a position
+- typeDefinition: Jump from a variable to its TYPE declaration (not its value definition)
+- documentHighlight: Highlight all equal symbols at a position (is this the same binding?)
+- codeAction: Get context-aware quick fixes/refactors (auto-fix imports, implement interface, organize imports)
+- rename: Rename a symbol across the whole workspace semantically (preferred over grep+edit; use newName)
 
 All operations require:
 - filePath: The file to operate on
@@ -18,7 +22,11 @@ All operations require:
 
 workspaceSymbol also accepts:
 - query: A query string to filter symbols by. Empty string requests all symbols.
+rename also accepts:
+- newName: The new symbol name (required for rename)
 
 For workspaceSymbol, filePath is not sent in the LSP workspace/symbol request. It is used by opencode to select and start the matching LSP server.
+
+Cost: ~50ms per query (sub-second). Prefer lsp over grep for symbol resolution — grep hits are 92-99% false positives and cost seconds.
 
 Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.

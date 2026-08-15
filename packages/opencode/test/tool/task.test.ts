@@ -9,7 +9,7 @@ import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Session } from "@/session/session"
-import type { SessionPrompt } from "../../src/session/prompt"
+import type { PromptInput } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -89,7 +89,7 @@ const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   return { chat, assistant }
 })
 
-function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void; text?: string }): TaskPromptOps {
+function stubOps(opts?: { onPrompt?: (input: PromptInput) => void; text?: string }): TaskPromptOps {
   return {
     cancel: () => Effect.void,
     resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
@@ -101,7 +101,7 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
   }
 }
 
-function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
+function reply(input: PromptInput, text: string): SessionV1.WithParts {
   const id = MessageID.ascending()
   return {
     info: {
@@ -216,7 +216,7 @@ describe("tool.task", () => {
       const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
+      let seen: PromptInput | undefined
       const promptOps = stubOps({ text: "resumed", onPrompt: (input) => (seen = input) })
 
       const result = yield* def.execute(
@@ -299,7 +299,7 @@ describe("tool.task", () => {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      const ready = defer<SessionPrompt.PromptInput>()
+      const ready = defer<PromptInput>()
       const cancelled = defer<SessionID>()
       const abort = new AbortController()
       const promptOps: TaskPromptOps = {
@@ -350,7 +350,7 @@ describe("tool.task", () => {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
+      let seen: PromptInput | undefined
       const promptOps = stubOps({ text: "created", onPrompt: (input) => (seen = input) })
 
       const result = yield* def.execute(
@@ -389,7 +389,7 @@ describe("tool.task", () => {
         const { chat, assistant } = yield* seed()
         const tool = yield* TaskTool
         const def = yield* tool.init()
-        let seen: SessionPrompt.PromptInput | undefined
+        let seen: PromptInput | undefined
         const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
 
         const result = yield* def.execute(
@@ -491,7 +491,7 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const ready = yield* Deferred.make<void>()
       const done = yield* Deferred.make<void>()
-      const injected = yield* Deferred.make<SessionPrompt.PromptInput>()
+      const injected = yield* Deferred.make<PromptInput>()
       let runs = 0
       const promptOps: TaskPromptOps = {
         cancel: () => Effect.void,
@@ -595,8 +595,8 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const first = defer<void>()
       const second = defer<void>()
-      const updated = defer<SessionPrompt.PromptInput>()
-      const injected = defer<SessionPrompt.PromptInput>()
+      const updated = defer<PromptInput>()
+      const injected = defer<PromptInput>()
       let prompts = 0
       const promptOps: TaskPromptOps = {
         ...stubOps(),

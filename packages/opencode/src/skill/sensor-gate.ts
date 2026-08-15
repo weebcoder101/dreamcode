@@ -770,14 +770,7 @@ function runSensorGateEffect(
       if (!output) {
         console.warn("[sensor-gate] Python subprocess returned EMPTY output — returning default result for fallback persona generation")
         debugLog("[sensor-gate] empty output from subprocess — returning default result")
-        return {
-          intent: "", domain_tags: [], risk_level: "medium", confidence: 0.5,
-          complexity: "medium", time_sensitivity: "medium", requires_tools: "files",
-          deliverable_type: "multi", is_social_greeting: false, primary_skill: "",
-          support_skills: [], automation: "none", mode: "STANDARD", chain: [],
-          personas: [], guardian_decision: "APPROVED", guardian_risk: "low",
-          skill_plan: "", raw_output: "",
-        } satisfies SensorGateResult
+        return defaultSensorGateResult()
       }
       return parseSensorGateOutput(output)
     }).pipe(
@@ -891,8 +884,19 @@ function runNeuroHarnessEffect(
   return retryWithTimeout(runWithTimeout)
 }
 
+export function defaultSensorGateResult(): SensorGateResult {
+  return {
+    intent: "", domain_tags: [], risk_level: "medium", confidence: 0.5,
+    complexity: "medium", time_sensitivity: "medium", requires_tools: "files",
+    deliverable_type: "multi", is_social_greeting: false, primary_skill: "",
+    support_skills: [], automation: "none", mode: "STANDARD", chain: [],
+    personas: [], guardian_decision: "APPROVED", guardian_risk: "low",
+    skill_plan: "", raw_output: "",
+  }
+}
+
 export interface Interface {
-  readonly classify: (prompt: string) => Effect.Effect<SensorGateResult | null>
+  readonly classify: (prompt: string) => Effect.Effect<SensorGateResult>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SensorGate") {}
@@ -905,6 +909,10 @@ export const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         const directory = ctx.directory
         const result = yield* runSensorGateEffect(prompt, directory)
+        if (!result) {
+          debugLog("[sensor-gate] classify: sensor gate returned null — using default result")
+          return defaultSensorGateResult()
+        }
 
         // Optimize chain: cap at MAX_CHAIN_SIZE, score by prompt relevance
         optimizeChain(result, prompt)

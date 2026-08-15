@@ -69,17 +69,17 @@ function hasPlanMarker(parts: SessionV1.Part[]): boolean {
  */
 export function gateToolCall(input: {
   tool: string
-  message: SessionV1.Assistant & { parts: SessionV1.Part[] }
+  parts: SessionV1.Part[]
   bypassAgentCheck: boolean
   alreadyGated: () => boolean
   markGated: () => void
 }): GateVerdict {
-  const { tool, message, bypassAgentCheck, alreadyGated, markGated } = input
+  const { tool, parts, bypassAgentCheck, alreadyGated, markGated } = input
 
   if (bypassAgentCheck) return { kind: "allow" }
   if (!MUTATING_TOOLS.has(tool)) return { kind: "allow" }
   if (alreadyGated()) return { kind: "allow" }
-  if (hasPlanMarker(message.parts)) return { kind: "allow" }
+  if (hasPlanMarker(parts)) return { kind: "allow" }
 
   markGated()
   return {

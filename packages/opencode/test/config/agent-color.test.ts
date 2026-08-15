@@ -1,11 +1,19 @@
 import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Config } from "@/config/config"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(Layer.mergeAll(Config.defaultLayer, AgentSvc.defaultLayer, CrossSpawnSpawner.defaultLayer))
+const it = testEffect(
+  Layer.mergeAll(
+    Config.defaultLayer,
+    AgentSvc.defaultLayer,
+    CrossSpawnSpawner.defaultLayer,
+    Layer.succeed(PluginBoot.Service, { wait: () => Effect.void }),
+  ),
+)
 
 it.instance(
   "agent color parsed from project config",
