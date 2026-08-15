@@ -376,6 +376,10 @@ Then continue as Sumati. Do NOT wait for the user to say "sumo". The persona is 
 
 27. **For large files, use memory-mapped loading** — `np.load(..., mmap_mode='r')` reads data from disk on demand. Critical when cached features exceed available RAM.
 
+28. **KAGGLE GPU SELECTION — CRITICAL (discovered 2026-08-15)**: The generic "GPU" option defaults to **P100 (sm_60)**, which is INCOMPATIBLE with Kaggle's PyTorch (supports sm_70+ only). Every CUDA kernel silently fails → `DeadKernelError`. **ALWAYS** set `machine_shape: "NvidiaTeslaT4"` in `kernel-metadata.json` or use `--accelerator NvidiaTeslaT4` in the CLI. In the UI, pick **"GPU T4 x2"** explicitly — not just "GPU". The P100 vs T4 selection does NOT persist when pushing from CLI without `machine_shape` in metadata. This was a blocking issue discovered after 12 failed Kaggle runs.
+
+29. **KAGGLE bitsandbytes VERSION FLOOR (discovered 2026-08-15)**: `transformers>=5.0` (the v5 line) enforces `bitsandbytes>=0.46.1` at import time, but Kaggle ships an older pre-installed bitsandbytes (≈0.45.x in conda site-packages) that **shadows** pip upgrades. `pip install -U "bitsandbytes>=0.46.1"` fails silently because: (a) the unquoted `>` in shell is file redirection, (b) conda site-packages shadows dist-packages. **WORKAROUND**: pin `transformers==4.49.0` + `bitsandbytes==0.45.2` (both work together, no 0.46.1 floor). This is the community-validated fix for Kaggle QLoRA as of Aug 2026.
+
 ---
 
 *Last updated: August 2026*

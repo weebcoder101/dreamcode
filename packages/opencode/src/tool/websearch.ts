@@ -24,12 +24,12 @@ export const Parameters = Schema.Struct({
   }),
 })
 
-const WebSearchProviderSchema = Schema.Literals(["exa", "parallel"])
+const WebSearchProviderSchema = Schema.Literals(["pieces", "exa", "parallel"])
 export type WebSearchProvider = Schema.Schema.Type<typeof WebSearchProviderSchema>
 
 export function selectWebSearchProvider(sessionID: string, flags = { exa: false, parallel: false }): WebSearchProvider {
   const override = process.env.OPENCODE_WEBSEARCH_PROVIDER
-  if (override === "exa" || override === "parallel") return override
+  if (override === "exa" || override === "parallel" || override === "pieces") return override
   if (flags.parallel) return "parallel"
   if (flags.exa) return "exa"
 
@@ -41,6 +41,7 @@ export function selectWebSearchProvider(sessionID: string, flags = { exa: false,
 }
 
 export function webSearchProviderLabel(provider: unknown) {
+  if (provider === "pieces") return "Pieces Web Search"
   if (provider === "parallel") return "Parallel Web Search"
   if (provider === "exa") return "Exa Web Search"
   return "Web Search"
@@ -67,6 +68,10 @@ function callProvider(
   params: Schema.Schema.Type<typeof Parameters>,
   ctx: Tool.Context,
 ) {
+  if (provider === "pieces") {
+    return McpWebSearch.callPieces(params.query)
+  }
+
   if (provider === "parallel") {
     return McpWebSearch.call(
       http,
@@ -114,10 +119,15 @@ export const WebSearchTool = Tool.define(
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
-          const provider = selectWebSearchProvider(ctx.sessionID, {
-            exa: flags.enableExa,
-            parallel: flags.enableParallel,
-          })
+          // Pieces LTM web search is preferred whenever its MCP server is
+          // reachable — it is Perplexity-backed and has no keyless quota.
+          const piecesUp = yield* McpWebSearch.piecesReachable()
+          const provider = piecesUp
+            ? ("pieces" as WebSearchProvider)
+            : selectWebSearchProvider(ctx.sessionID, {
+                exa: flags.enableExa,
+                parallel: flags.enableParallel,
+              })
           const title = webSearchProviderLabel(provider)
           yield* ctx.metadata({ title: `${title} "${params.query}"`, metadata: { provider } })
 
