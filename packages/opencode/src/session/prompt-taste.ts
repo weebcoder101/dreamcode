@@ -1,19 +1,24 @@
-import { Effect } from "effect"
 import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync, readdirSync, statSync } from "fs"
-import { join, basename } from "path"
+import { join, basename, dirname } from "path"
 import { Global } from "@opencode-ai/core/global"
 import { homedir } from "os"
 
-// Backward compatibility: check old ~/.dreamcode/evolution path first,
-// then fall back to XDG data path (~/.local/share/dreamcode/evolution).
+// ─── Legacy paths (sensor-gate spawn log — never injected) ──────────────────
 const oldEvolutionDir = join(homedir(), ".dreamcode", "evolution")
 const EVOLUTION_DIR = existsSync(oldEvolutionDir) ? oldEvolutionDir : join(Global.Path.data, "evolution")
 const TASTE_LOG = join(EVOLUTION_DIR, "taste.jsonl")
-const TASTE_EVENTS = join(EVOLUTION_DIR, "taste-events.jsonl")
-const TASTE_PROFILE = join(EVOLUTION_DIR, "taste-profile.json")
+const OLD_TASTE_EVENTS = join(EVOLUTION_DIR, "taste-events.jsonl")
 const PROFILE_FILE = join(EVOLUTION_DIR, "profile.json")
 
-// ─── Legacy signal (sensor-gate spawn decisions) ────────────────────────────
+// ─── Command-Code-style taste: per-project transparent markdown ─────────────
+// Taste lives in a per-project directory: <data>/taste/<project-key>/.
+//   taste.md     — the transparent, human-editable markdown profile
+//   events.jsonl — raw episodic events (prompts, edits, corrections, tool use)
+// The markdown is the artifact; events are only the raw material.
+
+const TASTE_ROOT = join(Global.Path.data, "taste")
+
+// ─── Legacy signal (sensor-gate spawn decisions — kept for compat, inert) ──
 
 export interface TasteSignal {
   timestamp: number
@@ -36,12 +41,13 @@ export interface CodebaseProfile {
   lastAnalyzed: number
 }
 
-// ─── Episodic taste events (the real signal) ────────────────────────────────
+// ─── Episodic taste events (the raw signal) ─────────────────────────────────
 
 export type TasteEventType =
   | "explicit"    // "I prefer X", "always use Y" — highest confidence
   | "correction"  // "no, do X instead", user rejecting agent output
   | "tool-use"    // which tools the user's session actually invokes
+  | "edit"        // file the agent edited (path observed post-edit)
   | "comm-style"  // verbosity, emoji, technical depth observed in user text
   | "workflow"    // task-breakdown, session patterns
 
@@ -74,11 +80,41 @@ export interface TasteProfile {
   global: TastePreference[]
 }
 
-function ensureDir() {
-  try { mkdirSync(EVOLUTION_DIR, { recursive: true }) } catch { }
+// ─── Per-project layout ─────────────────────────────────────────────────────
+
+const hash = (s: string) => {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
+  return Math.abs(h).toString(36)
 }
 
-// ─── Low-level IO ───────────────────────────────────────────────────────────
+function projectKey(root: string): string {
+  const name = basename(root).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40) || "project"
+  return `${name}__${hash(root).slice(0, 10)}`
+}
+
+function tasteDir(root: string): string {
+  return join(TASTE_ROOT, projectKey(root))
+}
+
+function projectEventsPath(root: string): string {
+  return join(tasteDir(root), "events.jsonl")
+}
+
+function projectTasteMdPath(root: string): string {
+  return join(tasteDir(root), "taste.md")
+}
+
+function currentProjectRoot(): string {
+  try { return process.cwd() } catch { return "" }
+}
+
+const MANUAL_START = "<!-- manual:start -->"
+const MANUAL_END = "<!-- manual:end -->"
+
+function ensureDir(dir: string) {
+  try { mkdirSync(dir, { recursive: true }) } catch { }
+}
 
 function readLines(path: string, max: number): string[] {
   try {
@@ -92,7 +128,7 @@ function readLines(path: string, max: number): string[] {
 }
 
 function appendLine(path: string, line: string) {
-  ensureDir()
+  ensureDir(dirname(path))
   try { appendFileSync(path, line + "\n") } catch { }
 }
 
@@ -107,28 +143,19 @@ function readProfile(): CodebaseProfile | null {
 
 export { readProfile }
 
-function readTasteProfile(): TasteProfile | null {
-  try {
-    if (!existsSync(TASTE_PROFILE)) return null
-    return JSON.parse(readFileSync(TASTE_PROFILE, "utf-8"))
-  } catch {
-    return null
-  }
-}
-
 // ─── Signal capture ─────────────────────────────────────────────────────────
 
-/** Record a legacy sensor-gate signal (kept for backward compat). */
+/** Record a legacy sensor-gate signal (inert — never injected). */
 export function recordTaste(signal: TasteSignal) {
   appendLine(TASTE_LOG, JSON.stringify(signal))
 }
 
 /**
- * Record an episodic taste event — the raw material the consolidation pass
- * densifies into preferences. Cheap (single append), safe to call anywhere.
+ * Record an episodic taste event for the current project. Cheap (single
+ * append), safe to call anywhere. Not gated on the sensor gate.
  */
 export function recordTasteEvent(event: TasteEvent) {
-  appendLine(TASTE_EVENTS, JSON.stringify(event))
+  appendLine(projectEventsPath(currentProjectRoot()), JSON.stringify(event))
 }
 
 // ─── Explicit preference extraction (heuristic, no LLM needed) ─────────────
@@ -183,8 +210,7 @@ export function isCorrection(text: string): boolean {
   return CORRECTION_PATTERNS.some((re) => re.test(text.trim()))
 }
 
-// ─── Communication style stats ─────────────────────────────────────────────
-
+/** Communication style stats. */
 export function commStyleEvent(text: string): TasteEvent | null {
   const trimmed = text.trim()
   if (!trimmed) return null
@@ -210,185 +236,67 @@ export function commStyleEvent(text: string): TasteEvent | null {
   return null
 }
 
-// ─── Consolidation: events → dense preference profile ──────────────────────
+// ─── Events → markdown sections ─────────────────────────────────────────────
 
-const hash = (s: string) => {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
-  return Math.abs(h).toString(36)
+const EVIDENCE_THRESHOLD = 1.0 // explicit (1.0) counts once; tool-use (0.5) needs 2 uses
+
+interface SectionPref {
+  key: string
+  value: string
+  evidence: number
 }
 
-const EVIDENCE_THRESHOLD = 1.5 // below this, drop the preference
-const PROFILE_CAP = 20 // max preferences kept
-
-/**
- * Consolidate raw events into a dense preference profile.
- * Heuristic-based (no LLM call): patterns extracted at capture time carry
- * category/key/value; here we just accumulate evidence, resolve conflicts
- * (newer supersedes older), and cap by evidence. Run at session end or
- * lazily before injection.
- */
-export function consolidateTaste(): TasteProfile {
-  const events = readLines(TASTE_EVENTS, 5000)
-    .map((l) => { try { return JSON.parse(l) as TasteEvent } catch { return null } })
-    .filter((e): e is TasteEvent => !!e)
-    .map((e) => {
-      // Events captured before consolidation (e.g. tool-use with context set)
-      // already carry context; comm-style events without context get one here.
-      if (e.context) return e
-      if (e.type === "tool-use") return { ...e, context: `tools:used=${e.raw}` }
-      if (e.type === "correction") return { ...e, context: "quality:correction=user-rejected-output" }
-      return e
-    })
-  const profile = readTasteProfile()
-  const prefs = new Map<string, TastePreference>()
-
-  for (const p of profile?.global ?? []) {
-    prefs.set(p.id, { ...p })
-  }
-
-  const now = Date.now()
+function accumulate(events: TasteEvent[]): Map<string, SectionPref> {
+  const acc = new Map<string, SectionPref>()
   for (const e of events) {
-    const [category, keyValue] = (e.context ?? "").split(":", 2)
+    const ctx = e.context ?? ""
+    const [category, keyValue] = ctx.split(":", 2)
     if (!category || !keyValue) continue
     const eq = keyValue.indexOf("=")
     if (eq < 0) continue
     const key = keyValue.slice(0, eq)
     const value = keyValue.slice(eq + 1)
     const id = hash(category + ":" + key)
-
-    const existing = prefs.get(id)
+    const existing = acc.get(id)
     if (existing) {
-      // Conflict: same key, different value → newer supersedes.
-      if (existing.value !== value) {
-        if (e.ts > existing.lastSeen) {
-          existing.supersededBy = hash(category + ":" + key + "=" + value)
-          const replacement: TastePreference = {
-            id: existing.supersededBy,
-            category: category as TasteCategory,
-            key,
-            value,
-            evidence: e.confidence,
-            firstSeen: e.ts,
-            lastSeen: e.ts,
-            supersededBy: undefined,
-          }
-          prefs.set(replacement.id, replacement)
-        }
-      } else {
-        existing.evidence += e.confidence
-        existing.lastSeen = Math.max(existing.lastSeen, e.ts)
-      }
+      existing.evidence += e.confidence
+      existing.value = value // newest wins on conflict
     } else {
-      prefs.set(id, {
-        id,
-        category: category as TasteCategory,
-        key,
-        value,
-        evidence: e.confidence,
-        firstSeen: e.ts,
-        lastSeen: e.ts,
-      })
+      acc.set(id, { key, value, evidence: e.confidence })
     }
   }
+  return acc
+}
 
-  // Decay old evidence (half-life ~30 days), drop weak prefs.
-  const decayed = [...prefs.values()].map((p) => {
-    const ageDays = (now - p.lastSeen) / (24 * 60 * 60 * 1000)
-    p.evidence *= Math.pow(0.5, ageDays / 30)
-    return p
-  })
-
-  const alive = decayed
-    .filter((p) => p.evidence >= EVIDENCE_THRESHOLD && !p.supersededBy)
+function fmtSection(title: string, prefs: SectionPref[], cap = 6): string {
+  if (prefs.length === 0) return ""
+  const alive = prefs
+    .filter((p) => p.evidence >= EVIDENCE_THRESHOLD)
     .sort((a, b) => b.evidence - a.evidence)
-    .slice(0, PROFILE_CAP)
+    .slice(0, cap)
+  if (alive.length === 0) return ""
+  return `## ${title}\n${alive.map((p) => `- ${p.key}: ${p.value}`).join("\n")}\n`
+}
 
-  const result: TasteProfile = {
-    version: 1,
-    updated: now,
-    global: alive,
+// ─── Folder structure (top-level dirs, 2 levels) ───────────────────────────
+
+const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", ".cache", "target", "build", ".next", ".turbo", "__pycache__", ".venv", "venv", ".pytest_cache"])
+
+function detectFolders(root: string): string[] {
+  const dirs: string[] = []
+  let entries: string[]
+  try { entries = readdirSync(root) } catch { return [] }
+  for (const e of entries) {
+    if (IGNORE_DIRS.has(e)) continue
+    const full = join(root, e)
+    let stat: any
+    try { stat = statSync(full) } catch { continue }
+    if (stat.isDirectory()) dirs.push(`${e}/`)
   }
-  ensureDir()
-  try { writeFileSync(TASTE_PROFILE, JSON.stringify(result, null, 2)) } catch { }
-  return result
+  return dirs.sort().slice(0, 15)
 }
 
-// ─── Injection: profile → compact system-prompt block ──────────────────────
-
-const CATEGORY_LABEL: Record<TasteCategory, string> = {
-  communication: "Communication",
-  "code-style": "Code style",
-  tools: "Tools",
-  quality: "Quality bars",
-  workflow: "Workflow",
-}
-
-function preferenceLine(p: TastePreference): string {
-  const rule = p.enforced ? " [enforced]" : ""
-  return `- ${p.key}: ${p.value}${rule}`
-}
-
-/**
- * Emit the dense <taste-profile> block injected into the system prompt.
- * Budget: ≤ ~500 tokens. Excludes anything already implied by the
- * <codebase-profile> to avoid the redundancy penalty (ETH AGENTS.md study).
- */
-const CONSOLIDATION_INTERVAL_MS = 10 * 60 * 1000
-
-function consolidateIfStale(): TasteProfile | null {
-  const profile = readTasteProfile()
-  const now = Date.now()
-  if (!profile || now - profile.updated > CONSOLIDATION_INTERVAL_MS) {
-    try { return consolidateTaste() } catch { return profile }
-  }
-  return profile
-}
-
-export function summarizeTaste(): string {
-  const profile = consolidateIfStale()
-  const codebase = readProfile()
-  const parts: string[] = []
-
-  if (codebase && codebase.languages.length > 0) {
-    parts.push(
-      `<codebase-profile>\n` +
-      `Languages: ${codebase.languages.join(", ")}\n` +
-      `Stack: ${codebase.technologies.join(", ")}\n` +
-      `Build: ${codebase.packageManagers.join(", ")}\n` +
-      `Tests: ${codebase.testFrameworks.join(", ")}\n` +
-      `</codebase-profile>`,
-    )
-  }
-
-  if (profile && profile.global.length > 0) {
-    // Drop preferences redundant with the codebase profile.
-    const redundant = new Set([...(codebase?.languages ?? []), ...(codebase?.technologies ?? [])])
-    const prefs = profile.global.filter((p) => !redundant.has(p.value.toLowerCase()))
-
-    const byCategory = new Map<TasteCategory, TastePreference[]>()
-    for (const p of prefs) {
-      const list = byCategory.get(p.category) ?? []
-      list.push(p)
-      byCategory.set(p.category, list)
-    }
-
-    const lines: string[] = []
-    for (const [cat, list] of byCategory) {
-      lines.push(`## ${CATEGORY_LABEL[cat] ?? cat}`)
-      for (const p of list.slice(0, 5)) lines.push(preferenceLine(p))
-    }
-    if (lines.length > 0) {
-      parts.push(`<taste-profile>\n${lines.join("\n")}\n</taste-profile>`)
-    }
-  }
-
-  return parts.join("\n")
-}
-
-// ─── Codebase profile detection (unchanged) ─────────────────────────────────
-
-const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", ".cache", "target", "build", ".next", ".turbo"])
+// ─── Codebase profile detection ─────────────────────────────────────────────
 
 function detectCodebase(projectRoot: string): CodebaseProfile {
   const techs = new Set<string>()
@@ -442,7 +350,172 @@ function detectCodebase(projectRoot: string): CodebaseProfile {
 
 export function refreshProfile(projectRoot: string) {
   const profile = detectCodebase(projectRoot)
-  ensureDir()
+  ensureDir(EVOLUTION_DIR)
   try { writeFileSync(PROFILE_FILE, JSON.stringify(profile)) } catch { }
   return profile
+}
+
+// ─── Consolidation: events → taste.md ───────────────────────────────────────
+
+/** Migrate legacy global events into the project file on first consolidation. */
+function migrateLegacyEvents(eventsPath: string) {
+  try {
+    if (existsSync(eventsPath)) return // already has events
+    const legacy = readLines(OLD_TASTE_EVENTS, 5000)
+    if (legacy.length === 0) return
+    ensureDir(dirname(eventsPath))
+    writeFileSync(eventsPath, legacy.join("\n") + "\n")
+  } catch { }
+}
+
+/** Preserve manual edits between markers. */
+function extractManualBlock(existing: string | null): string {
+  if (!existing) return ""
+  const start = existing.indexOf(MANUAL_START)
+  if (start < 0) return ""
+  const body = existing.slice(start + MANUAL_START.length)
+  const end = body.indexOf(MANUAL_END)
+  return end >= 0 ? body.slice(0, end).trim() : body.trim()
+}
+
+function buildTasteMarkdown(root: string, events: TasteEvent[]): string {
+  const name = basename(root) || "project"
+  const profile = detectCodebase(root)
+  const folders = detectFolders(root)
+  const acc = accumulate(events)
+
+  const sections: string[] = []
+  sections.push(`# Project Taste — ${name}`)
+  sections.push("")
+  sections.push("> Auto-learned by the harness from your prompts, edits, and project structure.")
+  sections.push("> Edit freely — content between the `manual` markers below is preserved on regeneration.")
+  sections.push("")
+
+  // Tech stack
+  const stack: string[] = []
+  if (profile.languages.length > 0) stack.push(`- Languages: ${profile.languages.join(", ")}`)
+  if (profile.packageManagers.length > 0) stack.push(`- Package managers: ${profile.packageManagers.join(", ")}`)
+  if (profile.technologies.length > 0) stack.push(`- Stack: ${profile.technologies.join(", ")}`)
+  if (profile.testFrameworks.length > 0) stack.push(`- Tests: ${profile.testFrameworks.join(", ")}`)
+  if (stack.length > 0) {
+    sections.push(`## Tech Stack\n${stack.join("\n")}\n`)
+  }
+
+  // Folder structure
+  if (folders.length > 0) {
+    sections.push(`## Folder Structure\n${folders.map((f) => `- ${f}`).join("\n")}\n`)
+  }
+
+  // Code style (from explicit patterns: typing, naming, indentation, always)
+  const styleKeys = ["typing", "naming", "indentation", "always"]
+  const stylePrefs = styleKeys
+    .map((k) => acc.get(hash("code-style:" + k)))
+    .filter((p): p is SectionPref => !!p)
+  sections.push(fmtSection("Coding Style", stylePrefs))
+
+  // Preferences (tools + quality positives)
+  const prefKeys = ["preferred-tool", "tests"]
+  const prefPrefs = prefKeys
+    .map((k) => acc.get(hash(k === "preferred-tool" ? "tools:preferred-tool" : "quality:tests")))
+    .filter((p): p is SectionPref => !!p)
+  sections.push(fmtSection("Preferences", prefPrefs))
+
+  // Anti-preferences (never / avoid / corrections)
+  const antiPrefs = [...acc.values()].filter(
+    (p) => p.key === "never" || p.key === "avoid" || p.key === "correction",
+  )
+  sections.push(fmtSection("Anti-Preferences", antiPrefs))
+
+  // Communication
+  const commPrefs = [...acc.values()].filter(
+    (p) => p.key === "verbosity" || p.key === "emoji" || p.key === "reasoning",
+  )
+  sections.push(fmtSection("Communication", commPrefs))
+
+  // Most-used tools
+  const toolCounts = new Map<string, number>()
+  for (const e of events) {
+    if (e.type === "tool-use" && e.raw) {
+      toolCounts.set(e.raw, (toolCounts.get(e.raw) ?? 0) + e.confidence)
+    }
+  }
+  const topTools = [...toolCounts.entries()]
+    .filter(([, c]) => c >= EVIDENCE_THRESHOLD)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+  if (topTools.length > 0) {
+    sections.push(`## Tools\n${topTools.map(([t]) => `- ${t}`).join("\n")}\n`)
+  }
+
+  sections.push(MANUAL_START)
+  sections.push("")
+  sections.push(MANUAL_END)
+  return sections.join("\n")
+}
+
+/**
+ * Consolidate events into the per-project taste.md. The markdown file is the
+ * artifact; manual edits between the markers survive regeneration.
+ * Returns the previous TasteProfile shape for backward compatibility.
+ */
+export function consolidateTaste(): TasteProfile {
+  const root = currentProjectRoot()
+  const eventsPath = projectEventsPath(root)
+  migrateLegacyEvents(eventsPath)
+  const events = readLines(eventsPath, 5000)
+    .map((l) => { try { return JSON.parse(l) as TasteEvent } catch { return null } })
+    .filter((e): e is TasteEvent => !!e)
+  const mdPath = projectTasteMdPath(root)
+  const existing = existsSync(mdPath) ? readFileSync(mdPath, "utf-8") : null
+  const manual = extractManualBlock(existing)
+  const md = buildTasteMarkdown(root, events)
+  const finalMd = manual
+    ? md.replace(MANUAL_START + "\n\n" + MANUAL_END, MANUAL_START + "\n" + manual + "\n" + MANUAL_END)
+    : md
+  ensureDir(dirname(mdPath))
+  try { writeFileSync(mdPath, finalMd) } catch { }
+
+  return { version: 2, updated: Date.now(), global: [] }
+}
+
+function tasteMdFresh(root: string): boolean {
+  const md = projectTasteMdPath(root)
+  const events = projectEventsPath(root)
+  if (!existsSync(md)) return false
+  try {
+    return statSync(events).mtimeMs <= statSync(md).mtimeMs
+  } catch {
+    return true
+  }
+}
+
+const TASTE_MD_BUDGET = 1800
+
+/** Read the taste.md for injection (consolidate first if events are newer). */
+function readTasteMd(root: string): string {
+  if (!tasteMdFresh(root)) {
+    try { consolidateTaste() } catch { }
+  }
+  try {
+    const mdPath = projectTasteMdPath(root)
+    if (!existsSync(mdPath)) return ""
+    let md = readFileSync(mdPath, "utf-8")
+    if (md.length > TASTE_MD_BUDGET) {
+      md = md.slice(0, TASTE_MD_BUDGET) + "\n... (truncated)\n"
+    }
+    return md
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * Emit the <taste-profile> block injected into the system prompt — the
+ * per-project taste.md, model-agnostic, NOT gated on the sensor gate.
+ */
+export function summarizeTaste(): string {
+  const root = currentProjectRoot()
+  const md = readTasteMd(root)
+  if (!md.trim()) return ""
+  return `<taste-profile>\n${md.trim()}\n</taste-profile>`
 }

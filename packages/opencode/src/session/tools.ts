@@ -209,6 +209,23 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               confidence: 0.5,
               context: `tools:used=${item.id}`,
             })
+            // Taste: observe edited/written file paths → folder structure + language signals.
+            if (item.id === "edit" || item.id === "write" || item.id === "apply_patch") {
+              const fpath =
+                typeof args === "object" && args !== null
+                  ? (args as Record<string, unknown>).filePath ?? (args as Record<string, unknown>).path
+                  : undefined
+              if (typeof fpath === "string" && fpath.length > 0) {
+                recordTasteEvent({
+                  ts: Date.now(),
+                  sessionID: ctx.sessionID,
+                  type: "edit",
+                  raw: fpath,
+                  confidence: 0.8,
+                  context: `edit:file=${fpath}`,
+                })
+              }
+            }
             if (options.abortSignal?.aborted) {
               yield* input.processor.completeToolCall(options.toolCallId ?? "", output)
             }
