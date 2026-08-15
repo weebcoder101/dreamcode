@@ -923,6 +923,28 @@ export const layer: Layer.Layer<
       delta: string
     }) {
       yield* dieSyncError(events.publish(MessageV2.Event.PartDelta, input))
+      // Persist the delta directly: the event bus has no PartDelta projector,
+      // so without this write the DB part stays at its text-start value until
+      // text-end. Streamed text must be visible to DB readers (e.g. the Dream
+      // Protocol gate, which reads parts at tool-execute time) before the
+      // stream finishes, because the AI SDK executes tools fire-and-forget
+      // ahead of the remaining stream events.
+      const row = yield* db
+        .select()
+        .from(PartTable)
+        .where(and(eq(PartTable.session_id, input.sessionID), eq(PartTable.message_id, input.messageID), eq(PartTable.id, input.partID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return
+      const data = { ...row.data } as Record<string, unknown>
+      const current = data[input.field]
+      data[input.field] = typeof current === "string" ? current + input.delta : input.delta
+      yield* db
+        .update(PartTable)
+        .set({ data: data as any, time_updated: Date.now() })
+        .where(and(eq(PartTable.id, input.partID), eq(PartTable.session_id, input.sessionID)))
+        .run()
+        .pipe(Effect.orDie)
     })
 
     /** Finds the first message matching the predicate, searching newest-first. */

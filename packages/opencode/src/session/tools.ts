@@ -114,9 +114,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
+            // Live parts read at gate time: text parts stream into the DB as
+            // the assistant message is generated, so a DB read here sees the
+            // plan text the model already emitted. input.messages is a
+            // pre-stream snapshot and never contains the current message.
+            const gateParts = yield* MessageV2.parts(input.processor.message.id).pipe(
+              Effect.catch(() => Effect.succeed([] as SessionV1.Part[])),
+            )
             const gate = gateToolCall({
               tool: item.id,
-              parts: (input.processor.message as SessionV1.Assistant & { parts: SessionV1.Part[] }).parts,
+              parts: gateParts,
               bypassAgentCheck: input.bypassAgentCheck,
               ...gateState,
             })
