@@ -47,9 +47,28 @@ describe("tool-repair", () => {
     expect(args).toEqual({ path: "a.ts" })
   })
 
-  test("renames aliased fields", () => {
-    const { args } = repairToolInput("edit", { file_path: "a.ts" }, schema as any)
+  test("renames aliased fields when source is not a real schema field", () => {
+    const { args } = repairToolInput("edit", { file_path: "a.ts" }, { type: "object", properties: { path: { type: "string" } } } as any)
     expect(args).toEqual({ path: "a.ts" })
+  })
+
+  test("keeps real schema field even when it collides with an alias", () => {
+    const grepSchema = {
+      type: "object",
+      required: ["pattern"],
+      properties: {
+        pattern: { type: "string" },
+        path: { type: "string" },
+      },
+    } as const
+    const { args, notes } = repairToolInput("grep", { pattern: "def ", path: "src" }, grepSchema as any)
+    expect(args).toEqual({ pattern: "def ", path: "src" })
+    expect(notes).toEqual([])
+  })
+
+  test("keeps real schema field over alias when both are declared", () => {
+    const { args } = repairToolInput("edit", { file_path: "a.ts" }, schema as any)
+    expect(args).toEqual({ file_path: "a.ts" })
   })
 
   test("leaves valid calls untouched (no notes)", () => {
@@ -79,6 +98,6 @@ describe("tool-repair", () => {
       { blocks: [{ file_path: "a.ts" }, { path: "[b.ts](http://b.ts)" }] },
       nestedSchema as any,
     )
-    expect(args).toEqual({ blocks: [{ path: "a.ts" }, { path: "b.ts" }] })
+    expect(args).toEqual({ blocks: [{ file_path: "a.ts" }, { path: "b.ts" }] })
   })
 })

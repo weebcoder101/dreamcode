@@ -122,7 +122,10 @@ export function repairValue(
     const childRequired = new Set(schema.required ?? [])
     for (const [k, v] of Object.entries(value)) {
       const targetKey = ALIASES[k] ?? k
-      if (targetKey !== k) {
+      const props = schema.properties ?? {}
+      const sourceIsReal = k in props
+      const aliasIsReal = targetKey in props
+      if (targetKey !== k && !sourceIsReal && aliasIsReal) {
         if (!(targetKey in out)) out[targetKey] = v
         delete out[k]
         repair(`argument "${k}" renamed to "${targetKey}".`)
