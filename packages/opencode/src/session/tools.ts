@@ -14,6 +14,7 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import { Effect } from "effect"
 import { MessageV2 } from "./message-v2"
+import { recordTasteEvent } from "./prompt-taste"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
 import { PartID } from "./schema"
@@ -199,6 +200,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID ?? "", args },
               output,
             )
+            // Taste: record tool usage (non-mutating, cheap append).
+            recordTasteEvent({
+              ts: Date.now(),
+              sessionID: ctx.sessionID,
+              type: "tool-use",
+              raw: item.id,
+              confidence: 0.5,
+              context: `tools:used=${item.id}`,
+            })
             if (options.abortSignal?.aborted) {
               yield* input.processor.completeToolCall(options.toolCallId ?? "", output)
             }

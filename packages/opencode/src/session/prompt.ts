@@ -91,7 +91,7 @@ import {
   markVerifyPrompted,
 } from "./prompt-state"
 import { needsVerification, turnRanVerification, VERIFY_REMINDER, VERIFY_MARKER } from "./verify-gate"
-import { summarizeTaste, refreshProfile } from "./prompt-taste"
+import { summarizeTaste, refreshProfile, recordTasteEvent, extractExplicitPreferences, isCorrection, commStyleEvent } from "./prompt-taste"
 
 // ─── Cost-Aware Task Complexity Assessment ─────────────────────
 // Determines task complexity for model routing hints. Simple tasks
@@ -616,6 +616,21 @@ Before every response, verify your reasoning:
                 .filter((p): p is typeof p & { type: "text" } => p.type === "text" && !p.ignored)
                 .map((p) => p.text)
                 .join("\n")
+              // Taste capture: explicit preferences, corrections, comm style.
+              // Runs on every new user message (step 1), fire-and-forget.
+              const tasteEvents = extractExplicitPreferences(userText)
+              if (tasteEvents.length > 0) {
+                for (const ev of tasteEvents) {
+                  recordTasteEvent({ ...ev, sessionID, ts: Date.now() })
+                }
+              }
+              if (isCorrection(userText)) {
+                recordTasteEvent({ ts: Date.now(), sessionID, type: "correction", raw: userText.slice(0, 200), confidence: 0.9, context: "quality:correction=user-rejected-output" })
+              }
+              const commEvent = commStyleEvent(userText)
+              if (commEvent) {
+                recordTasteEvent({ ...commEvent, sessionID, ts: Date.now() })
+              }
               // Detect synthesis response — skip auto-spawn after synthesis.
               // Only check the LAST user message to avoid a permanent synthesis
               // lock: once ANY prior message triggered synthesis, a cross-message
