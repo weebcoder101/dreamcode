@@ -5,15 +5,18 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
  *
  * The Dream Protocol (diverge → correlate → compare → critique → execute)
  * is enforced mechanically at the tool-dispatch boundary, not just by prose
- * in the system prompt. Before the first mutating tool call of a turn, the
- * harness checks whether the model has already emitted a plan marker in its
- * text. If it has not, the mutating call is rejected with a structured error
- * that instructs the model to produce its plan first.
+ * in the system prompt. Before the first mutating tool call on a NEW file,
+ * the harness checks whether the model has already emitted a plan marker.
+ * If it has not, the mutating call is rejected with a structured error.
  *
- * This mirrors the Claude Code stop-hook pattern: the gate does not silently
- * block work, it feeds a deterministic signal back into the loop so the model
- * corrects course. The model is only gated ONCE per assistant message — after
- * the rejection it is free to proceed, so no legitimate task can deadlock.
+ * Per-file gating: once a file has been planned (Approach/Correlations
+ * emitted), subsequent edits to the SAME file are allowed without
+ * re-triggering the gate. The gate only fires for NEW files that haven't
+ * been planned yet. This lets agents consolidate all edits to one file
+ * into a single plan, then execute all edits without interruption.
+ *
+ * The plan is valid within the current assistant message only — a new
+ * message resets the planned-file set, requiring a fresh plan for each file.
  */
 
 export const MUTATING_TOOLS = new Set(["edit", "write", "apply_patch", "patch"])
@@ -62,31 +65,42 @@ function hasPlanMarker(parts: SessionV1.Part[]): boolean {
 }
 
 /**
- * Decide whether a tool call must be gated. Only the FIRST mutating tool call
- * of an assistant message is gated (tracked via `alreadyGated`), so a model
- * that ignores the rejection once is still allowed to proceed — the gate is a
- * course-correction signal, never a deadlock.
+ * Decide whether a tool call must be gated.
+ *
+ * Per-file tracking: the gate fires for the FIRST mutating call to each
+ * file. Once a file is "planned" (plan marker present), subsequent edits
+ * to that same file pass without re-blocking. Files without a detectable
+ * path fall back to single-gate-per-message behavior.
  */
 export function gateToolCall(input: {
   tool: string
   parts: SessionV1.Part[]
+  filePath?: string
   bypassAgentCheck: boolean
-  alreadyGated: () => boolean
-  markGated: () => void
+  alreadyPlanned: (filePath: string) => boolean
+  markPlanned: (filePath: string) => void
 }): GateVerdict {
-  const { tool, parts, bypassAgentCheck, alreadyGated, markGated } = input
+  const { tool, parts, filePath, bypassAgentCheck, alreadyPlanned, markPlanned } = input
 
   if (bypassAgentCheck) return { kind: "allow" }
   if (!MUTATING_TOOLS.has(tool)) return { kind: "allow" }
-  if (alreadyGated()) return { kind: "allow" }
-  if (hasPlanMarker(parts)) return { kind: "allow" }
 
-  markGated()
+  // Per-file tracking: if this file has already been planned, allow
+  if (filePath && alreadyPlanned(filePath)) return { kind: "allow" }
+
+  // If plan marker present: allow and mark this file as planned
+  if (hasPlanMarker(parts)) {
+    if (filePath) markPlanned(filePath)
+    return { kind: "allow" }
+  }
+
+  // First edit to this file, no plan emitted → block
+  if (filePath) markPlanned(filePath)
   return {
     kind: "block",
     output: {
       title: GATE_ERROR_TITLE,
-      metadata: { dream_gate_blocked: true, tool },
+      metadata: { dream_gate_blocked: true, tool, filePath },
       output: DREAM_GATE_ERROR,
     },
   }

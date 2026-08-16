@@ -59,13 +59,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
 
-  // Per-assistant-message gate state: the Dream Protocol gate fires at most
-  // once per message (a course-correction signal, never a deadlock).
-  let dreamGated = false
+  // Per-file gate state: the Dream Protocol gate fires once per FILE per
+  // assistant message. Once a file is planned, subsequent edits to the same
+  // file pass without re-blocking. A new message resets the planned set.
+  const plannedFiles = new Set<string>()
   const gateState = {
-    alreadyGated: () => dreamGated,
-    markGated: () => {
-      dreamGated = true
+    alreadyPlanned: (filePath: string) => plannedFiles.has(filePath),
+    markPlanned: (filePath: string) => {
+      plannedFiles.add(filePath)
     },
   }
 
@@ -122,9 +123,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const gateParts = yield* MessageV2.parts(input.processor.message.id).pipe(
               Effect.catch(() => Effect.succeed([] as SessionV1.Part[])),
             )
+            // Extract file path from tool args for per-file gate tracking
+            const filePath = (args as Record<string, unknown>)?.filePath as string | undefined
             const gate = gateToolCall({
               tool: item.id,
               parts: gateParts,
+              filePath,
               bypassAgentCheck: input.bypassAgentCheck,
               ...gateState,
             })
