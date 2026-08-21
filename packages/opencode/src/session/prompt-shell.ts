@@ -15,7 +15,7 @@ import { dieSyncError } from "@/effect/sync-error"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 
-export const shellImpl = (input: ShellInput & {
+export var shellImpl = (input: ShellInput & {
   sessions: any
   agents: any
   config: any

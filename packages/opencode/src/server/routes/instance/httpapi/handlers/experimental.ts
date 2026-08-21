@@ -11,7 +11,11 @@ import type { SessionID } from "@/session/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
+import { isSensorGateEnabled, setSensorGateEnabled } from "@/session/prompt-state"
 import { Effect, Option } from "effect"
+import fs from "fs"
+import os from "os"
+import path from "path"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -170,6 +174,41 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return yield* mcp.resources()
     })
 
+    const sensorGateGet = Effect.fn("ExperimentalHttpApi.sensorGateGet")(function* () {
+      // enabled=true in the UI means gate is ON/full mode → personasEnabled = true
+      return { enabled: isSensorGateEnabled() }
+    })
+
+    const sensorGate = Effect.fn("ExperimentalHttpApi.sensorGate")(function* (ctx: {
+      payload: typeof import("../groups/experimental").SensorGateTogglePayload.Type
+    }) {
+      // UI sends { enabled: true } → gate ON → personas enabled
+      setSensorGateEnabled(ctx.payload.enabled)
+      return true
+    })
+
+    const providerConfig = Effect.fn("ExperimentalHttpApi.providerConfig")(function* (ctx: {
+      payload: typeof import("../groups/experimental").ProviderConfigPayload.Type
+    }) {
+      const configDir = path.join(os.homedir(), ".config", "dreamcode")
+      const configFile = path.join(configDir, "config.json")
+      let existing: Record<string, any> = {}
+      try {
+        const text = fs.readFileSync(configFile, "utf-8")
+        existing = JSON.parse(text)
+      } catch {}
+      if (!existing.provider) existing.provider = {}
+      existing.provider[ctx.payload.providerID] = {
+        name: ctx.payload.providerID,
+        npm: "@ai-sdk/openai-compatible",
+        api: ctx.payload.baseURL,
+      }
+      if (!existing.$schema) existing.$schema = "https://dreamcode.ai/config.json"
+      fs.mkdirSync(configDir, { recursive: true })
+      fs.writeFileSync(configFile, JSON.stringify(existing, null, 2))
+      return true
+    })
+
     return handlers
       .handle("console", getConsole)
       .handle("consoleOrgs", listConsoleOrgs)
@@ -183,5 +222,8 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
       .handle("resource", resource)
+      .handle("sensorGateGet", sensorGateGet)
+      .handle("sensorGate", sensorGate)
+      .handle("providerConfig", providerConfig)
   }),
 )

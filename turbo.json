@@ -9,17 +9,12 @@
       "outputs": ["dist/**"]
     },
     "dreamcode#test": {
-      "dependsOn": [],
-      "outputs": [],
-      "passThroughEnv": ["*"]
-    },
-    "dreamcode#test:unit": {
-      "dependsOn": [],
+      "dependsOn": ["^build"],
       "outputs": [],
       "passThroughEnv": ["*"]
     },
     "dreamcode#test:integration": {
-      "dependsOn": [],
+      "dependsOn": ["^build"],
       "outputs": [],
       "passThroughEnv": ["*"]
     },

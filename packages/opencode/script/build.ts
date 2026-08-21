@@ -18,7 +18,11 @@ const generated = await import("./generate.ts")
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
 
-const singleFlag = process.argv.includes("--single")
+const allFlag = process.argv.includes("--all")
+// SECURITY/MEMORY: a bare `bun run build` builds ONLY the current platform.
+// Building all 19 variants (the old default) is a memory bomb that starves the
+// host and aborts the sandbox. Opt into the full matrix explicitly with --all.
+const singleFlag = process.argv.includes("--single") || !allFlag
 const win32Flag = process.argv.includes("--win32")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
@@ -185,16 +189,16 @@ const allTargets: {
   { os: "win32", arch: "x64", avx2: false },
 ]
 
-const targets = win32Flag
-  ? allTargets.filter((item) => item.os === "win32")
-  : singleFlag
-    ? allTargets.filter((item) => {
+const targets = allFlag
+  ? allTargets
+  : win32Flag
+    ? allTargets.filter((item) => item.os === "win32")
+    : allTargets.filter((item) => {
         if (item.os !== process.platform || item.arch !== process.arch) return false
         if (item.avx2 === false) return baselineFlag
         if (item.abi !== undefined) return false
         return true
       })
-    : allTargets
 
 await $`rm -rf dist`
 
@@ -205,7 +209,7 @@ if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @ff-labs/fff-bun@${pkg.dependencies["@ff-labs/fff-bun"]}`
 }
 for (const item of targets) {
-      const name = [
+  const name = [
     pkg.name,
     item.os === "win32" ? "windows" : item.os,
     item.arch,
@@ -214,7 +218,6 @@ for (const item of targets) {
   ]
     .filter(Boolean)
     .join("-")
-  const outExt = item.os === "win32" ? ".exe" : ""
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
@@ -243,7 +246,7 @@ for (const item of targets) {
       autoloadTsconfig: true,
       autoloadPackageJson: true,
       target: name.replace(pkg.name, "bun") as any,
-      outfile: `dist/${name}/bin/dreamcode${outExt}`,
+      outfile: `dist/${name}/bin/dreamcode`,
       execArgv: [`--user-agent=dreamcode/${pkg.version}`, "--use-system-ca", "--"],
       windows: {},
     },
@@ -268,6 +271,15 @@ for (const item of targets) {
     fs.cpSync(skillsSrc, skillsDest, { recursive: true, force: true })
     const pyCount = (fs.readdirSync(skillsDest, { recursive: true }) as string[]).filter((f) => f.endsWith(".py")).length
     console.log(`Bundled ${pyCount} Python skill scripts for ${name}`)
+  }
+
+  // Bundle plugins alongside the binary (sensor-gate-enforcer, etc.)
+  const pluginsSrc = path.resolve(import.meta.dir, "../../../.opencode/plugins")
+  const pluginsDest = path.resolve(`dist/${name}/bin/plugins`)
+  if (fs.existsSync(pluginsSrc)) {
+    fs.cpSync(pluginsSrc, pluginsDest, { recursive: true, force: true })
+    const pluginCount = (fs.readdirSync(pluginsDest, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts") || f.endsWith(".js")).length
+    console.log(`Bundled ${pluginCount} plugins for ${name}`)
   }
 
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {

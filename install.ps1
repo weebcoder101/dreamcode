@@ -6,7 +6,7 @@
 # $env:LOCALAPPDATA\dreamcode\bin\, and adds it to the user PATH.
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/weebcoder101/dreamcode/stable-release/install.ps1 | iex
 #   .\install.ps1
 #
 # Or clone + build from source:
@@ -60,23 +60,32 @@ if (-not $BuildFromSource) {
     $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "dreamcode-installer" }
     $tag = $release.tag_name
     Write-Color "Latest release: $tag" $MUTED
+
+    # Find the windows-x64 asset — try .tar.gz first (v1.4.0+), then .zip (v1.3.x and earlier)
+    $winAsset = $release.assets | Where-Object { $_.name -match "windows-x64(?!.*baseline)" } | Sort-Object -Property name | Select-Object -First 1
+    if (-not $winAsset) {
+      Write-Color "ERROR: No windows-x64 asset found in release $tag" $RED
+      Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
+      $BuildFromSource = $true
+    } else {
+      $assetName = $winAsset.name
+      $downloadUrl = $winAsset.browser_download_url
+      $tempArchive = "$tempDir\$assetName"
+      $extractDir = "$tempDir\extracted"
+      Write-Color "Found asset: $assetName" $MUTED
+
+      New-Item -ItemType Directory -Force -Path $tempDir, $extractDir | Out-Null
+
+      try {
+        Download-File $downloadUrl $tempArchive
+      } catch {
+        Write-Color "ERROR: Failed to download $downloadUrl" $RED
+        Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
+        $BuildFromSource = $true
+      }
+    }
   } catch {
-    Write-Color "WARN: Could not fetch latest release. Using v1.3.6." $ORANGE
-    $tag = "v1.3.6"
-  }
-
-  # Find the windows-x64 asset (build system produces .zip for Windows)
-  $assetName = "dreamcode-windows-x64.zip"
-  $downloadUrl = "https://github.com/$OWNER/$REPO/releases/download/$tag/$assetName"
-  $tempArchive = "$tempDir\$assetName"
-  $extractDir = "$tempDir\extracted"
-
-  New-Item -ItemType Directory -Force -Path $tempDir, $extractDir | Out-Null
-
-  try {
-    Download-File $downloadUrl $tempArchive
-  } catch {
-    Write-Color "ERROR: Failed to download $downloadUrl" $RED
+    Write-Color "ERROR: Failed to fetch latest release from GitHub API." $RED
     Write-Color "Falling back to source build (requires git + bun)..." $ORANGE
     $BuildFromSource = $true
   }
@@ -84,11 +93,26 @@ if (-not $BuildFromSource) {
 
 # ─── Phase 1b: Extract pre-built binary ───────────────────────────────
 if (-not $BuildFromSource -and (Test-Path $tempArchive)) {
-  Write-Color "Extracting..." $CYAN
+  Write-Color "Extracting $assetName..." $CYAN
 
-  # Use native PowerShell Expand-Archive (works on all Windows versions)
+  # Handle both .tar.gz (v1.4.0+) and .zip (v1.3.x and earlier)
   try {
-    Expand-Archive -Path $tempArchive -DestinationPath $extractDir -Force
+    if ($assetName -match "\.tar\.gz$|\.tgz$") {
+      # tar.gz: use built-in tar (Windows 10+ includes tar.exe)
+      if (Get-Command tar -ErrorAction SilentlyContinue) {
+        & tar -xzf $tempArchive -C $extractDir
+      } else {
+        Write-Color "WARN: tar not found — trying 7z..." $ORANGE
+        if (Get-Command 7z -ErrorAction SilentlyContinue) {
+          & 7z x $tempArchive -o"$extractDir" -y
+        } else {
+          throw "Neither tar nor 7z found. Install 7-Zip or use Windows 10+ (includes tar)."
+        }
+      }
+    } else {
+      # .zip: use native PowerShell Expand-Archive
+      Expand-Archive -Path $tempArchive -DestinationPath $extractDir -Force
+    }
   } catch {
     Write-Color "WARN: Extraction failed — falling back to source build: $_" $ORANGE
     $BuildFromSource = $true
@@ -122,13 +146,19 @@ if ($BuildFromSource) {
   # Clone or update repo
   if (Test-Path "$INSTALL_DIR\.git") {
     Write-Color "Updating existing DreamCode install..." $CYAN
-    try {
-      # Stash any local changes first so git pull doesn't abort
-      git -C $INSTALL_DIR stash --include-untracked 2>&1 | Out-Null
-      git -C $INSTALL_DIR pull 2>&1
-    } catch {
-      Write-Color "WARN: git pull failed: $_" $ORANGE
-      Write-Color "Continuing with existing clone." $MUTED
+    $currentBranch = git -C $INSTALL_DIR rev-parse --abbrev-ref HEAD 2>&1
+    if ($currentBranch -ne "stable-release") {
+      Write-Color "Switching to stable-release branch..." $CYAN
+      git -C $INSTALL_DIR fetch origin stable-release 2>&1 | Out-Null
+      git -C $INSTALL_DIR checkout stable-release 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        git -C $INSTALL_DIR checkout -b stable-release origin/stable-release 2>&1 | Out-Null
+      }
+    }
+    git -C $INSTALL_DIR pull origin stable-release 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Color "WARN: git pull failed (detached HEAD or network issue). Using working tree as-is." $ORANGE
+      git -C $INSTALL_DIR checkout .
     }
   } else {
     if (Test-Path $INSTALL_DIR) {
@@ -136,9 +166,9 @@ if ($BuildFromSource) {
       Write-Color "Remove it or set `$env:DREAMCODE_DIR to a different path." $ORANGE
       exit 1
     }
-    Write-Color "Cloning DreamCode..." $CYAN
+    Write-Color "Cloning DreamCode (stable-release branch)..." $CYAN
     try {
-      git clone "https://github.com/$OWNER/$REPO.git" $INSTALL_DIR
+      git clone -b stable-release "https://github.com/$OWNER/$REPO.git" $INSTALL_DIR
     } catch {
       Write-Color "ERROR: git clone failed: $_" $RED
       exit 1
@@ -167,44 +197,78 @@ if ($BuildFromSource) {
   Write-Color "Building version: $VERSION" $MUTED
 
   Set-Location $INSTALL_DIR
-  bun install
+  # Windows requires --linker hoisted for symlink compatibility (bun#12385)
+  $bunInstallArgs = @("install")
+  if ($env:OS -eq "Windows_NT") { $bunInstallArgs += "--linker", "hoisted" }
 
-  Set-Location packages\opencode
-  bun run build --single --skip-embed-web-ui --skip-install
+  $sourceBuildOk = $true
+  try {
+    & "bun" @bunInstallArgs
+  } catch {
+    Write-Color "WARN: bun install failed (likely native dep compilation on Windows): $_" $ORANGE
+    Write-Color "Continuing — the pre-built download path is the primary install method for Windows." $ORANGE
+    $sourceBuildOk = $false
+  }
 
-  # Verify binary
-  # Try with .exe first (build.ts now adds it for win32), fall back to without
-  $NATIVE_BIN = "dist\dreamcode-windows-x64\bin\dreamcode.exe"
-  $NATIVE_BIN_NOEXT = "dist\dreamcode-windows-x64\bin\dreamcode"
-  if (-not (Test-Path $NATIVE_BIN)) {
-    if (Test-Path $NATIVE_BIN_NOEXT) {
-      $NATIVE_BIN = $NATIVE_BIN_NOEXT
-    } else {
-      Write-Color "ERROR: Build did not produce expected binary at $NATIVE_BIN" $RED
-      exit 1
+  if ($sourceBuildOk) {
+    Set-Location packages\opencode
+
+    $buildOk = $true
+    try {
+      bun run build --single --skip-embed-web-ui --skip-install
+    } catch {
+      Write-Color "WARN: bun build failed (likely bun 1.3.x Schema AST bug on Windows): $_" $ORANGE
+      $buildOk = $false
+    }
+
+    if ($buildOk) {
+      # Verify binary
+      $NATIVE_BIN = "dist\dreamcode-windows-x64\bin\dreamcode.exe"
+      if (Test-Path $NATIVE_BIN) {
+        # Copy binary
+        New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
+        Copy-Item $NATIVE_BIN "$BIN_DIR\$APP.exe" -Force
+        Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
+      } else {
+        Write-Color "WARN: Build did not produce expected binary at $NATIVE_BIN" $ORANGE
+      }
     }
   }
 
-  # Copy binary
-  New-Item -ItemType Directory -Force -Path $BIN_DIR | Out-Null
-  Copy-Item $NATIVE_BIN "$BIN_DIR\$APP.exe" -Force
-  Write-Color "Installed $APP.exe to $BIN_DIR" $GREEN
+  if (-not (Test-Path "$BIN_DIR\$APP.exe")) {
+    Write-Color "WARN: Binary was not installed via source build. The pre-built download path is recommended for Windows." $ORANGE
+    Write-Color "Install with: .\install.ps1 (without -BuildFromSource) to download a pre-built binary." $CYAN
+  }
 }
 
-# ─── Phase 1d: Install Python scripts to skills directory ─────────────
-# The Python scripts (sensor_gate.py, neuro_harness.py, etc.) are needed
-# for persona/skill/chain functionality. The resolver checks
-# %USERPROFILE%\.dreamcode\skills (among others) at runtime.
-$SKILLS_DST = "$env:USERPROFILE\.dreamcode\skills"
+# ─── Phase 1d: Install skills and plugins to config directory ────────
+# The Python scripts (sensor_gate.py, neuro_harness.py, etc.) and plugins
+# (sensor-gate-enforcer.ts, etc.) are needed for skill/chain/sensor-gate
+# functionality. The resolver checks ~/.config/dreamcode/skills at runtime.
+$CONFIG_SKILLS = "$env:USERPROFILE\.config\dreamcode\skills"
+$CONFIG_PLUGINS = "$env:USERPROFILE\.config\dreamcode\plugins"
 
-# Source candidates:
+# Skills/plugins source candidates:
 #   1. Bundled alongside the binary in the extracted archive (pre-built)
+#      Layout varies: flat zip → $extractDir/skills
+#                      tar.gz   → $extractDir/<name>/bin/skills
+#      Solution: find skills relative to the exe we already located.
 #   2. Source repo path (BuildFromSource)
-$bundledSkills = "$extractDir\skills"
+$bundledSkills = $null
+$bundledPlugins = $null
 $repoSkills = "$INSTALL_DIR\packages\opencode\src\skill\dreamcode\skills"
 $skillsSource = $null
 
-if (-not $BuildFromSource -and (Test-Path $bundledSkills)) {
+# Locate skills/plugins relative to the installed exe (archive-layout-agnostic)
+$exeCandidate = Get-ChildItem -Path $extractDir -Recurse -Filter "$APP.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $BuildFromSource -and $exeCandidate) {
+  $exeDir = Split-Path $exeCandidate.FullName -Parent
+  $bundledSkills = Join-Path $exeDir "skills"
+  $bundledPlugins = Join-Path $exeDir "plugins"
+  Write-Color "Probing skills at: $bundledSkills" $MUTED
+}
+
+if (-not $BuildFromSource -and $bundledSkills -and (Test-Path $bundledSkills)) {
   $skillsSource = $bundledSkills
   Write-Color "Found bundled skills in release archive." $MUTED
 } elseif ($BuildFromSource -and (Test-Path $repoSkills)) {
@@ -213,27 +277,71 @@ if (-not $BuildFromSource -and (Test-Path $bundledSkills)) {
 }
 
 if ($skillsSource) {
-  Write-Color "Installing Python scripts to skills directory..." $CYAN
+  Write-Color "Installing skills to $CONFIG_SKILLS ..." $CYAN
   try {
-    # Create destination if it doesn't exist
-    New-Item -ItemType Directory -Force -Path $SKILLS_DST | Out-Null
-    
-    # Copy all skill directories recursively
-    Copy-Item -Path "$skillsSource\*" -Destination $SKILLS_DST -Recurse -Force
-    
-    # Count installed scripts
-    $scriptCount = (Get-ChildItem -Path $SKILLS_DST -Filter "*.py" -Recurse).Count
-    Write-Color "Installed $scriptCount Python scripts to $SKILLS_DST" $GREEN
+    New-Item -ItemType Directory -Force -Path $CONFIG_SKILLS | Out-Null
+    Copy-Item -Path "$skillsSource\*" -Destination $CONFIG_SKILLS -Recurse -Force
+    $skillCount = (Get-ChildItem -Path $CONFIG_SKILLS -Directory).Count
+    Write-Color "Installed $skillCount skills to $CONFIG_SKILLS" $GREEN
   } catch {
-    Write-Color "WARN: Failed to install Python scripts: $_" $ORANGE
-    Write-Color "Personas and skill chains may not work without Python scripts." $ORANGE
+    Write-Color "WARN: Failed to install skills: $_" $ORANGE
+    Write-Color "Skill chains may not work without skills." $ORANGE
   }
 } else {
-  Write-Color "WARN: No Python skills source found." $ORANGE
-  Write-Color "If using a pre-built release, the skills should be bundled in the archive." $ORANGE
-  Write-Color "If building from source, ensure the repo is complete." $ORANGE
-  Write-Color "Personas and skill chains will be disabled without Python scripts." $ORANGE
-  Write-Color "To fix: download a full release or set `$env:DREAMCODE_DIR to your repo root." $ORANGE
+  Write-Color "WARN: No skills source found." $ORANGE
+  Write-Color "Skill chains will be disabled without skills." $ORANGE
+}
+
+# Plugins source candidates (same logic as skills above)
+$repoPlugins = "$INSTALL_DIR\.opencode\plugins"
+$pluginsSource = $null
+
+if (-not $BuildFromSource -and $bundledPlugins -and (Test-Path $bundledPlugins)) {
+  $pluginsSource = $bundledPlugins
+  Write-Color "Found bundled plugins in release archive." $MUTED
+} elseif ($BuildFromSource -and (Test-Path $repoPlugins)) {
+  $pluginsSource = $repoPlugins
+  Write-Color "Found plugins in source repo." $MUTED
+}
+
+if ($pluginsSource) {
+  Write-Color "Installing plugins to $CONFIG_PLUGINS ..." $CYAN
+  try {
+    New-Item -ItemType Directory -Force -Path $CONFIG_PLUGINS | Out-Null
+    Copy-Item -Path "$pluginsSource\*" -Destination $CONFIG_PLUGINS -Recurse -Force
+    $pluginCount = (Get-ChildItem -Path $CONFIG_PLUGINS -Filter "*.ts" -Recurse).Count
+    Write-Color "Installed $pluginCount plugins to $CONFIG_PLUGINS" $GREEN
+  } catch {
+    Write-Color "WARN: Failed to install plugins: $_" $ORANGE
+  }
+} else {
+  Write-Color "WARN: No plugins source found." $ORANGE
+}
+
+# ─── Copy skills/plugins alongside binary (binary-bundled fallback) ──
+# The resolver checks dirname(process.execPath)/skills first. Copying here
+# ensures skills/plugins work even if XDG config is cleared.
+if (Test-Path "$BIN_DIR\$APP.exe") {
+  if (Test-Path $CONFIG_SKILLS) {
+    $binSkills = "$BIN_DIR\skills"
+    try {
+      New-Item -ItemType Directory -Force -Path $binSkills | Out-Null
+      Copy-Item -Path "$CONFIG_SKILLS\*" -Destination $binSkills -Recurse -Force
+      Write-Color "Copied skills alongside binary: $binSkills" $GREEN
+    } catch {
+      Write-Color "WARN: Failed to copy skills alongside binary: $_" $ORANGE
+    }
+  }
+  if (Test-Path $CONFIG_PLUGINS) {
+    $binPlugins = "$BIN_DIR\plugins"
+    try {
+      New-Item -ItemType Directory -Force -Path $binPlugins | Out-Null
+      Copy-Item -Path "$CONFIG_PLUGINS\*" -Destination $binPlugins -Recurse -Force
+      Write-Color "Copied plugins alongside binary: $binPlugins" $GREEN
+    } catch {
+      Write-Color "WARN: Failed to copy plugins alongside binary: $_" $ORANGE
+    }
+  }
 }
 
 # ─── Phase 1e: Verify Python availability ─────────────────────────────
@@ -344,11 +452,19 @@ if (Test-Path $fullPath) {
 }
 
 # Verify skills installation
-$skillsInstalled = Test-Path "$SKILLS_DST\chain-orchestrator\scripts\sensor_gate.py"
+$skillsInstalled = Test-Path "$CONFIG_SKILLS\chain-orchestrator\scripts\sensor_gate.py"
 if ($skillsInstalled) {
-  Write-Color "  Skills: $SKILLS_DST (installed)" $GREEN
+  Write-Color "  Skills: $CONFIG_SKILLS (installed)" $GREEN
 } else {
-  Write-Color "  Skills: $SKILLS_DST (not found)" $ORANGE
+  Write-Color "  Skills: $CONFIG_SKILLS (not found)" $ORANGE
+}
+
+# Verify plugins installation
+$pluginsInstalled = Test-Path "$CONFIG_PLUGINS\sensor-gate-enforcer.ts"
+if ($pluginsInstalled) {
+  Write-Color "  Plugins: $CONFIG_PLUGINS (installed)" $GREEN
+} else {
+  Write-Color "  Plugins: $CONFIG_PLUGINS (not found)" $ORANGE
 }
 
 # Verify Python

@@ -409,6 +409,7 @@ export const ProvidersLoginCommand = effectCmd({
     ]
 
     let provider: string
+    let customProviderMeta: { baseURL: string; model: string } | undefined
     if (args.provider) {
       const input = args.provider
       const byID = options.find((x) => x.value === input)
@@ -448,9 +449,18 @@ export const ProvidersLoginCommand = effectCmd({
         if (handled) return
       }
 
-      yield* Prompt.log.warn(
-        `This only stores a credential for ${provider} - you will need configure it in dreamcode.json, check the docs for examples.`,
+      // Prompt for baseURL for the custom provider
+      const customBaseURL = yield* promptValue(
+        yield* Prompt.text({
+          message: "Enter API base URL",
+          placeholder: "https://api.example.com/v1",
+          validate: (x) => (x && x.startsWith("http") ? undefined : "Must be a valid URL starting with http"),
+        }),
       )
+
+      // Defer model selection until after API key is obtained — we fetch live
+      // from GET {baseURL}/models. Store baseURL only; model is set below.
+      customProviderMeta = { baseURL: customBaseURL, model: "" }
     }
 
     if (provider === "amazon-bedrock") {
@@ -502,6 +512,61 @@ export const ProvidersLoginCommand = effectCmd({
     })
     const apiKey = yield* promptValue(key)
     yield* Effect.orDie(authSvc.set(provider, { type: "api", key: apiKey }))
+
+    // NEW: For custom ("other") providers, fetch models live and write config
+    if (customProviderMeta) {
+      const { baseURL } = customProviderMeta
+
+      // Live model fetch from provider's /models endpoint (OpenAI-compatible)
+      const modelResult = yield* Effect.gen(function* () {
+        const url = `${baseURL.replace(/\/+$/, "")}/models`
+        const response = yield* cliTry(`Failed to fetch models from ${url}`, () =>
+          fetch(url, {
+            headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+          }).then((r) => r.json()),
+        ).pipe(Effect.option)
+        if (Option.isSome(response)) {
+          const data = response.value as { data?: Array<{ id: string }> }
+          if (data.data?.length) {
+            return data.data.map((m: { id: string }) => ({ label: m.id, value: m.id }))
+          }
+        }
+        return null
+      })
+
+      let model: string
+      if (modelResult && modelResult.length > 0) {
+        model = yield* promptValue(
+          yield* Prompt.autocomplete({
+            message: "Select model",
+            maxItems: 8,
+            options: modelResult,
+          }),
+        )
+      } else {
+        model = yield* promptValue(
+          yield* Prompt.text({
+            message: "Enter default model name",
+            placeholder: "gpt-4o-mini",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )
+      }
+
+      // Write provider config to dreamcode.json
+      yield* Effect.orDie(
+        cfgSvc.updateGlobal({
+          provider: {
+            [provider]: {
+              name: provider,
+              models: { [model]: { name: model } },
+              options: { baseURL },
+            },
+          },
+        }),
+      )
+      yield* Prompt.log.success(`Configured ${provider} with endpoint ${baseURL} and model ${model}`)
+    }
 
     yield* Prompt.outro("Done")
   }),

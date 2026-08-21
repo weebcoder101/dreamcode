@@ -162,6 +162,7 @@ export type TuiDialogSelectOption<Value = unknown> = {
   title: string
   value: Value
   description?: string
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
   footer?: JSX.Element | string
   category?: string
   disabled?: boolean
@@ -602,6 +603,7 @@ export type TuiPluginApi = {
     DialogConfirm: (props: TuiDialogConfirmProps) => JSX.Element
     DialogPrompt: (props: TuiDialogPromptProps) => JSX.Element
     DialogSelect: <Value = unknown>(props: TuiDialogSelectProps<Value>) => JSX.Element
+    // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
     Slot: <Name extends string>(props: TuiSlotProps<Name>) => JSX.Element | null
     Prompt: (props: TuiPromptProps) => JSX.Element
     toast: (input: TuiToast) => void

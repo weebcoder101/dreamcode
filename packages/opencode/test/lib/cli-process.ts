@@ -254,9 +254,6 @@ export function withCliFixture<A, E>(
       // off stdout. Hard-coded ports flake under parallel tests.
       argv.push("--port", String(opts?.port ?? 0))
       if (opts?.hostname) argv.push("--hostname", opts.hostname)
-      // Test servers don't need password auth — the env is isolated and the
-      // test sends requests from the same process. Allows health checks etc.
-      argv.push("--allow-no-auth")
       if (opts?.extraArgs) argv.push(...opts.extraArgs)
 
       // Acquire the subprocess; release sends SIGTERM and awaits exit on

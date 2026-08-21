@@ -15,6 +15,7 @@ import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_GENERAL from "./prompt/general.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
+import PROMPT_DEEP_RESEARCH from "./prompt/deep-research.txt"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
@@ -22,7 +23,7 @@ import path from "path"
 import { Plugin } from "@/plugin"
 import { Skill } from "../skill"
 import { Effect, Context, Layer, Schema } from "effect"
-import { InstanceState } from "@/effect/instance-state"
+import { InstanceState, labelCache } from "@/effect/instance-state"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { AbsolutePath, type DeepMutable } from "@opencode-ai/core/schema"
@@ -219,6 +220,29 @@ export const layer = Layer.effect(
             mode: "subagent",
             native: true,
           },
+          "deep-research": {
+            name: "deep-research",
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                bash: "allow",
+                webfetch: "allow",
+                websearch: "allow",
+                read: "allow",
+                external_directory: readonlyExternalDirectory,
+              }),
+              user,
+            ),
+            description: `Deep research agent for thorough web-based investigation. When the user asks for deep research on a topic, the parent agent decomposes the question into 2-3 variants and spawns this agent for each variant via the task tool. Hard cap: 3 subagents max.`,
+            prompt: PROMPT_DEEP_RESEARCH,
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
           compaction: {
             name: "compaction",
             mode: "primary",
@@ -354,6 +378,7 @@ export const layer = Layer.effect(
         } as State
       }) as any),
     )
+    labelCache(state.cache, "agent")
 
     return Service.of({
       get: Effect.fn("Agent.get")(function* (agent: string) {

@@ -14,11 +14,11 @@
  * cross-session contamination in multi-directory environments.
  */
 
-import type { Hooks, PluginInput, Plugin as PluginInstance } from "@opencode-ai/plugin"
+import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { resetPeriodicTimer, predictorBreaker } from "./token-predictor.js"
 import { resolvePythonCommand, resolveSkillsDir, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver.js"
 import path from "path"
-import { COMPLEXITY_SPAWN_MAP, categorizeQuestion, type ComplexityLevel } from "./question-complexity-schema.js"
+import { COMPLEXITY_SPAWN_MAP, parseComplexityLevel, type ComplexityLevel } from "./question-complexity-schema.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -138,7 +138,7 @@ async function runPredictorScript(prompt: string, projectRoot?: string): Promise
         return null
       }
 
-      const result = JSON.parse(stdout) as PredictorResult
+      const result = JSON.parse(stdout) as PredictorResult // eslint-disable-line typescript-eslint/no-unsafe-type-assertion
       predictorBreaker.recordSuccess()
       return result
     } catch (e) {
@@ -195,26 +195,33 @@ export async function SensorGateEnforcerPlugin(_input: PluginInput): Promise<Hoo
             if (result && result.questions.length > 0) {
               const questions = result.questions.map((q) => ({
                 question: typeof q === "string" ? q : q.question,
-                complexity: (typeof q === "object" && "complexity" in q ? q.complexity : "low") as ComplexityLevel,
+                complexity: parseComplexityLevel(typeof q === "object" && "complexity" in q ? q.complexity : "low"),
               }))
-              state!.lastQuestions = questions
-              state!.maxComplexity = (result.max_complexity ?? "low") as ComplexityLevel
+              state.lastQuestions = questions
+              state.maxComplexity = parseComplexityLevel(result.max_complexity ?? "low")
               console.log(
-                `[sensor-gate-enforcer] Generated ${result.questions.length} shipping checklist questions (max complexity: ${state!.maxComplexity})`,
+                `[sensor-gate-enforcer] Generated ${result.questions.length} shipping checklist questions (max complexity: ${state.maxComplexity})`,
               )
             }
-            state!.pendingPromise = null
+            state.pendingPromise = null
             return result
           })
           .catch((e) => {
             console.warn("[sensor-gate-enforcer] Predictor error:", String(e))
-            state!.pendingPromise = null
+            state.pendingPromise = null
             return null
           })
       },
 
       // --- experimental.chat.system.transform: inject questions ---
       "experimental.chat.system.transform": async (_input, output) => {
+        // Check if sensor gate is in minimal mode via the system-prompt signal.
+        // When gate is OFF (minimal), skip shipping checklist injection.
+        // Signal string must match SENSOR_GATE_MINIMAL_SIGNAL in prompt-state.ts.
+        // NOTE: we repeat the literal here instead of importing across packages
+        // (skill/ → session/) to avoid a circular dependency.
+        if (output.system?.some((s: string) => s.includes('<sensor-gate state="minimal">'))) return
+
         type InputWithClient = { client?: { directory?: string }; sessionID?: string }
         const sessionKey = `${(_input as InputWithClient).client?.directory ?? "__default__"}:${(_input as InputWithClient).sessionID ?? "global"}`
         const state = sessionStates.get(sessionKey)

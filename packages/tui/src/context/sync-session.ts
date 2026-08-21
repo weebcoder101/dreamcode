@@ -46,11 +46,13 @@ export function createSessionSync(deps: SessionSyncDeps) {
     },
 
     async recover(sessionID: string) {
-      diag(`session.recover() sessionID=${sessionID} — forcing re-sync`)
+      diag(`session.recover() sessionID=${sessionID} — forcing re-sync (clearing fullSyncedSessions)`)
+      fullSyncedSessions.delete(sessionID)
       return this.sync(sessionID)
     },
 
     async sync(sessionID: string) {
+      if (fullSyncedSessions.has(sessionID)) return
       const syncing = syncingSessions.get(sessionID)
       if (syncing) return syncing
       diag(`session.sync() starting sessionID=${sessionID}`)
@@ -254,6 +256,7 @@ export function createSessionSync(deps: SessionSyncDeps) {
           }),
         )
         diag(`session.sync() COMPLETE sessionID=${sessionID} messagesInStore=${store.message[sessionID]?.length ?? 0}`)
+        fullSyncedSessions.add(sessionID)
       })().finally(() => {
         syncingSessions.delete(sessionID)
         hydratingSessions.delete(sessionID)

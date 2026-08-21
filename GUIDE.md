@@ -94,7 +94,7 @@ Response
 ### One-liner (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/weebcoder101/dreamcode/stable-release/install.sh | bash
 ```
 
 ### Manual install
@@ -1055,7 +1055,7 @@ dreamcode --resume <checkpoint-id>
 │                                                         │
 │  INSTALL                                                │
 │    curl -fsSL https://raw.githubusercontent.com/        │
-│      weebcoder101/dreamcode/main/install.sh | bash      │
+│      weebcoder101/dreamcode/stable-release/install.sh | bash      │
 │                                                         │
 │  RUN                                                    │
 │    cd <project> && dreamcode                            │

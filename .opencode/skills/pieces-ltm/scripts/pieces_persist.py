@@ -9,6 +9,9 @@ Provides structured memory creation with metadata.
 from __future__ import annotations
 import json
 import os
+import re
+import socket
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 UTC = timezone.utc  # Python 3.2+ compat (not 3.11+ only)
@@ -23,8 +26,7 @@ PIECES_MCP_URL = os.environ.get(
     "http://localhost:39302/model_context_protocol/2024-11-05",
 )
 PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
-EVOLUTION_DIR = Path.home() / ".dreamcode" / "evolution"
-METRICS_PATH = EVOLUTION_DIR / "pieces_writes.jsonl"
+METRICS_PATH = PROJECT_ROOT / "evolution" / "pieces_writes.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -45,31 +47,113 @@ MEMORY_TYPES = {
 # MCP Client
 # ---------------------------------------------------------------------------
 
-def call_mcp_tool(tool_name: str, arguments: dict) -> dict:
-    """Call a Pieces MCP tool via HTTP."""
-    url = f"{PIECES_MCP_URL}/messages"
+def _establish_session():
+    """Open the SSE stream and extract the sessioned messages endpoint.
 
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": arguments,
-        },
-    }
-
-    payload_bytes = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url,
-        data=payload_bytes,
-        headers={"Content-Type": "application/json"},
+    Pieces' MCP server requires a session: GET /sse returns an endpoint
+    URL carrying sessionId + auth token; every JSON-RPC POST must go to
+    that URL and responses arrive back on the SSE stream.
+    """
+    parts = urllib.parse.urlsplit(PIECES_MCP_URL)
+    scheme = parts.scheme or "http"
+    host = parts.hostname or "localhost"
+    port = parts.port or (443 if scheme == "https" else 80)
+    sock = socket.create_connection((host, port), timeout=15)
+    path = parts.path.rstrip("/") + "/sse"
+    sock.sendall(
+        (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Accept: text/event-stream\r\n"
+            "Connection: keep-alive\r\n\r\n"
+        ).encode()
     )
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        buf += sock.recv(4096)
+    head, _, body = buf.partition(b"\r\n\r\n")
+    status_line = head.split(b"\r\n", 1)[0].decode(errors="replace")
+    if " 200 " not in status_line:
+        sock.close()
+        raise ConnectionError(f"SSE handshake failed: {status_line}")
+    text = body.decode(errors="replace")
+    m = re.search(r"^data: (\S+)", text, re.M)
+    while not m:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        text += chunk.decode(errors="replace")
+        m = re.search(r"^data: (\S+)", text, re.M)
+    if not m:
+        sock.close()
+        raise ConnectionError("no endpoint event from Pieces SSE stream")
+    return sock, urllib.parse.urljoin(PIECES_MCP_URL, m.group(1))
 
+
+def _http_post(messages_url: str, method: str, params: dict) -> str:
+    """Send a JSON-RPC message to the sessioned messages endpoint."""
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    ).encode()
+    req = urllib.request.Request(
+        messages_url,
+        data=payload,
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode()
+
+
+def _read_message(sock: socket.socket, timeout: float = 30.0) -> dict:
+    """Read the next JSON-RPC result/error event from the SSE stream."""
+    sock.settimeout(timeout)
+    buf = b""
+    while True:
+        try:
+            chunk = sock.recv(4096)
+        except OSError:
+            raise ConnectionError("timed out waiting for MCP response")
+        if not chunk:
+            raise ConnectionError("Pieces MCP stream closed")
+        buf += chunk
+        text = buf.decode(errors="replace")
+        for line in text.splitlines():
+            if not line.startswith("data: "):
+                continue
+            try:
+                obj = json.loads(line[6:])
+            except ValueError:
+                continue  # partial line across chunk boundary — keep reading
+            if "result" in obj or "error" in obj:
+                return obj
+
+
+def call_mcp_tool(tool_name: str, arguments: dict) -> dict:
+    """Call a Pieces MCP tool via its SSE session handshake."""
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            return result.get("result", result)
+        sock, messages_url = _establish_session()
+        try:
+            _http_post(
+                messages_url,
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pieces-persist", "version": "1.0.0"},
+                },
+            )
+            _read_message(sock)
+            _http_post(
+                messages_url,
+                "tools/call",
+                {"name": tool_name, "arguments": arguments},
+            )
+            resp = _read_message(sock)
+            if "error" in resp:
+                return {"error": json.dumps(resp["error"])}
+            return resp.get("result", resp)
+        finally:
+            sock.close()
     except Exception as e:
         return {"error": str(e)}
 
@@ -290,7 +374,6 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Pieces LTM Persistence")
-    parser.add_argument("--prompt-file", help="Read task from file (chain-executor mode)")
     sub = parser.add_subparsers(dest="command")
 
     # persist command
@@ -312,16 +395,6 @@ if __name__ == "__main__":
     sub.add_parser("stats", help="Show persistence stats")
 
     args = parser.parse_args()
-
-    # Handle --prompt-file: read content and default to persist
-    if args.prompt_file:
-        with open(args.prompt_file) as f:
-            prompt_content = f.read()
-        if not args.command:
-            args.command = "persist"
-            args.chain = "chain-executor"
-            args.task = prompt_content[:500]
-            args.outcome = "success"
 
     if args.command == "persist":
         result = persist_chain_result(

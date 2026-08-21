@@ -8,6 +8,12 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 
 const TypeId = "~opencode/InstanceState"
 
+const cacheLabels = new WeakMap<object, string>()
+
+export const labelCache = (cache: object, label: string) => {
+  cacheLabels.set(cache, label)
+}
+
 export interface InstanceState<A, E = never, R = never> {
   readonly [TypeId]: typeof TypeId
   readonly cache: ScopedCache.ScopedCache<string, A, E, R>
@@ -80,7 +86,8 @@ export const make = <A, E = never, R = never>(
 
 export const get = <A, E, R>(self: InstanceState<A, E, R>) =>
   Effect.gen(function* () {
-    return yield* ScopedCache.get(self.cache, yield* directory)
+    const key = yield* directory
+    return yield* ScopedCache.get(self.cache, key)
   })
 
 export const use = <A, E, R, B>(self: InstanceState<A, E, R>, select: (value: A) => B) => Effect.map(get(self), select)

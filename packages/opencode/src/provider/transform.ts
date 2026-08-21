@@ -321,31 +321,89 @@ function normalizeMessages(
 }
 
 function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
-  const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
-  const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
+  const systemMsgs = msgs.filter((msg) => msg.role === "system")
+
+  // Cache the static-prefix boundary: the last system message that is NOT part
+  // of the dynamic tail (knowledge / date / taste). This keeps the ~250k-token
+  // static prefix (env, dream protocol, instructions, skills, self-check) cached
+  // as one prefix while only the small tail re-bills when it mutates, instead of
+  // re-sending the entire bulk on every request.
+  const contentToString = (m: ModelMessage): string => {
+    if (typeof m.content === "string") return m.content
+    if (Array.isArray(m.content)) {
+      return m.content
+        .map((p) => (typeof p === "object" && p !== null && "text" in p ? String((p as any).text) : ""))
+        .join("")
+    }
+    return ""
+  }
+  const isDynamicTail = (m: ModelMessage) => {
+    const c = contentToString(m)
+    return c.includes("Today's date:") || c.includes("<learned-knowledge>") || c.includes("taste-profile")
+  }
+  let boundaryIdx = systemMsgs.length - 1
+  while (boundaryIdx >= 0 && isDynamicTail(systemMsgs[boundaryIdx])) boundaryIdx--
+  const boundary = boundaryIdx >= 0 ? [systemMsgs[boundaryIdx]] : []
+
+  // OpenAI-compatible providers (cmdc/MIMO) use a single ephemeral cache checkpoint.
+  // Cache only the static-prefix boundary (which already covers the whole static prefix)
+  // instead of also the first-2 system messages, to avoid redundant cold-miss writes and to
+  // match single-checkpoint cache semantics. Anthropic-style providers keep the first-2
+  // hierarchy (a superset of the boundary), which remains safe.
+  const firstTwo = systemMsgs.slice(0, 2)
+  const cacheSystem =
+    model.api?.npm === "@ai-sdk/openai-compatible"
+      ? boundary.length > 0
+        ? boundary
+        : firstTwo
+      : [...firstTwo, ...boundary]
+
+  // OpenAI-compatible providers support explicit cache control markers in the
+  // message content. Add breakpoints at tool-result boundaries to maximize cache
+  // hits when the conversation has many tool calls (§1.3). Anthropic handles
+  // this natively; OpenAI-compatible needs explicit markers.
+  const nonSystem = msgs.filter((msg) => msg.role !== "system")
+  // Cache-aware message history (§1.6): include the FIRST user message (the
+  // initial task — byte-stable after the first turn) in the cached set for
+  // OpenAI-compatible providers, so multi-epoch conversations keep the origin
+  // cached even when the last-8 window has slid past it. The window itself is
+  // widened from 4 → 8 stable messages to cover more turns for providers that
+  // honor multi-level cache points (Z.ai GLM, Kimi, DeepSeek) and to survive
+  // interleaved plain user text between tool-result batches.
+  const firstUserStable =
+    nonSystem.find((msg) => msg.role === "user" && msg !== nonSystem[nonSystem.length - 1]) ?? undefined
+  const stableWindow =
+    model.api?.npm === "@ai-sdk/openai-compatible"
+      ? nonSystem.filter((msg) => msg.role === "assistant" || (msg.role === "user" && Array.isArray(msg.content) && msg.content.some((p: any) => p?.type === "tool-result"))).slice(-8)
+      : []
+  const final = (
+    model.api?.npm === "@ai-sdk/openai-compatible"
+      ? [...(firstUserStable ? [firstUserStable] : []), ...stableWindow]
+      : nonSystem.slice(-2)
+  )
 
   const providerOptions = {
     anthropic: {
-      cacheControl: { type: "ephemeral" },
+      cacheControl: { type: "ephemeral", ttlSeconds: 28800 }, // 8-hour KV cache — avoids repeated writes at miss price
     },
     openrouter: {
-      cacheControl: { type: "ephemeral" },
+      cacheControl: { type: "ephemeral", ttlSeconds: 28800 },
     },
     bedrock: {
-      cachePoint: { type: "default" },
+      cachePoint: { type: "default", ttlSeconds: 28800 },
     },
     openaiCompatible: {
-      cache_control: { type: "ephemeral" },
+      cache_control: { type: "ephemeral", ttlSeconds: 28800 }, // cmdc/MIMO backends that honor TTL keep prefix cached
     },
     copilot: {
-      copilot_cache_control: { type: "ephemeral" },
+      copilot_cache_control: { type: "ephemeral", ttlSeconds: 28800 },
     },
     alibaba: {
-      cacheControl: { type: "ephemeral" },
+      cacheControl: { type: "ephemeral", ttlSeconds: 28800 },
     },
   }
 
-  for (const msg of unique([...system, ...final])) {
+  for (const msg of unique([...cacheSystem, ...final])) {
     const useMessageLevelOptions =
       model.providerID === "anthropic" ||
       model.providerID.includes("bedrock") ||
@@ -438,7 +496,8 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
       model.id.includes("anthropic") ||
       model.id.includes("claude") ||
       model.api.npm === "@ai-sdk/anthropic" ||
-      model.api.npm === "@ai-sdk/alibaba") &&
+      model.api.npm === "@ai-sdk/alibaba" ||
+      model.api.npm === "@ai-sdk/openai-compatible") &&
     model.api.npm !== "@ai-sdk/gateway"
   ) {
     msgs = applyCaching(msgs, model)
@@ -485,6 +544,7 @@ export function temperature(model: Provider.Model) {
   if (id.includes("glm-4.6")) return 1.0
   if (id.includes("glm-4.7")) return 1.0
   if (id.includes("minimax-m2")) return 1.0
+  if (id.includes("deepseek")) return 1.0
   if (id.includes("kimi-k2")) {
     // kimi-k2-thinking & kimi-k2.5 && kimi-k2p5 && kimi-k2-5
     if (["thinking", "k2.", "k2p", "k2-5"].some((s) => id.includes(s))) {
@@ -498,6 +558,7 @@ export function temperature(model: Provider.Model) {
 export function topP(model: Provider.Model) {
   const id = model.id.toLowerCase()
   if (id.includes("qwen")) return 1
+  if (id.includes("deepseek")) return 0.95
   if (["minimax-m2", "gemini", "kimi-k2.5", "kimi-k2p5", "kimi-k2-5"].some((s) => id.includes(s))) {
     return 0.95
   }
@@ -904,13 +965,13 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
         high: {
           thinking: {
             type: "enabled",
-            budgetTokens: Math.min(16_000, Math.floor(model.limit.output / 2 - 1)),
+            budgetTokens: Math.min(16_000, Math.max(1, Math.floor(model.limit.output / 2 - 1))),
           },
         },
         max: {
           thinking: {
             type: "enabled",
-            budgetTokens: Math.min(31_999, model.limit.output - 1),
+            budgetTokens: Math.min(31_999, Math.max(1, model.limit.output - 1)),
           },
         },
       }
@@ -1114,6 +1175,14 @@ export function options(input: {
 
   const modelId = input.model.api.id.toLowerCase()
 
+  // DeepSeek V4: default to max reasoning effort for agentic depth.
+  // DeepSeek's own best code-agent eval config is reasoning_effort=max,
+  // temperature=1.0, top_p=0.95. The variant list still exposes lower
+  // efforts for users who want cheaper/faster runs.
+  if (modelId.includes("deepseek-v4")) {
+    result["reasoningEffort"] = "max"
+  }
+
   // MiniMax's Anthropic interface defaults thinking off, unlike Chat Completions.
   if (modelId.includes("minimax-m3") && input.model.api.npm === "@ai-sdk/anthropic") {
     result["thinking"] = { type: "adaptive" }
@@ -1126,7 +1195,7 @@ export function options(input: {
   ) {
     result["thinking"] = {
       type: "enabled",
-      budgetTokens: Math.min(16_000, Math.floor(input.model.limit.output / 2 - 1)),
+      budgetTokens: Math.min(16_000, Math.max(1, Math.floor(input.model.limit.output / 2 - 1))),
     }
   }
 
@@ -1147,6 +1216,14 @@ export function options(input: {
   if (input.model.api.npm === "@ai-sdk/azure" && input.model.api.id.includes("gpt-5.5")) {
     result["reasoningSummary"] = "auto"
     return result
+  }
+
+  // Always set promptCacheKey for opencode provider so ALL models (not just
+  // GPT-5) benefit from session-bound KV cache. Without this the backend has
+  // zero concept of which requests belong to the same cached prefix, so every
+  // turn re-bills the full ~127k-token prefix at miss price.
+  if (input.model.providerID.startsWith("opencode")) {
+    result["promptCacheKey"] = input.sessionID
   }
 
   if (input.model.api.id.includes("gpt-5") && !input.model.api.id.includes("gpt-5-chat")) {
@@ -1176,8 +1253,9 @@ export function options(input: {
       result["textVerbosity"] = "low"
     }
 
+    // For opencode: promptCacheKey is set unconditionally above for ALL models.
+    // These two options remain GPT-5–specific (encrypted reasoning state + auto summary).
     if (input.model.providerID.startsWith("opencode")) {
-      result["promptCacheKey"] = input.sessionID
       result["include"] = INCLUDE_ENCRYPTED_REASONING
       result["reasoningSummary"] = "auto"
     }
@@ -1196,6 +1274,19 @@ export function options(input: {
     result["gateway"] = {
       caching: "auto",
     }
+  }
+
+  // Custom openai-compatible reasoning models (Muse Spark, Qwen3, DeepSeek R1,
+  // etc.) return reasoning_content but get NO provider-specific safety net in
+  // the harness. Without an effort cap their chain-of-thought is billed as raw
+  // output tokens and can run away (thousands of tokens per step). Default them
+  // to a safe low effort unless the user, variant, or config already set one.
+  if (
+    input.model.api.npm === "@ai-sdk/openai-compatible" &&
+    input.model.capabilities.reasoning &&
+    !result["reasoningEffort"]
+  ) {
+    result["reasoningEffort"] = "low"
   }
 
   return result

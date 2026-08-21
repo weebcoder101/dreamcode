@@ -110,7 +110,7 @@ export function createWebSocketFetch(options?: CreateWebSocketFetchOptions) {
             invalidate(entry)
           }
         },
-        onConnectionInvalid: (error) => {
+        onConnectionInvalid: (_error) => {
           entry.busy = false
           entry.lastUsedAt = Date.now()
           if (!entry.fallback) recordStreamFailure(entry)
@@ -194,8 +194,8 @@ export function createWebSocketFetch(options?: CreateWebSocketFetchOptions) {
   return Object.assign(websocketFetch, { close, remove })
 }
 
-function connectionLimitError(event: Record<string, unknown>) {
-  if (event.type !== "error" || !isRecord(event.error) || event.error.code !== CONNECTION_LIMIT_REACHED_CODE) return
+function connectionLimitError(event: Record<string, unknown>): Error | undefined {
+  if (event.type !== "error" || !isRecord(event.error) || event.error.code !== CONNECTION_LIMIT_REACHED_CODE) return undefined
   return new Error(typeof event.error.message === "string" ? event.error.message : CONNECTION_LIMIT_REACHED_CODE)
 }
 

@@ -192,25 +192,9 @@ jobs:
         working-directory: packages/opencode/dist
         shell: pwsh
         run: |
-          function Repack-Archive {
-            param([string]$DirName, [string]$ZipName)
-            # Include bin AND skills directories at the zip root
-            $items = @()
-            if (Test-Path "$DirName\bin\dreamcode.exe") { $items += "$DirName\bin\dreamcode.exe" }
-            # Find skills directory (may be at bin/skills or top-level skills)
-            $skillsPath = if (Test-Path "$DirName\skills") { "$DirName\skills" } elseif (Test-Path "$DirName\bin\skills") { "$DirName\bin\skills" } else { $null }
-            if ($skillsPath) { $items += "$skillsPath\*" }
-            # Include package.json if present at platform level (needed for version info)
-            if (Test-Path "$DirName\package.json") { $items += "$DirName\package.json" }
-            if ($items.Count -eq 0) {
-              Write-Warning "No files found for $DirName — falling back to bin/*"
-              $items = @("$DirName\bin\*")
-            }
-            Compress-Archive -Path $items -DestinationPath $ZipName -Force
-          }
-          Repack-Archive "dreamcode-windows-arm64" "dreamcode-windows-arm64.zip"
-          Repack-Archive "dreamcode-windows-x64" "dreamcode-windows-x64.zip"
-          Repack-Archive "dreamcode-windows-x64-baseline" "dreamcode-windows-x64-baseline.zip"
+          Compress-Archive -Path "dreamcode-windows-arm64\bin\*" -DestinationPath "dreamcode-windows-arm64.zip" -Force
+          Compress-Archive -Path "dreamcode-windows-x64\bin\*" -DestinationPath "dreamcode-windows-x64.zip" -Force
+          Compress-Archive -Path "dreamcode-windows-x64-baseline\bin\*" -DestinationPath "dreamcode-windows-x64-baseline.zip" -Force
 
       - name: Upload signed Windows CLI release assets
         if: needs.version.outputs.release != ''

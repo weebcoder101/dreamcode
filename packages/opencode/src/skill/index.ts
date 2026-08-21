@@ -307,12 +307,6 @@ const discoverSkills = Effect.fnUntraced(function* (
     yield* scan(state, dir, OPENCODE_SKILL_PATTERN)
   }
 
-  // Scan binary-bundled skills directory (for compiled binary releases)
-  const binarySkillsDir = path.join(path.dirname(process.execPath), "skills")
-  if (yield* fsys.isDir(binarySkillsDir)) {
-    yield* scan(state, binarySkillsDir, SKILL_PATTERN)
-  }
-
   const cfg = yield* config.get()
   for (const item of cfg.skills?.paths ?? []) {
     const expanded = item.startsWith("~/") ? path.join(global.home, item.slice(2)) : item
@@ -363,53 +357,41 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
 
-    // First-run skill sync: if global config skills dir is empty or has no
-    // SKILL.md files, try to copy from the install/repo directory so skills
-    // work from any CWD. Validates source actually has skill content.
+    // First-run skill sync: if global config skills dir is empty, try to copy
+    // from the binary-bundled skills dir so skills work from any CWD.
+    // SINGLE SOURCE OF TRUTH: ~/.config/dreamcode/skills/ is the only global location.
     const globalSkillsDir = path.join(global.home, ".config", "dreamcode", "skills")
-    const installSkillsDir = path.join(global.home, ".dreamcode", "skills")
-    const repoSkillsDir = path.join(global.home, "dreamcode", ".dreamcode", "skills")
+    const binarySkillsDir = path.join(path.dirname(process.execPath), "skills")
     yield* Effect.tryPromise(async (_signal: AbortSignal) => {
-      const { stat, mkdir, readdir, cp, access } = await import("fs/promises")
-
-      // Check if global dir already has SKILL.md files
-      const globalHasSkills = await (async () => {
-        try {
+      const { stat, mkdir, readdir, cp } = await import("fs/promises")
+      // Check if global dir exists AND has content (at least one SKILL.md).
+      // An empty directory (created by a prior run that exited before syncing)
+      // should NOT count as "not empty" — it needs to be re-populated.
+      let globalEmpty = true
+      try {
+        const s = await stat(globalSkillsDir)
+        if (s.isDirectory()) {
           const entries = await readdir(globalSkillsDir)
+          // Check for any subdirectory that contains a SKILL.md file
+          let hasContent = false
           for (const entry of entries) {
-            const skillMd = path.join(globalSkillsDir, entry, "SKILL.md")
-            try { await access(skillMd); return true } catch {}
+            try {
+              const subStat = await stat(path.join(globalSkillsDir, entry))
+              if (subStat.isDirectory()) {
+                const mdStat = await stat(path.join(globalSkillsDir, entry, "SKILL.md"))
+                if (mdStat.isFile()) { hasContent = true; break }
+              }
+            } catch { /* entry has no SKILL.md, skip */ }
           }
-          return false
-        } catch { return false }
-      })()
-      if (globalHasSkills) return
-
-      // Find best source: prefers directories that actually have SKILL.md files
-      // Package source is canonical (43 skills); .dreamcode/skills is stale (39 skills)
-      const pkgDir = path.join(global.home, "dreamcode", "packages", "opencode", "src", "skill", "dreamcode", "skills")
-      const candidates = [
-        { dir: pkgDir, name: "package" },
-        { dir: installSkillsDir, name: "install" },
-        { dir: repoSkillsDir, name: "repo" },
-      ]
-
-      let source: string | undefined
-      for (const c of candidates) {
-        try {
-          if (!(await stat(c.dir).then((s) => s.isDirectory()).catch(() => false))) continue
-          // Verify at least one subdirectory has SKILL.md
-          const entries = await readdir(c.dir)
-          for (const entry of entries) {
-            const skillMd = path.join(c.dir, entry, "SKILL.md")
-            try { await access(skillMd); source = c.dir; break } catch {}
-          }
-          if (source) break
-        } catch { continue }
-      }
-
+          globalEmpty = !hasContent
+        }
+      } catch { /* dir doesn't exist — globalEmpty stays true */ }
+      if (!globalEmpty) return
+      // Source priority: binary-bundled (release), then project-local (development)
+      const source = (await stat(binarySkillsDir).then((s) => s.isDirectory()).catch(() => false))
+        ? binarySkillsDir
+        : undefined
       if (!source) return
-
       await mkdir(globalSkillsDir, { recursive: true })
       const entries = await readdir(source)
       for (const entry of entries) {
@@ -419,6 +401,36 @@ export const layer = Layer.effect(
       }
     }).pipe(
       Effect.catch((e) => Effect.logWarning("skill sync to global config failed (non-fatal)", { error: String(e) })),
+    )
+
+    // First-run plugin sync: if global config plugins dir is empty, try to copy
+    // from the binary-bundled plugins dir so plugins work from any CWD.
+    const globalPluginsDir = path.join(global.home, ".config", "dreamcode", "plugins")
+    const binaryPluginsDir = path.join(path.dirname(process.execPath), "plugins")
+    yield* Effect.tryPromise(async (_signal: AbortSignal) => {
+      const { stat, mkdir, readdir, cp } = await import("fs/promises")
+      let globalEmpty = true
+      try {
+        const s = await stat(globalPluginsDir)
+        if (s.isDirectory()) {
+          const entries = await readdir(globalPluginsDir)
+          globalEmpty = !entries.some((e) => e.endsWith(".ts") || e.endsWith(".js"))
+        }
+      } catch { /* dir doesn't exist */ }
+      if (!globalEmpty) return
+      const source = (await stat(binaryPluginsDir).then((s) => s.isDirectory()).catch(() => false))
+        ? binaryPluginsDir
+        : undefined
+      if (!source) return
+      await mkdir(globalPluginsDir, { recursive: true })
+      const entries = await readdir(source)
+      for (const entry of entries) {
+        const src = path.join(source, entry)
+        const dst = path.join(globalPluginsDir, entry)
+        await cp(src, dst, { recursive: true }).catch((e) => console.warn("plugin: copy to global config failed", e))
+      }
+    }).pipe(
+      Effect.catch((e) => Effect.logWarning("plugin sync to global config failed (non-fatal)", { error: String(e) })),
     )
 
     const discovered = yield* InstanceState.make(

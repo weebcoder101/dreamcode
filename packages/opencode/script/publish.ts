@@ -3,9 +3,6 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
 import { fileURLToPath } from "url"
-import * as fs from "fs"
-import * as path from "path"
-import * as os from "os"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
@@ -204,34 +201,9 @@ if (!Script.preview) {
     console.error("GITHUB_TOKEN is required to update homebrew tap")
     process.exit(1)
   }
-  // Use GIT_ASKPASS instead of embedding the token in the clone URL.
-  // An inline token in `https://x-access-token:${token}@github.com/...` is
-  // visible via `ps aux` on shared CI runners. The askpass script reads the
-  // token from a temp file, keeping it out of the process argument list.
-  const askpassDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "git-askpass-"))
-  let askpassCleaned = false
-  const cleanupAskpass = () => {
-    if (askpassCleaned) return
-    askpassCleaned = true
-    fs.rmSync(askpassDir, { recursive: true, force: true })
-  }
-  try {
-    const askpassScript = path.join(askpassDir, "askpass.sh")
-    const tokenFile = path.join(askpassDir, "token")
-    await fs.promises.writeFile(tokenFile, token, "utf-8")
-    await fs.promises.writeFile(
-      askpassScript,
-      `#!/bin/sh\nexec cat "${tokenFile.replace(/"/g, '\\"')}"\n`,
-      "utf-8",
-    )
-    await fs.promises.chmod(askpassScript, 0o500)
-    await $`rm -rf ./dist/homebrew-tap`
-    await $`GIT_ASKPASS=${askpassScript} GIT_TERMINAL_PROMPT=0 git clone https://x-access-token@github.com/weebcoder101/homebrew-tap.git ./dist/homebrew-tap`
-  } finally {
-    cleanupAskpass()
-  }
-  // Credential helper already cleaned up by the finally block above.
-  // No need for a second rm — the tmpdir is already gone.
+  const tap = `https://x-access-token:${token}@github.com/weebcoder101/homebrew-tap.git`
+  await $`rm -rf ./dist/homebrew-tap`
+  await $`git clone ${tap} ./dist/homebrew-tap`
   await Bun.file("./dist/homebrew-tap/dreamcode.rb").write(homebrewFormula)
   await $`cd ./dist/homebrew-tap && git add dreamcode.rb`
   if ((await $`cd ./dist/homebrew-tap && git diff --cached --quiet`.nothrow()).exitCode !== 0) {

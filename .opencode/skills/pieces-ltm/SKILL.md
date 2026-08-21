@@ -23,16 +23,40 @@ triggers:
 Ensures every skill chain result is persisted to Pieces LTM, and provides
 improved retrieval patterns for future context queries.
 
+## Critical: Health Check & User Warning
+
+**BEFORE using any Pieces LTM tool or querying LTM memory, you MUST:**
+
+1. **Check health**: Call `PiecesLTM.Service.health()` to verify Pieces MCP is reachable at `localhost:39302`
+2. **Warn if unavailable**: If health returns `{ reachable: false }`, immediately warn the user:
+   ```
+   [WARN] Pieces LTM is not configured or MCP server is unreachable.
+   The pieces-ltm skill requires the Pieces for Developers MCP server.
+   
+   To install Pieces for Developers:
+     1. Visit https://pieces.app and download the app
+     2. Install and launch Pieces Desktop
+     3. The MCP server runs automatically at localhost:39302
+     4. Verify with: curl http://localhost:39302/health
+   
+   Without Pieces MCP, long-term memory features will be unavailable.
+   Agent will proceed without LTM persistence and retrieval.
+   ```
+3. **Proceed gracefully**: Continue the task without LTM — do NOT block on Pieces unavailability
+
+This warning MUST be emitted every time the skill fires and Pieces is unreachable.
+Do NOT silently fail — the user needs to know LTM features are unavailable.
+
 ## Architecture
 
 ```
-Skill Chain Output → pieces-ltm → Pieces MCP → LTM Storage
-                         ↓
-              Auto-classify (standup/decision/breakthrough/bugfix)
-                         ↓
-              Write with structured metadata
-                         ↓
-              Future queries hit LTM with rich context
+Skill Chain Output → [Health Check] → pieces-ltm → Pieces MCP → LTM Storage
+                         ↓ ↓                           ↓
+              Unreachable? → Warn user          Auto-classify
+                         ↓                           ↓
+              Continue without LTM         Write with structured metadata
+                                                    ↓
+                                        Future queries hit LTM with rich context
 ```
 
 ## Auto-Persistence Rules (MANDATORY)
@@ -99,6 +123,19 @@ The Learning Note MUST include `"pieces_written": true | false`. If false, flag 
 | `incident` | Production issue | Permanent |
 
 ## Retrieval Patterns
+
+### Pattern 0: Post-Compaction Context Recovery (CRITICAL)
+After a compaction event, the agent MUST recover task context before continuing:
+```python
+# Check disk-first for resume plan (always available)
+resume_plan = read_file(".opencode/session/resume-plan.json")
+if resume_plan:
+    print("RESUMING task from pre-compaction snapshot")
+    
+# ALSO query Pieces LTM with dreamcode-scoped query (if available)
+search(query="what were we working on inside dreamcode before compaction", topics=["dreamcode", "opencode"])
+```
+The key difference: query is scoped to **dreamcode/opencode** project context, NOT generic personal questions.
 
 ### Pattern 1: Recent Context
 ```python

@@ -184,7 +184,7 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
       return
     }
 
-    const text = data.toString()
+    const text = typeof data === "string" ? data : JSON.stringify(data)
     const event = (() => {
       try {
         const parsed = JSON.parse(text)
@@ -340,9 +340,9 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
 }
 
 function parseWrappedError(event: Record<string, unknown> | undefined, body: string) {
-  if (event?.type !== "error") return
+  if (event?.type !== "error") return undefined
   const status = event.status ?? event.status_code
-  if (typeof status !== "number" || (status >= 200 && status < 300)) return
+  if (typeof status !== "number" || (status >= 200 && status < 300)) return undefined
   return {
     status,
     headers: isRecord(event.headers)

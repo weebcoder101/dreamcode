@@ -1,0 +1,11 @@
+{
+  "name": "dreamcode-linux-x64",
+  "version": "1.5.0",
+  "preferUnplugged": true,
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}

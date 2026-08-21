@@ -18,13 +18,15 @@ function parse(spec: string) {
     return npa(spec)
   } catch (e) {
     console.warn("[plugin/shared] npa parse failed for:", spec, String(e))
+    return undefined
   }
 }
 
 export function parsePluginSpecifier(spec: string) {
   const hit = parse(spec)
   if (hit?.type === "alias" && !hit.name) {
-    const sub = (hit as npa.AliasResult).subSpec
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const sub = (hit as unknown as { subSpec: npa.Result }).subSpec
     if (sub?.name) {
       const version = !sub.rawSpec || sub.rawSpec === "*" ? "latest" : sub.rawSpec
       return { pkg: sub.name, version }
@@ -82,9 +84,9 @@ function extractExportValue(value: unknown): string | undefined {
 
 function packageMain(pkg: PluginPackage) {
   const value = pkg.json.main
-  if (typeof value !== "string") return
+  if (typeof value !== "string") return undefined
   const next = value.trim()
-  if (!next) return
+  if (!next) return undefined
   return next
 }
 
@@ -102,36 +104,38 @@ function resolvePackagePath(spec: string, raw: string, kind: PluginKind, pkg: Pl
   return pathToFileURL(resolvePackageFile(spec, raw, kind, pkg)).href
 }
 
-function resolvePackageEntrypoint(spec: string, kind: PluginKind, pkg: PluginPackage) {
+function resolvePackageEntrypoint(spec: string, kind: PluginKind, pkg: PluginPackage): string | undefined {
   const exports = pkg.json.exports
   if (isRecord(exports)) {
     const raw = extractExportValue(exports[`./${kind}`])
     if (raw) return resolvePackagePath(spec, raw, kind, pkg)
   }
 
-  if (kind !== "server") return
+  if (kind !== "server") return undefined
   const main = packageMain(pkg)
-  if (!main) return
+  if (!main) return undefined
   return resolvePackagePath(spec, main, kind, pkg)
 }
 
-function targetPath(target: string) {
+function targetPath(target: string): string | undefined {
   if (target.startsWith("file://")) return fileURLToPath(target)
   if (path.isAbsolute(target)) return target
+  return undefined
 }
 
-async function resolveDirectoryIndex(dir: string) {
+async function resolveDirectoryIndex(dir: string): Promise<string | undefined> {
   for (const name of INDEX_FILES) {
     const file = path.join(dir, name)
     if (await Filesystem.exists(file)) return file
   }
+  return undefined
 }
 
-async function resolveTargetDirectory(target: string) {
+async function resolveTargetDirectory(target: string): Promise<string | undefined> {
   const file = targetPath(target)
-  if (!file) return
+  if (!file) return undefined
   const stat = await Filesystem.statAsync(file)
-  if (!stat?.isDirectory()) return
+  if (!stat?.isDirectory()) return undefined
   return file
 }
 
@@ -152,8 +156,8 @@ async function resolvePluginEntrypoint(spec: string, target: string, kind: Plugi
       if (index) return pathToFileURL(index).href
     }
 
-    if (source === "npm") return
-    if (dir) return
+    if (source === "npm") return undefined
+    if (dir) return undefined
 
     return target
   }
@@ -164,7 +168,7 @@ async function resolvePluginEntrypoint(spec: string, target: string, kind: Plugi
       if (index) return pathToFileURL(index).href
     }
 
-    return
+    return undefined
   }
 
   return target
@@ -263,8 +267,8 @@ export function readPackageThemes(spec: string, pkg: PluginPackage) {
   return Array.from(new Set(list))
 }
 
-export function readPluginId(id: unknown, spec: string) {
-  if (id === undefined) return
+export function readPluginId(id: unknown, spec: string): string | undefined {
+  if (id === undefined) return undefined
   if (typeof id !== "string") throw new TypeError(`Plugin ${spec} has invalid id type ${typeof id}`)
   const value = id.trim()
   if (!value) throw new TypeError(`Plugin ${spec} has an empty id`)
@@ -279,10 +283,10 @@ export function readV1Plugin(
 ) {
   const value = mod.default
   if (!isRecord(value)) {
-    if (mode === "detect") return
+    if (mode === "detect") return undefined
     throw new TypeError(`Plugin ${spec} must default export an object with ${kind}()`)
   }
-  if (mode === "detect" && !("id" in value) && !("server" in value) && !("tui" in value)) return
+  if (mode === "detect" && !("id" in value) && !("server" in value) && !("tui" in value)) return undefined
 
   const server = "server" in value ? value.server : undefined
   const tui = "tui" in value ? value.tui : undefined
@@ -302,7 +306,7 @@ export function readV1Plugin(
     throw new TypeError(`Plugin ${spec} must default export an object with tui()`)
   }
 
-  return value
+  return value as Record<string, unknown> & { id?: unknown; server?: unknown; tui?: unknown }
 }
 
 export async function resolvePluginId(

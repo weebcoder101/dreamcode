@@ -1339,6 +1339,35 @@ test("config parser preserves permission order while rejecting unknown top-level
   }
 })
 
+test("config parser accepts model limit with only context (no output)", () => {
+  // Regression: a provider block written with `limit: { context }` only must
+  // parse instead of failing with "Missing key ... limit.output" for every model.
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    {
+      provider: {
+        cmdc: {
+          name: "Command Code",
+          npm: "@ai-sdk/openai-compatible",
+          api: "https://api.commandcode.ai/provider/v1",
+          env: ["CMD_API_KEY"],
+          models: {
+            "claude-sonnet-5": {
+              name: "Claude Sonnet 5",
+              tool_call: true,
+              limit: { context: 1000000 },
+            },
+          },
+        },
+      },
+    },
+    "test",
+  )
+
+  const model = config.provider!["cmdc"].models!["claude-sonnet-5"]
+  expect(model.limit).toEqual({ context: 1000000, input: undefined, output: undefined })
+})
+
 // MCP config merging tests
 
 it.instance("project config can override MCP server enabled status", () =>

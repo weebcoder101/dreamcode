@@ -1,7 +1,7 @@
+import path from "node:path"
 import { Npm } from "../../npm"
 import { Effect, Option, Config } from "effect"
 import { pathToFileURL } from "url"
-import path from "path"
 import { PluginV2 } from "../../plugin"
 
 const ALLOWED_PACKAGES_DEFAULT = ["@ai-sdk/openai", "@ai-sdk/anthropic", "@ai-sdk/google", "@ai-sdk/mistral", "@ai-sdk/deepseek", "@ai-sdk/togetherai", "@ai-sdk/groq"]

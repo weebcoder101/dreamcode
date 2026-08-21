@@ -179,7 +179,8 @@ async function exchangeCodeForTokens(
     const detail = await response.text().catch(() => "")
     throw new Error(`xAI token exchange failed (${response.status})${detail ? `: ${detail}` : ""}`)
   }
-  return response.json() as Promise<TokenResponse>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  return response.json() as unknown as Promise<TokenResponse>
 }
 
 async function refreshAccessToken(refreshToken: string, options: XaiAuthPluginOptions = {}): Promise<TokenResponse> {
@@ -196,7 +197,8 @@ async function refreshAccessToken(refreshToken: string, options: XaiAuthPluginOp
     const detail = await response.text().catch(() => "")
     throw new Error(`xAI token refresh failed (${response.status})${detail ? `: ${detail}` : ""}`)
   }
-  return response.json() as Promise<TokenResponse>
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  return response.json() as unknown as Promise<TokenResponse>
 }
 
 export interface DeviceCodeResponse {
@@ -226,7 +228,8 @@ export async function requestDeviceCode(options: XaiAuthPluginOptions = {}): Pro
     const detail = await response.text().catch(() => "")
     throw new Error(`xAI device code request failed (${response.status})${detail ? `: ${detail}` : ""}`)
   }
-  const json = (await response.json()) as DeviceCodeResponse
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const json = await (response.json() as Promise<unknown>) as DeviceCodeResponse
   if (!json.device_code || !json.user_code || !json.verification_uri) {
     throw new Error("xAI device code response is missing device_code / user_code / verification_uri")
   }
@@ -275,9 +278,11 @@ export async function pollDeviceCodeToken(
         device_code: device.device_code,
       }).toString(),
     })
-    if (response.ok) return (await response.json()) as TokenResponse
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    if (response.ok) return await (response.json() as Promise<unknown>) as TokenResponse
 
-    const body = (await response.json().catch(() => ({}))) as DeviceTokenErrorBody
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    const body = await (response.json().catch(() => ({})) as Promise<unknown>) as DeviceTokenErrorBody
     const remaining = Math.max(0, deadline - now())
     // RFC 8628 §3.5: authorization_pending = keep polling at the same
     // interval; slow_down = bump the interval by ≥5s and keep polling.
@@ -645,7 +650,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
                     ? init.headers
                     : Object.entries(init.headers as Record<string, string | undefined>)
               for (const [key, value] of entries) {
-                if (value !== undefined) headers.set(key, String(value))
+                if (value !== undefined) headers.set(key, value)
               }
             }
             headers.set("authorization", `Bearer ${currentAuth.access}`)
@@ -681,7 +686,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
                     access: tokens.access_token,
                     expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
                   }
-                } catch (err) {
+                } catch {
                   return { type: "failed" as const }
                 } finally {
                   stopOAuthServer()
@@ -717,7 +722,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
                     access: tokens.access_token,
                     expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
                   }
-                } catch (err) {
+                } catch {
                   return { type: "failed" as const }
                 }
               },

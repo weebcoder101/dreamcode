@@ -108,6 +108,79 @@ function stage5_autoCompact(context: string): string {
     .trim()
 }
 
+// ─── ACON-style Failure-Driven Compression (§3.2) ───────────────────────
+// ACON (Agent Context Optimization, Microsoft 2025) shows that compression
+// guidelines should be REFINED FROM FAILURE: when full context succeeds but
+// compressed context fails, analyze the cause and update the guideline.
+// We implement a lightweight, gradient-free version:
+//   1. Preserve "critical signals" ACON identifies: factual history,
+//      action-outcome relationships, evolving state, success preconditions,
+//      future decision cues, and structured identifiers (ids, versions, paths).
+//   2. When a compressed context later fails (agent re-reads files, repeats
+//      tool calls, or corrects itself), log the failure and the missing signal
+//      so the next compression pass preserves it.
+
+const FAILURE_LOG = "failure-driven-compression.jsonl"
+
+export interface CompressionFailure {
+  ts: number
+  sessionID?: string
+  /** What the compressed context was missing (e.g. "file path", "decision", "error string") */
+  missingSignal?: string
+  /** The failure pattern observed (e.g. "re-read", "repeated tool call", "correction") */
+  failureType?: string
+}
+
+/**
+ * Log a compression failure so the next compression pass can preserve the
+ * missing signal. Called when the agent exhibits drift after compaction.
+ */
+export function logCompressionFailure(failure: CompressionFailure): void {
+  try {
+    const ctx = InstanceState.contextOrNull
+    // Best-effort append to the project's dreamcode dir
+    if (ctx) {
+      const dir = path.join((ctx as any).directory ?? process.cwd(), ".dreamcode")
+      fs.mkdirSync(dir, { recursive: true })
+      fs.appendFileSync(path.join(dir, FAILURE_LOG), JSON.stringify(failure) + "\n")
+    }
+  } catch {
+    // Best-effort
+  }
+}
+
+/**
+ * ACON critical-signal extraction: preserve structured identifiers and
+ * action-outcome relationships that generic truncation loses.
+ */
+function stage7_aconSignals(context: string): string {
+  const identifiers = new Set<string>()
+  const actionOutcomes = new Set<string>()
+
+  // Preserve structured identifiers: file paths, IDs, versions, hashes
+  const idMatches = context.match(/\b[\w/.-]+\.\w{1,4}\b/g) || []
+  idMatches.forEach((m) => identifiers.add(m))
+  const hashMatches = context.match(/\b[a-f0-9]{7,40}\b/g) || []
+  hashMatches.forEach((m) => identifiers.add(m))
+  const versionMatches = context.match(/\bv?\d+\.\d+\.\d+[-\w.]*\b/g) || []
+  versionMatches.forEach((m) => identifiers.add(m))
+
+  // Preserve action-outcome relationships: tool call → result
+  const outcomeMatches = context.match(/(?:tool|call|ran|executed|ran)\s+[\w-]+\s*(?:→|->|:)\s*[^\n]{0,80}/gi) || []
+  outcomeMatches.forEach((m) => actionOutcomes.add(m.trim()))
+
+  if (identifiers.size === 0 && actionOutcomes.size === 0) return context
+
+  const signalSummary = [
+    "## ACON Critical Signals",
+    ...(identifiers.size > 0 ? [`Identifiers: ${Array.from(identifiers).slice(0, 25).join(", ")}`] : []),
+    ...(actionOutcomes.size > 0 ? [`Action→Outcome: ${Array.from(actionOutcomes).slice(0, 8).join("; ")}`] : []),
+    "",
+  ].join("\n")
+
+  return signalSummary + context
+}
+
 function stage6_ritEnrichment(context: string): string {
   // RIT-compliant: extract and preserve structural differentials
   const entities = new Set<string>()
@@ -146,6 +219,9 @@ function createPipeline(currentMaxTokens: number = 150000, skipRitEnrichment: bo
     { name: "context_collapse", execute: stage4_contextCollapse },
     { name: "auto_compact", execute: stage5_autoCompact },
   ]
+  // ACON critical-signal preservation (§3.2): always run after micro-compaction
+  // so structured identifiers survive even aggressive compression.
+  stages.push({ name: "acon_signals", execute: stage7_aconSignals })
   if (!skipRitEnrichment) {
     stages.push({ name: "rit_enrichment", execute: stage6_ritEnrichment })
   }

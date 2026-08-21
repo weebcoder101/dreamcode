@@ -88,17 +88,17 @@ const defaultPatchDeps: PatchDeps = {
   files: (dir, name) => ConfigPaths.fileInDirectory(dir, name),
 }
 
-function pluginSpec(item: unknown) {
+function pluginSpec(item: unknown): string | undefined {
   if (typeof item === "string") return item
-  if (!Array.isArray(item)) return
-  if (typeof item[0] !== "string") return
+  if (!Array.isArray(item)) return undefined
+  if (typeof item[0] !== "string") return undefined
   return item[0]
 }
 
-function pluginList(data: unknown) {
-  if (!data || typeof data !== "object" || Array.isArray(data)) return
+function pluginList(data: unknown): unknown[] | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined
   const item = data as { plugin?: unknown }
-  if (!Array.isArray(item.plugin)) return
+  if (!Array.isArray(item.plugin)) return undefined
   return item.plugin
 }
 
@@ -106,9 +106,9 @@ function exportValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const next = value.trim()
     if (next) return next
-    return
+    return undefined
   }
-  if (!isRecord(value)) return
+  if (!isRecord(value)) return undefined
   for (const key of ["import", "default"]) {
     const next = value[key]
     if (typeof next !== "string") continue
@@ -116,21 +116,22 @@ function exportValue(value: unknown): string | undefined {
     if (!hit) continue
     return hit
   }
+  return undefined
 }
 
 function exportOptions(value: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(value)) return
+  if (!isRecord(value)) return undefined
   const config = value.config
-  if (!isRecord(config)) return
+  if (!isRecord(config)) return undefined
   return config
 }
 
-function exportTarget(pkg: Record<string, unknown>, kind: Kind) {
+function exportTarget(pkg: Record<string, unknown>, kind: Kind): { opts?: Record<string, unknown> } | undefined {
   const exports = pkg.exports
-  if (!isRecord(exports)) return
+  if (!isRecord(exports)) return undefined
   const value = exports[`./${kind}`]
   const entry = exportValue(value)
-  if (!entry) return
+  if (!entry) return undefined
   return {
     opts: exportOptions(value),
   }

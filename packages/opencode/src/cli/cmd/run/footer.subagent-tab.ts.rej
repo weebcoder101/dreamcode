@@ -1,0 +1,23 @@
+diff a/packages/opencode/src/cli/cmd/run/footer.subagent-tab.ts b/packages/opencode/src/cli/cmd/run/footer.subagent-tab.ts	(rejected hunks)
+@@ -66,12 +66,7 @@ export type SubagentTabState = {
+   openQueuedMenu: () => void
+   /** Close any open panel and return to the composer. */
+   closePanel: () => void
+-  /**
+-   * The status of the currently viewed subagent tab at the time it was last
+-   * opened. The auto-close effect uses this to distinguish a deliberate
+-   * selection of an already-completed tab from a running→completed transition.
+-   * Exposed for the auto-close comment reference but not needed externally.
+-   */
++
+ }
+ 
+ /**
+@@ -152,7 +147,6 @@ export function createSubagentTabState(input: SubagentTabInput): SubagentTabStat
+   }
+ 
+   const closeTab = () => {
+-    openTabStatus = undefined
+     setRoute({ type: "composer" })
+     onSubagentSelect?.(undefined)
+   }

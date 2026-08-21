@@ -12,7 +12,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { dieSyncError } from "@/effect/sync-error"
 import { normalizeTokens } from "./prompt-utils"
 
-export const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
+export var handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
   task: SessionV1.SubtaskPart
   model: Provider.Model
   lastUser: SessionV1.User

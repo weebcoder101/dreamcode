@@ -112,12 +112,6 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
 
   let filteredSessions = cutoffTime > 0 ? sessions.filter((session) => session.time.updated >= cutoffTime) : sessions
 
-  // Exclude subagent sessions from stats to avoid double-counting costs.
-  // Subagent session costs are already propagated to the parent session via
-  // step-finish parts and the projector's applyUsage. Including both parent
-  // and child sessions would count the same LLM turns twice.
-  filteredSessions = filteredSessions.filter((session) => !("parentID" in session) || !session.parentID)
-
   if (projectFilter !== undefined) {
     if (projectFilter === "") {
       if (!currentProject) throw new Error("currentProject required when projectFilter is empty string")

@@ -13,6 +13,9 @@ import { Session } from "./session"
 import { LLM } from "./llm"
 import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
+import { writeCheckpoint } from "./checkpoint"
+import { logCompressionFailure } from "./context-compressor"
+import { recordToolError, finalizeGateLearning } from "./dream-gate-learn"
 import { PartID } from "./schema"
 import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
@@ -37,8 +40,43 @@ import { ToolOutput, Usage, type LLMEvent } from "@opencode-ai/llm"
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
 
+/**
+ * Canonical fingerprint of a tool input for doom-loop detection. Bytes in the
+ * raw stream can differ (key order, whitespace, number formatting) while the
+ * semantic call is identical. This normalizes object key order, trims strings,
+ * and collapses duplicate whitespace so semantically-equal calls are caught.
+ */
+function normalizeToolInput(input: unknown): string {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize)
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {}
+      for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+        out[key] = normalize((value as Record<string, unknown>)[key])
+      }
+      return out
+    }
+    if (typeof value === "string") return value.trim().replace(/\s+/g, " ")
+    return value
+  }
+  try {
+    return JSON.stringify(normalize(input))
+  } catch {
+    return JSON.stringify(input)
+  }
+}
+
 export interface Handle {
   readonly message: SessionV1.Assistant
+  /** Authoritative accumulated text of the current assistant message.
+   *  The gate reads THIS instead of the DB mirror, which lags the stream. */
+  readonly accumulatedText: () => string
+  /** Whether a correlation tool (relations/lsp/grep/glob/read) has been
+   *  called this turn. Persists across steps within a single LLM stream.
+   *  The tree/LSP-first gate reads this to enforce correlation before edit. */
+  readonly usedTree: () => boolean
+  /** Mark that a correlation tool has been called this turn. */
+  readonly markUsedTree: () => void
   readonly updateToolCall: (
     toolCallID: string,
     update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
@@ -85,6 +123,19 @@ interface ProcessorContext extends Input {
   currentTextID: string | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
   v2AssistantMessageID: SessionMessage.ID | undefined
+  /** Full text streamed so far for this assistant message (all text parts). */
+  accumulatedText: string
+  /** Per-file plan tracking for the dream gate. */
+  plannedFiles: Set<string>
+  /** Whether a correlation tool has been used this turn (tree/LSP-first). */
+  usedTree: boolean
+  // ─── Context drift detection (§3.3) ──────────────────────────
+  /** Files read in this session turn (tool name + normalized args fingerprint). */
+  fileReads: Set<string>
+  /** Decisions already stated (extracted from assistant text). */
+  decisionsStated: Set<string>
+  /** Drift warnings injected so far this turn. */
+  driftWarnings: number
 }
 
 type StreamEvent = LLMEvent
@@ -127,6 +178,13 @@ export const layer = Layer.effect(
         currentTextID: undefined,
         reasoningMap: {},
         v2AssistantMessageID: undefined,
+        accumulatedText: "",
+        plannedFiles: new Set(),
+        usedTree: false,
+        // Context drift detection (§3.3)
+        fileReads: new Set(),
+        decisionsStated: new Set(),
+        driftWarnings: 0,
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
       let aborted = false
@@ -212,7 +270,13 @@ export const layer = Layer.effect(
         },
       ) {
         const match = yield* readToolCall(toolCallID)
-        if (!match || match.part.state.status !== "running") return
+        // Accept both "pending" (gate blocks before tool starts) and "running"
+        // (normal completion). The dream gate fires on the tool-call event,
+        // before the tool's execute() runs — so the part is still "pending".
+        if (!match || (match.part.state.status !== "running" && match.part.state.status !== "pending")) return
+        // Pending parts (gate-blocked before tool runs) may lack state.time;
+        // fall back to Date.now() so the completed part always has valid timing.
+        const startTime = match.part.state.status === "running" ? match.part.state.time.start : Date.now()
         yield* session.updatePart({
           ...match.part,
           state: {
@@ -221,7 +285,7 @@ export const layer = Layer.effect(
             output: output.output,
             metadata: output.metadata,
             title: output.title,
-            time: { start: match.part.state.time.start, end: Date.now() },
+            time: { start: startTime, end: Date.now() },
             attachments: output.attachments,
           },
         })
@@ -231,13 +295,14 @@ export const layer = Layer.effect(
       const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (toolCallID: string, error: unknown) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return false
+        const failStartTime = match.part.state.time?.start ?? Date.now()
         yield* session.updatePart({
           ...match.part,
           state: {
             status: "error",
             input: match.part.state.input,
             error: errorMessage(error),
-            time: { start: match.part.state.time.start, end: Date.now() },
+            time: { start: failStartTime, end: Date.now() },
           },
         })
         if (error instanceof PermissionV1.RejectedError || error instanceof Question.RejectedError) {
@@ -416,6 +481,7 @@ export const layer = Layer.effect(
               partID: ctx.reasoningMap[value.id].id,
               field: "text",
               delta: value.text,
+              value: ctx.reasoningMap[value.id].text,
             })
             return
 
@@ -473,6 +539,9 @@ export const layer = Layer.effect(
             }
             const toolCall = yield* ensureToolCall(value)
             const input = isRecord(value.input) ? value.input : { value: value.input }
+            // Dream Protocol gate: enforced in tools.ts execute() — the single
+            // enforcement point for both SDK and CLI paths. The processor does
+            // NOT gate here; it only tracks usedTree for cross-step persistence.
             if (!toolCall.call.inputEnded) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -523,25 +592,63 @@ export const layer = Layer.effect(
             )
             const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
 
+            // Enhanced doom loop detection (§7.3): track more patterns
+            // 1. Same tool call with same args (original)
+            // 2. Same file edited back and forth (flip-flop)
+            // 3. Same error message appearing multiple times
+            let doomDetected = false
+
+            // Pattern 1: identical consecutive tool calls
             if (
-              recentParts.length !== DOOM_LOOP_THRESHOLD ||
-              !recentParts.every(
+              recentParts.length === DOOM_LOOP_THRESHOLD &&
+              recentParts.every(
                 (part) =>
                   part.type === "tool" &&
                   part.tool === value.name &&
                   part.state.status !== "pending" &&
-                  JSON.stringify(part.state.input) === JSON.stringify(input),
+                  normalizeToolInput(part.state.input) === normalizeToolInput(input),
               )
             ) {
-              return
+              doomDetected = true
             }
+
+            // Pattern 2: flip-flop — same file edited back and forth
+            if (!doomDetected && (value.name === "edit" || value.name === "write")) {
+              const filePath = (input as Record<string, unknown>)?.filePath as string | undefined
+              if (filePath) {
+                const editParts = recentParts.filter(
+                  (p) => p.type === "tool" && (p.tool === "edit" || p.tool === "write") &&
+                    (p.state.input as Record<string, unknown>)?.filePath === filePath,
+                )
+                if (editParts.length >= DOOM_LOOP_THRESHOLD) {
+                  doomDetected = true
+                }
+              }
+            }
+
+            // Pattern 3: same error repeated
+            if (!doomDetected) {
+              const errorParts = recentParts.filter(
+                (p) => p.type === "tool" && p.state.status === "error" &&
+                  p.tool === value.name,
+              )
+              if (errorParts.length >= DOOM_LOOP_THRESHOLD) {
+                doomDetected = true
+              }
+            }
+
+            if (!doomDetected) return
+
+            // Neural-gate feedback (negative signal): a doom loop after a
+            // plan passed the gate means the plan was insufficient.
+            yield* Effect.sync(() => recordToolError(ctx.assistantMessage.id)).pipe(Effect.ignore)
 
             const agent = yield* agents.get(ctx.assistantMessage.agent)
             yield* permission.ask({
               permission: "doom_loop",
               patterns: [value.name],
               sessionID: ctx.assistantMessage.sessionID,
-              metadata: { tool: value.name, input },
+              metadata: { tool: value.name, input, doomPatterns: "enhanced" },
               always: [value.name],
               ruleset: agent.permission,
             })
@@ -645,10 +752,44 @@ export const layer = Layer.effect(
                 })
             }
             yield* completeToolCall(value.id, output)
+            // ─── Context drift detection (§3.3) ──────────────────
+            // Track file reads to detect when the agent re-reads files
+            // it should already know about (drift signal).
+            {
+              const toolName = toolCall?.part.tool ?? value.name
+              const toolInput = toolCall?.part.state.input ?? {}
+              if (toolName === "read" && typeof toolInput === "object" && toolInput !== null) {
+                const filePath = (toolInput as Record<string, unknown>).filePath as string | undefined
+                if (filePath) {
+                  const fingerprint = `read:${filePath}`
+                  if (ctx.fileReads.has(fingerprint) && ctx.driftWarnings < 3) {
+                    // Agent re-reads a file it already read — drift signal
+                    ctx.driftWarnings++
+                    yield* Effect.logWarning("context drift: re-read", {
+                      filePath,
+                      sessionID: ctx.sessionID,
+                    })
+                    // ACON feedback loop (§3.2): re-reading after compaction is
+                    // the canonical "compressed context lost the file" signal.
+                    // Log it so the next compression pass preserves the path.
+                    logCompressionFailure({
+                      ts: Date.now(),
+                      sessionID: ctx.sessionID,
+                      missingSignal: `file:${filePath}`,
+                      failureType: "re-read-after-compaction",
+                    })
+                  }
+                  ctx.fileReads.add(fingerprint)
+                }
+              }
+            }
             return
           }
 
           case "tool-error": {
+            // Neural-gate feedback (negative signal): a tool error on a turn
+            // that passed a plan is a label for the online learner.
+            yield* Effect.sync(() => recordToolError(ctx.assistantMessage.id)).pipe(Effect.ignore)
             const toolCall = yield* readToolCall(value.id)
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
@@ -718,6 +859,25 @@ export const layer = Layer.effect(
             ctx.assistantMessage.finish = value.reason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
+            // Neural-gate feedback loop: label this turn's plan decisions by
+            // outcome. Clean finish without tool errors → positive example;
+            // tool errors or a tool-calls finish (doom-loop territory) →
+            // negative. The learner updates weights + EMA threshold.
+            yield* Effect.sync(() =>
+              finalizeGateLearning(ctx.assistantMessage.id, value.reason ?? ""),
+            ).pipe(Effect.ignore)
+            // Checkpoint-based recovery (§7.1): persist a session checkpoint
+            // at each step boundary so a crash can resume from here instead
+            // of restarting. Best-effort, never blocks the stream.
+            writeCheckpoint({
+              sessionID: ctx.sessionID,
+              messageID: ctx.assistantMessage.parentID ?? ctx.assistantMessage.id,
+              step: Object.keys(ctx.toolcalls).length > 0 ? 2 : 1,
+              toolCalls: Object.keys(ctx.toolcalls).length,
+              compacting: ctx.assistantMessage.summary === true,
+              resumeHint: "Continue the current task to completion.",
+              ts: Date.now(),
+            })
             yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.reason,
@@ -780,12 +940,14 @@ export const layer = Layer.effect(
               metadata: value.providerMetadata,
             }
             ctx.currentTextID = value.id
+            if (ctx.accumulatedText) ctx.accumulatedText += "\n"
             yield* session.updatePart(ctx.currentText)
             return
 
           case "text-delta":
             if (!ctx.currentText) return
             ctx.currentText.text += value.text
+            ctx.accumulatedText += value.text
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
             if (mirrorAssistant) {
               yield* events.publish(SessionEvent.Text.Delta, {
@@ -802,6 +964,7 @@ export const layer = Layer.effect(
               partID: ctx.currentText.id,
               field: "text",
               delta: value.text,
+              value: ctx.currentText.text,
             })
             return
 
@@ -1008,6 +1171,10 @@ export const layer = Layer.effect(
               ctx.currentTextID = undefined
               ctx.reasoningMap = {}
               yield* status.set(ctx.sessionID, { type: "busy" })
+              // Checkpoint before dispatch (DeepSeek Harness session-checkpoint
+              // pattern): settle all in-flight v2 fragments so a crash mid-request
+              // loses at most the in-flight stream, never un-flushed history.
+              yield* flushV2Fragments()
               const stream = llm.stream(streamInput)
               return yield* stream.pipe(
                 Stream.tap((event) => handleEvent(event)),
@@ -1082,6 +1249,9 @@ export const layer = Layer.effect(
         get message() {
           return ctx.assistantMessage
         },
+        accumulatedText: () => ctx.accumulatedText,
+        usedTree: () => ctx.usedTree,
+        markUsedTree: () => { ctx.usedTree = true },
         updateToolCall,
         completeToolCall,
         process: process as Handle["process"],

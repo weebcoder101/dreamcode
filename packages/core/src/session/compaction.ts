@@ -42,13 +42,18 @@ const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <te
 
 ## Relevant Files
 - [file or directory path: why it matters, or "(none)"]
+
+## Last Active Task
+- [the most recent user request verbatim or "(none)"] — RESUME this task after compaction. Do NOT start over.
 </template>
 
 Rules:
 - Keep every section, even when empty.
 - Use terse bullets, not prose paragraphs.
 - Preserve exact file paths, commands, error strings, and identifiers when known.
-- Do not mention the summary process or that context was compacted.`
+- Do not mention the summary process or that context was compacted.
+- The "Last Active Task" section is CRITICAL: it tells the agent what to resume after compaction.
+- ANCHORING (§3.1): When updating a previous summary, preserve every Key Decision verbatim unless it was explicitly undone. Decisions are the most lossy part of summarization — never paraphrase a decision into a vague bullet. Keep the original wording and rationale.`
 
 type Entry = {
   readonly seq: number
@@ -163,14 +168,21 @@ const select = (
   }
 }
 
-export const buildPrompt = (input: { readonly previousSummary?: string; readonly context: readonly string[] }) =>
+export const buildPrompt = (input: {
+  readonly previousSummary?: string
+  readonly context: readonly string[]
+  readonly lastUserMessage?: string
+}) =>
   [
     input.previousSummary
       ? `Update the anchored summary below using the conversation history above.\nPreserve still-true details, remove stale details, and merge in the new facts.\n<previous-summary>\n${input.previousSummary}\n</previous-summary>`
       : "Create a new anchored summary from the conversation history.",
     SUMMARY_TEMPLATE,
     ...input.context,
-  ].join("\n\n")
+    input.lastUserMessage
+      ? `\n\nThe LAST user request was:\n${input.lastUserMessage}\nPreserve this in the "Last Active Task" section above.`
+      : "",
+  ].filter(Boolean).join("\n\n")
 
 export const make = (dependencies: Dependencies) => {
   const config = settings(dependencies.config)
@@ -181,9 +193,20 @@ export const make = (dependencies: Dependencies) => {
     const selected = select(input.entries, config.tokens)
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
     if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
+    // Extract the last user message for resume context
+    const lastUserMessage = (() => {
+      for (let i = input.entries.length - 1; i >= 0; i--) {
+        const msg = input.entries[i].message
+        if (msg.type === "user") {
+          return msg.text
+        }
+      }
+      return undefined
+    })()
     const summaryPrompt = buildPrompt({
       previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
+      lastUserMessage,
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
     if (Token.estimate(summaryPrompt) > context - summaryOutput) return false

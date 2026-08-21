@@ -12,7 +12,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { fileURLToPath } from "url"
 import type { SessionID } from "./schema"
 
-export const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput & {
+export var command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput & {
   sessions: any
   agents: any
   commands: Command.Interface

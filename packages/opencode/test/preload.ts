@@ -31,11 +31,6 @@ afterAll(async () => {
   await rm(30)
 })
 
-// Prevent git from ever blocking on stdin prompts (e.g. credential helpers,
-// ambiguous refs, GPG signing). Tests that spawn git commands in isolated
-// temp directories will hang forever without this in CI environments.
-process.env["GIT_TERMINAL_PROMPT"] = "0"
-
 process.env["XDG_DATA_HOME"] = path.join(dir, "share")
 process.env["XDG_CACHE_HOME"] = path.join(dir, "cache")
 process.env["XDG_CONFIG_HOME"] = path.join(dir, "config")

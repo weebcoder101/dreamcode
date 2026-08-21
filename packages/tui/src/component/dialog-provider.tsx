@@ -96,7 +96,7 @@ export function createDialogProviderOptions() {
       placeholder: "Provider id",
       description: () => (
         <text fg={theme.textMuted}>
-          This only stores a credential. Configure the provider in dreamcode.json to use it.
+          A short identifier like "nara-router". Use lowercase letters, numbers, hyphens, and underscores.
         </text>
       ),
     })
@@ -113,6 +113,21 @@ export function createDialogProviderOptions() {
     return promptCustomProviderID()
   }
 
+  async function promptCustomProviderBaseURL(): Promise<string | undefined> {
+    const value = await DialogPrompt.show(dialog, "Base URL", {
+      placeholder: "https://api.example.com/v1",
+      description: () => (
+        <text fg={theme.textMuted}>
+          The base URL for the OpenAI-compatible API endpoint.
+        </text>
+      ),
+    })
+    if (value === null) return
+    if (value.startsWith("http://") || value.startsWith("https://")) return value
+    toast.show({ variant: "error", message: "Base URL must start with http:// or https://" })
+    return promptCustomProviderBaseURL()
+  }
+
   const options = createMemo(() => {
     return pipe(
       providerOptions(sync.data.provider_next.all),
@@ -126,7 +141,9 @@ export function createDialogProviderOptions() {
             async onSelect() {
               const providerID = await promptCustomProviderID()
               if (!providerID) return
-              return dialog.replace(() => <ApiMethod providerID={providerID} title="API key" custom />)
+              const baseURL = await promptCustomProviderBaseURL()
+              if (!baseURL) return
+              return dialog.replace(() => <ApiMethod providerID={providerID} title="API key" custom baseURL={baseURL} />)
             },
           }
         }
@@ -354,6 +371,7 @@ interface ApiMethodProps {
   title: string
   metadata?: Record<string, string>
   custom?: boolean
+  baseURL?: string
 }
 function ApiMethod(props: ApiMethodProps) {
   const dialog = useDialog()
@@ -402,6 +420,33 @@ function ApiMethod(props: ApiMethodProps) {
             ...(props.metadata ? { metadata: props.metadata } : {}),
           },
         })
+        // If custom provider with baseURL, save provider config too
+        if (props.custom && props.baseURL) {
+          try {
+            // Fetch available models to detect a reasonable default
+            let model = ""
+            try {
+              const resp = await fetch(`${props.baseURL}/models`, {
+                headers: { Authorization: `Bearer ${value}` },
+              })
+              if (resp.ok) {
+                const data = await resp.json()
+                const models = data?.data ?? data
+                if (Array.isArray(models) && models.length > 0) {
+                  model = models[0].id ?? models[0]
+                }
+              }
+            } catch {}
+            // Save provider config via experimental endpoint
+            const httpClient = (sdk.client as any).client
+            await httpClient.post({
+              url: "/experimental/provider/config",
+              body: { providerID: props.providerID, baseURL: props.baseURL, model },
+            })
+          } catch (err) {
+            console.warn("[dialog-provider] failed to save provider config:", err)
+          }
+        }
         await sdk.client.instance.dispose()
         await sync.bootstrap()
         if (props.custom && !sync.data.provider_next.all.some((provider) => provider.id === props.providerID)) {

@@ -3,8 +3,8 @@ import type {
   Hooks,
   PluginInput,
   Plugin as PluginInstance,
-  PluginModule,
   WorkspaceAdapter as PluginWorkspaceAdapter,
+  Config as PluginConfig,
 } from "@opencode-ai/plugin"
 import { Config } from "@/config/config"
 import { createOpencodeClient } from "@opencode-ai/sdk"
@@ -20,9 +20,10 @@ import { AzureAuthPlugin } from "./azure"
 import { DigitalOceanAuthPlugin } from "./digitalocean"
 import { XaiAuthPlugin } from "./xai"
 import { SensorGateEnforcerPlugin } from "@/skill/sensor-gate-enforcer"
+import { startGateRefresh } from "@/session/prompt-state"
 import { Effect, Layer, Context } from "effect"
 import { EffectBridge } from "@/effect/bridge"
-import { InstanceState } from "@/effect/instance-state"
+import { InstanceState, labelCache } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
 import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
@@ -42,15 +43,11 @@ type TriggerName = {
 }[keyof Hooks]
 
 export interface Interface {
-  readonly trigger: <
-    Name extends TriggerName,
-    Input = Parameters<Required<Hooks>[Name]>[0],
-    Output = Parameters<Required<Hooks>[Name]>[1],
-  >(
+  readonly trigger: <Name extends TriggerName>(
     name: Name,
-    input: Input,
-    output: Output,
-  ) => Effect.Effect<Output>
+    input: Parameters<Required<Hooks>[Name]>[0],
+    output: Parameters<Required<Hooks>[Name]>[1],
+  ) => Effect.Effect<Parameters<Required<Hooks>[Name]>[1]>
   readonly list: () => Effect.Effect<Hooks[]>
   readonly init: () => Effect.Effect<void>
 }
@@ -88,8 +85,8 @@ function isServerPlugin(value: unknown): value is PluginInstance {
 
 function getServerPlugin(value: unknown) {
   if (isServerPlugin(value)) return value
-  if (!value || typeof value !== "object" || !("server" in value)) return
-  if (!isServerPlugin(value.server)) return
+  if (!value || typeof value !== "object" || !("server" in value)) return undefined
+  if (!isServerPlugin(value.server)) return undefined
   return value.server
 }
 
@@ -112,7 +109,7 @@ async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks:
   const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
   if (plugin) {
     await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
-    hooks.push(await (plugin as PluginModule).server(input, load.options))
+    hooks.push(await (plugin.server as PluginInstance)(input, load.options))
     return
   }
 
@@ -127,11 +124,12 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
     const flags = yield* RuntimeFlags.Service
+    const cfg = yield* config.get()
 
-    const state = yield* InstanceState.make<State>(
-      Effect.fn("Plugin.state")(function* (ctx) {
-        const hooks: Hooks[] = []
-        const bridge = yield* EffectBridge.make()
+        const state = yield* InstanceState.make<State>(
+          Effect.fn("Plugin.state")(function* (ctx) {
+                const hooks: Hooks[] = []
+            const bridge = yield* EffectBridge.make()
 
         function publishPluginError(message: string) {
           bridge.fork(events.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() }))
@@ -145,7 +143,6 @@ export const layer = Layer.effect(
           headers: ServerAuth.headers(),
           fetch: async (...args) => Server.Default().app.fetch(...args),
         })
-        const cfg = yield* config.get()
         const input: PluginInput = {
           client,
           project: ctx.project,
@@ -153,6 +150,7 @@ export const layer = Layer.effect(
           directory: ctx.directory,
           experimental_workspace: {
             register(type: string, adapter: PluginWorkspaceAdapter) {
+              /* eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- intentional cross-package type boundary */
               registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter)
             },
           },
@@ -162,7 +160,6 @@ export const layer = Layer.effect(
           // @ts-expect-error
           $: typeof Bun === "undefined" ? undefined : Bun.$,
         }
-
         for (const plugin of flags.disableDefaultPlugins ? [] : internalPlugins(flags)) {
           const init = yield* Effect.tryPromise({
             try: () => plugin(input),
@@ -174,6 +171,10 @@ export const layer = Layer.effect(
           if (init._tag === "Some") hooks.push(init.value)
         }
 
+        // Start periodic sensor gate state refresh so toggle changes
+        // are observed by in-flight subagents and enforcer plugins.
+        startGateRefresh()
+
         const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
         if (flags.pure && cfg.plugin_origins?.length) {
         }
@@ -184,9 +185,9 @@ export const layer = Layer.effect(
             items: plugins,
             kind: "server",
             report: {
-              start(candidate) {},
-              missing(candidate, _retry, message) {},
-              error(candidate, _retry, stage, error, resolved) {
+              start(_candidate) {},
+              missing(_candidate, _retry, _message) {},
+              error(candidate, _retry, stage, error, _resolved) {
                 const spec = candidate.plan.spec
                 const cause = error instanceof Error ? (error.cause ?? error) : error
                 const message = stage === "load" ? errorMessage(error) : errorMessage(cause)
@@ -240,7 +241,7 @@ export const layer = Layer.effect(
         // Notify plugins of current config
         for (const hook of hooks) {
           yield* Effect.tryPromise({
-            try: () => Promise.resolve((hook as any).config?.(cfg)),
+            try: () => Promise.resolve(hook.config?.(cfg as unknown as PluginConfig)),
             catch: errorMessage,
           }).pipe(
             Effect.tapError((error) => Effect.logError("plugin config hook failed", { error })),
@@ -276,16 +277,19 @@ export const layer = Layer.effect(
         return { hooks }
       }),
     )
+    labelCache(state.cache, "plugin")
 
-    const trigger = Effect.fn("Plugin.trigger")(function* <
-      Name extends TriggerName,
-      Input = Parameters<Required<Hooks>[Name]>[0],
-      Output = Parameters<Required<Hooks>[Name]>[1],
-    >(name: Name, input: Input, output: Output) {
+    const trigger = Effect.fn("Plugin.trigger")(function* <Name extends TriggerName>(
+      name: Name,
+      input: Parameters<Required<Hooks>[Name]>[0],
+      output: Parameters<Required<Hooks>[Name]>[1],
+    ) {
       if (!name) return output
       const s = yield* InstanceState.get(state)
       for (const hook of s.hooks) {
-        const fn = hook[name] as any
+        // Dynamic dispatch via index access; TriggerName keys are guaranteed to exist at runtime
+        // eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+        const fn = (hook as Record<string, Function | undefined>)[name as string]
         if (!fn) continue
         yield* Effect.promise(async () => fn(input, output))
       }

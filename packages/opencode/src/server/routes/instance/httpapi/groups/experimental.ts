@@ -73,6 +73,16 @@ export class WorktreeApiError extends Schema.ErrorClass<WorktreeApiError>("Workt
   },
   { httpApiStatus: 400 },
 ) {}
+export const SensorGateTogglePayload = Schema.Struct({
+  enabled: Schema.Boolean,
+})
+
+export const ProviderConfigPayload = Schema.Struct({
+  providerID: Schema.String,
+  baseURL: Schema.String,
+  model: Schema.String,
+})
+
 export const SessionListQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   roots: Schema.optional(QueryBoolean),
@@ -94,6 +104,8 @@ export const ExperimentalPaths = {
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
   resource: "/experimental/resource",
+  sensorGate: "/experimental/sensor-gate",
+  providerConfig: "/experimental/provider/config",
 } as const
 
 export const ExperimentalApi = HttpApi.make("experimental")
@@ -238,6 +250,38 @@ export const ExperimentalApi = HttpApi.make("experimental")
             identifier: "experimental.resource.list",
             summary: "Get MCP resources",
             description: "Get all available MCP resources from connected servers. Optionally filter by name.",
+          }),
+        ),
+        HttpApiEndpoint.post("sensorGate", ExperimentalPaths.sensorGate, {
+          query: WorkspaceRoutingQuery,
+          payload: SensorGateTogglePayload,
+          success: described(Schema.Boolean, "Sensor gate toggle success"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.sensorGate.toggle",
+            summary: "Toggle sensor gate",
+            description: "Enable or disable the sensor gate globally for all prompts.",
+          }),
+        ),
+        HttpApiEndpoint.get("sensorGateGet", ExperimentalPaths.sensorGate, {
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Struct({ enabled: Schema.Boolean }), "Sensor gate state"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.sensorGate.get",
+            summary: "Get sensor gate state",
+            description: "Get the current enabled state of the sensor gate.",
+          }),
+        ),
+        HttpApiEndpoint.post("providerConfig", ExperimentalPaths.providerConfig, {
+          query: WorkspaceRoutingQuery,
+          payload: ProviderConfigPayload,
+          success: described(Schema.Boolean, "Provider config saved"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.providerConfig.save",
+            summary: "Save custom provider config",
+            description: "Save a custom provider's baseURL and model to dreamcode.json.",
           }),
         ),
       )

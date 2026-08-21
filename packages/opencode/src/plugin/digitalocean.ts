@@ -146,7 +146,7 @@ async function startOAuthServer(): Promise<void> {
         }
         if (body.error) {
           const message = body.error_description || body.error || "OAuth error"
-          pendingOAuth.reject(new Error(String(message)))
+          pendingOAuth.reject(new Error(message))
           pendingOAuth = undefined
           res.writeHead(200, { "Content-Type": "application/json" })
           res.end(JSON.stringify({ ok: true }))
@@ -235,7 +235,8 @@ async function listRouters(
   }).catch(() => undefined)
   if (!res) return { ok: false, status: 0 }
   if (!res.ok) return { ok: false, status: res.status }
-  const body = (await res.json().catch(() => undefined)) as { model_routers?: RouterEntry[] } | undefined
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const body = await (res.json().catch(() => undefined) as Promise<unknown>) as { model_routers?: RouterEntry[] } | undefined
   return { ok: true, routers: body?.model_routers ?? [] }
 }
 
@@ -364,7 +365,7 @@ export async function DigitalOceanAuthPlugin(input: PluginInput): Promise<Hooks>
                       routers_fetched_at: String(Date.now()),
                     },
                   }
-                } catch (err) {
+                } catch {
                   return { type: "failed" as const }
                 } finally {
                   stopOAuthServer()

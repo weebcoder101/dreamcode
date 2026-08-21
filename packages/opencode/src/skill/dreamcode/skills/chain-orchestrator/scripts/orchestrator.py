@@ -7,10 +7,41 @@ and outputs the correct execution order for any prompt.
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
-SKILLS_DIR = Path.cwd() / ".opencode" / "skills"
+# Resolve the skills directory from multiple candidates, mirroring the
+# runtime's resolveSkillsDir() logic (python-resolver.ts). The old behavior
+# (Path.cwd() / ".opencode" / "skills") crashed with FileNotFoundError
+# whenever the orchestrator ran outside the dreamcode repo.
+def _resolve_skills_dir() -> Path:
+    candidates = [
+        Path.cwd() / ".opencode" / "skills",
+        Path.cwd() / ".dreamcode" / "skills",
+        Path.home() / ".config" / "dreamcode" / "skills",
+        Path.home() / ".dreamcode" / "skills",
+        # Binary-bundled skills: dist/bin/skills
+        Path(__file__).resolve().parent.parent.parent / "skills",
+        # Source-tree skills (development installs)
+        Path(__file__).resolve().parent.parent.parent.parent.parent.parent.parent / "packages" / "opencode" / "src" / "skill" / "dreamcode" / "skills",
+    ]
+    env_override = os.environ.get("DREAMCODE_SKILLS_DIR")
+    if env_override:
+        candidates.insert(0, Path(env_override))
+    for candidate in candidates:
+        try:
+            if candidate.is_dir() and any(
+                p.is_dir() and (p / "SKILL.md").exists()
+                for p in candidate.iterdir()
+            ):
+                return candidate
+        except OSError:
+            continue
+    return candidates[0]
+
+
+SKILLS_DIR = _resolve_skills_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -20,6 +51,9 @@ SKILLS_DIR = Path.cwd() / ".opencode" / "skills"
 def parse_skill_chains() -> dict[str, list[str]]:
     """Parse all SKILL.md files and extract chains_with declarations."""
     chains = {}
+
+    if not SKILLS_DIR.is_dir():
+        return chains
 
     for skill_dir in sorted(SKILLS_DIR.iterdir()):
         if not skill_dir.is_dir():
@@ -155,27 +189,27 @@ def get_chain_for_task(task_type: str) -> list[str]:
 
     # Task-specific additions
     task_additions = {
-        "code_review": ["security", "quality", "testing"],
-        "security_review": ["security", "quality"],
+        "code_review": ["security", "testing", "testing"],
+        "security_review": ["security", "testing"],
         "architecture": ["architecture", "planning"],
         "debugging": ["debugging", "testing"],
         "performance": ["performance", "testing"],
-        "documentation": ["documentation", "communication"],
+        "communication": ["communication", "communication"],
         "planning": ["planning", "product"],
-        "refactoring": ["refactoring", "quality"],
-        "testing": ["testing", "quality"],
-        "devops": ["devops", "security", "quality"],
-        "frontend": ["frontend", "react", "quality"],
-        "python": ["python", "quality"],
+        "refactoring": ["refactoring", "testing"],
+        "testing": ["testing", "testing"],
+        "devops": ["devops", "security", "testing"],
+        "frontend": ["frontend", "frontend", "testing"],
+        "python": ["python", "testing"],
         "api": ["api", "security", "testing"],
-        "git": ["git", "quality"],
-        "data": ["data", "quality"],
+        "git": ["git", "testing"],
+        "data": ["data", "testing"],
         "quantum": ["quantum", "performance"],
         "product": ["product", "planning"],
-        "communication": ["communication", "documentation"],
-        "onboarding": ["onboarding", "documentation"],
-        "automation": ["automation", "quality"],
-        "research": ["deep-research", "research", "documentation"],
+        "communication": ["communication", "communication"],
+        "onboarding": ["onboarding", "communication"],
+        "automation": ["automation", "testing"],
+        "research": ["research", "research", "communication"],
     }
 
     additions = task_additions.get(task_type, [])

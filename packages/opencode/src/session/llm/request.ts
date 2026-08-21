@@ -53,6 +53,15 @@ export type Prepared = {
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
   mergeDeep(target, source ?? {}) as Record<string, any>
 
+// KV-cache guard: variants (thinking mode / reasoning effort) are rendered
+// into the prompt on Anthropic ("changing it always invalidates message
+// blocks; tool and system caches are also invalidated on models that render
+// the configuration ahead of them") and likely on DeepSeek thinking-mode
+// toggles. LOCK the first variant used in a session so mid-session switches
+// cannot bust the entire prefix cache — a switch forces a full-price re-write
+// of tools+system+messages (~127k tokens at miss price).
+const variantBySession = new Map<string, Record<string, any>>()
+
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
   const system = [
@@ -81,6 +90,25 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     !input.small && input.model.variants && input.user.model.variant
       ? input.model.variants[input.user.model.variant]
       : {}
+
+  // Lock variant per session: first variant used is fixed for the lifetime of
+  // the session. Subsequent variant changes would invalidate the provider's
+  // prefix cache (one full-price re-write of ~127k tokens at miss price).
+  if (Object.keys(variant).length > 0) {
+    const prevVariant = variantBySession.get(input.sessionID) ?? undefined
+    if (prevVariant !== undefined) {
+      console.warn(
+        `[KV-CACHE] variant switch BLOCKED: requested "${input.user.model.variant}" but session ` +
+        `locked to initial variant — switching variants mid-session busts the entire prefix cache ` +
+        `and re-bills ~${Math.round(input.model.limit.output * 0.8)} tokens at miss price`,
+      )
+      // Revert to initial variant options instead of using the requested one
+      variantBySession.set(input.sessionID, prevVariant)
+      Object.assign(variant, prevVariant)
+    } else {
+      variantBySession.set(input.sessionID, variant)
+    }
+  }
   const base = input.small
     ? ProviderTransform.smallOptions(input.model)
     : ProviderTransform.options({
@@ -117,8 +145,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       sessionID: input.sessionID,
       agent: input.agent.name,
       model: input.model,
-      provider: input.provider,
-      message: input.user,
+      provider: { source: input.provider.source, info: input.provider, options: input.provider.options },
+      message: input.user as any,
     },
     {
       temperature: input.model.capabilities.temperature
@@ -137,8 +165,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       sessionID: input.sessionID,
       agent: input.agent.name,
       model: input.model,
-      provider: input.provider,
-      message: input.user,
+      provider: { source: input.provider.source, info: input.provider, options: input.provider.options },
+      message: input.user as any,
     },
     {
       headers: {},

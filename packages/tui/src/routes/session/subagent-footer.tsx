@@ -32,22 +32,16 @@ export function SubagentFooter() {
 
   const usage = createMemo(() => {
     const msg = messages()
-    const session = session()
-    // Use session-level accumulated tokens when available, fall back to per-message
-    let tokens: number
-    if (session?.tokens && (session.tokens.input > 0 || session.tokens.output > 0)) {
-      tokens = session.tokens.input + session.tokens.output
-    } else {
-      const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-      if (!last) return
-      tokens = last.tokens.input + last.tokens.output + last.tokens.reasoning
-    }
+    const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
+    if (!last) return
+
+    const tokens =
+      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
     if (tokens <= 0) return
 
-    const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    const model = last ? sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID] : undefined
+    const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
     const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
-    const cost = session?.cost ?? 0
+    const cost = session()?.cost ?? 0
 
     const money = new Intl.NumberFormat("en-US", {
       style: "currency",

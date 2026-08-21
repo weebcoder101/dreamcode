@@ -7,7 +7,6 @@ import { useToast } from "./toast"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { useBindings, useOpencodeModeStack } from "../keymap"
 import { useClipboard } from "../context/clipboard"
-import { hasTextSelection } from "../util/selection"
 
 export function Dialog(
   props: ParentProps<{
@@ -30,18 +29,9 @@ export function Dialog(
     <box
       onMouseDown={() => {
         dismiss = !!renderer.getSelection()
-        // If the selection references only destroyed renderables (stale),
-        // getSelectedText() returns "". Clear it immediately so dismiss
-        // can proceed in a single click.
-        if (dismiss && !hasTextSelection(renderer)) {
-          renderer.clearSelection()
-          dismiss = false
-        }
       }}
-      onMouseUp={(e: { stopPropagation(): void }) => {
-        e.stopPropagation()
+      onMouseUp={() => {
         if (dismiss) {
-          renderer.clearSelection()
           dismiss = false
           return
         }
@@ -92,7 +82,6 @@ function init() {
   })
 
   let focus: Renderable | null
-  let clearing = false
   function refocus() {
     setTimeout(() => {
       if (!focus) return
@@ -111,17 +100,16 @@ function init() {
   }
 
   useBindings(() => ({
-    // Esc ALWAYS dismisses the dialog — selection management is the
-    // responsibility of handleSelectionKey (app.tsx) and mouse handlers.
-    enabled: store.stack.length > 0,
+    enabled: store.stack.length > 0 && !renderer.getSelection()?.getSelectedText(),
     bindings: [
       {
         key: "escape",
         desc: "Close dialog",
         group: "Dialog",
         cmd: () => {
-          // Clear any stale selection so subsequent interactions work.
-          renderer.clearSelection()
+          if (renderer.getSelection()) {
+            renderer.clearSelection()
+          }
           const current = store.stack.at(-1)
           current?.onClose?.()
           setStore("stack", store.stack.slice(0, -1))
@@ -133,8 +121,9 @@ function init() {
         desc: "Close dialog",
         group: "Dialog",
         cmd: () => {
-          // Clear any stale selection so subsequent interactions work.
-          renderer.clearSelection()
+          if (renderer.getSelection()) {
+            renderer.clearSelection()
+          }
           const current = store.stack.at(-1)
           current?.onClose?.()
           setStore("stack", store.stack.slice(0, -1))
@@ -146,41 +135,16 @@ function init() {
 
   return {
     clear() {
-      // Prevent re-entrant clear() — the overlay's onClose and a content
-      // handler (e.g. dialog-select option's onSelect) can both call clear()
-      // in the same event chain. Without this guard, the inner box with
-      // stopPropagation is destroyed while the mouseup event is still
-      // propagating, which can leave a stale selection on the renderer and
-      // block subsequent clicks (InlineToolRow guard at index.tsx:1903).
-      if (clearing) return
-      clearing = true
-      try {
-        // Clear any stale selection first — destroyed dialog nodes leave the
-        // Selection object with references to dead renderables, whose
-        // getSelectedText() still returns cached text. This permanently blocks
-        // the InlineToolRow guard (session/index.tsx:1903) on every future
-        // mouse interaction until another selection event clears it naturally.
-        renderer.clearSelection()
-        for (const item of store.stack) {
-          if (item.onClose) item.onClose()
-        }
-        batch(() => {
-          setStore("size", "medium")
-          setStore("stack", [])
-        })
-        refocus()
-      } finally {
-        clearing = false
+      for (const item of store.stack) {
+        if (item.onClose) item.onClose()
       }
+      batch(() => {
+        setStore("size", "medium")
+        setStore("stack", [])
+      })
+      refocus()
     },
     replace(input: any, onClose?: () => void) {
-      // Prevent re-entrant replace() — if this fires while clear() is
-      // running (e.g. from an onClose callback), the batch in clear()
-      // would overwrite the stack with [] and discard the new content.
-      if (clearing) return
-      // Clear selection before replacing — old dialog content is destroyed
-      // and any selection referencing it would become stale.
-      renderer.clearSelection()
       if (store.stack.length === 0) {
         focus = renderer.currentFocusedRenderable
         focus?.blur()
@@ -196,9 +160,6 @@ function init() {
         },
       ])
     },
-    get clearing() {
-      return clearing
-    },
     get stack() {
       return store.stack
     },
@@ -211,7 +172,7 @@ function init() {
   }
 }
 
-export type DialogContext = ReturnType<typeof init> & { readonly clearing: boolean }
+export type DialogContext = ReturnType<typeof init>
 
 const ctx = createContext<DialogContext>()
 
@@ -222,9 +183,6 @@ export function DialogProvider(props: ParentProps) {
   const clipboard = useClipboard()
 
   function copySelection() {
-    // Skip copy if dialog is mid-clear — the render tree may be in an
-    // inconsistent state and getSelection() could reference destroyed nodes.
-    if (value.clearing) return false
     const text = renderer.getSelection()?.getSelectedText()
     if (!text || !clipboard.write) return false
     void clipboard.write(text).then(
@@ -249,11 +207,7 @@ export function DialogProvider(props: ParentProps) {
           evt.preventDefault()
           evt.stopPropagation()
         }}
-        onMouseUp={!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? () => {
-          // Skip copy selection while dialog is clearing or already gone
-          if (value.clearing || value.stack.length === 0) return
-          copySelection()
-        } : undefined}
+        onMouseUp={!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? copySelection : undefined}
       >
         <Show when={value.stack.length}>
           <Dialog onClose={() => value.clear()} size={value.size}>

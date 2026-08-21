@@ -1,10 +1,10 @@
 import { Effect, Ref } from "effect"
-import { SensorGate, evaluateSpawnNecessity, type Persona } from "@/skill/sensor-gate"
-import { ChainExecutor, type ChainResult } from "@/skill/chain-executor"
+import { evaluateSpawnNecessity, WORKFLOW_SKILLS, type Persona } from "@/skill/sensor-gate"
+import { type ChainResult } from "@/skill/chain-executor"
 import * as PersonaTracker from "./persona-tracker"
 import { extractSubagentContext, buildSubagentContextPrompt } from "./subagent-context"
 import { sanitizeForSystemPrompt, normalizeTokens, injectChainGapDetection, injectSkillLoadingGap, injectSkillChainObligation, buildUnloadedChainBlockMessage } from "./prompt-utils"
-import { storedGateResultMap, storedScriptResultsMap, storedContentResultsMap, checkRateLimit, recordSpawn, RATE_MAX_SPAWNS } from "./prompt-state"
+import { storedGateResultMap, storedScriptResultsMap, storedContentResultsMap, checkRateLimit, recordSpawn, RATE_MAX_SPAWNS, isSensorGateEnabled, checkTokenBudget, recordTokenUsage } from "./prompt-state"
 import { recordTaste } from "./prompt-taste"
 import { debugLog } from "@/skill/python-resolver"
 import { MessageID, PartID } from "./schema"
@@ -12,24 +12,44 @@ import { TaskTool } from "@/tool/task"
 import { ulid } from "ulid"
 import type { SessionID } from "./schema"
 
-export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: {
+// Tracks workflow skills (e.g., deep-research) that recently completed execution per session.
+// When the sensor gate chain includes a workflow skill, persona spawning is normally
+// blocked. But on subsequent turns, if the same workflow skill is still in the chain,
+// this map allows persona spawning to proceed because the workflow already ran.
+// Cleared once personas successfully spawn. Keyed by sessionID to prevent cross-session leaks.
+const recentlyCompletedWorkflows = new Map<SessionID, Set<string>>()
+
+export interface SensorGatePhaseInput {
   gateResult: any; explicitSpawnCount: number; sessionID: SessionID;
   msgs: any[]; system: string[]; model: any; ctx: any;
-  handle: any; instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
+  instruction: any; ops: any; piecesLTM: any; selfEvolve: any; registry: any; agents: any;
   sessions: any; sensorGate: any; lastUser: any; lastUserMsg: any; userText: string; tools: any;
   personaRoundMap: Map<SessionID, number>; spawnHistory: any; compaction: any;
   chainExecutor: any; sys: any;
-}) {
+  taskComplexity?: "simple" | "medium" | "complex";
+}
+
+export var processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGatePhase")(function* (input: SensorGatePhaseInput) {
   const {
     gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
-    handle, instruction, ops, piecesLTM, selfEvolve, registry, agents,
+    instruction, ops, piecesLTM, selfEvolve, registry, agents,
     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
     personaRoundMap, spawnHistory, compaction, chainExecutor, sys,
+    taskComplexity,
   } = input
 
   yield* Effect.logWarning(`[SENSOR-GATE-DIAG] processSensorGatePhase entered gateResult.chain=${gateResult?.chain?.length ?? 0} personas=${gateResult?.personas?.length ?? 0} mode=${gateResult?.mode ?? "N/A"} explicitUserCount=${explicitSpawnCount}`)
 
   const currentRound = (personaRoundMap.get(sessionID) ?? 0)
+  const MAX_PERSONA_ROUNDS = 3
+
+  // ─── Round Limit Check ──────────────────────────────────────
+  // Prevent infinite persona spawning rounds. Each user message can
+  // trigger at most MAX_PERSONA_ROUNDS rounds of specialist analysis.
+  if (currentRound >= MAX_PERSONA_ROUNDS) {
+    yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Max persona rounds reached (${currentRound}/${MAX_PERSONA_ROUNDS}) — skipping persona spawning`)
+    return { synthesisText: undefined, sensorGateFired: true }
+  }
 
   // ─── Skill Chain Execution ──────────────────────────────
   if (gateResult?.chain?.length > 0) {
@@ -93,8 +113,10 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
     storedContentResultsMap.set(sessionID, contentResults)
 
     yield* injectChainGapDetection(system, gateResult, chainResults, userText, chainExecutor)
-    injectSkillLoadingGap(system, gateResult, msgs)
-    injectSkillChainObligation(system, gateResult, scriptResults, contentResults)
+    // Pass successfully executed script skills so they're excluded from loading gap
+    const preExecutedSkills = scriptResults.filter(r => r.status === "ok").map(r => r.name)
+    injectSkillLoadingGap(system, gateResult, msgs, preExecutedSkills)
+    injectSkillChainObligation(system, gateResult, scriptResults, contentResults, msgs)
 
     yield* selfEvolve.capture({
       chain: gateResult.chain,
@@ -105,26 +127,70 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
         whatFailed: `Skill ${r.name} failed: ${r.output.slice(0, 200)}`,
         whatToChange: `Chain skill ${r.name} needs fixing`,
       })),
-    }).pipe(Effect.catch(() => Effect.void))
+    }).pipe(Effect.catch((e) => Effect.logWarning(`[sensor-gate] selfEvolve.capture failed: ${e}`)))
     yield* sys.invalidateKnowledgeCache().pipe(Effect.catch(() => Effect.void))
+
+    // Mark workflow skills as recently completed so persona spawning is
+    // unblocked on subsequent turns even if the workflow skill is still
+    // in the sensor gate chain. Session-scoped to prevent cross-session leaks.
+    if (gateResult?.chain?.length > 0) {
+      const sessionCompleted = recentlyCompletedWorkflows.get(sessionID) ?? new Set<string>()
+      for (const skill of gateResult.chain) {
+        if (WORKFLOW_SKILLS.has(skill)) {
+          sessionCompleted.add(skill)
+        }
+      }
+      recentlyCompletedWorkflows.set(sessionID, sessionCompleted)
+    }
   }
 
   // ─── Determine personas ─────────────────────────────────
   let evaluation = evaluateSpawnNecessity(gateResult, userText)
   yield* Effect.logWarning(`[SENSOR-GATE-DIAG] evaluateSpawnNecessity shouldSpawn=${evaluation.shouldSpawn} suggestedCount=${evaluation.suggestedCount} reason=${evaluation.reason}`)
 
-  const WORKFLOW_SKILLS = new Set(["deep-research"])
-  const hasWorkflowSkill = gateResult?.chain?.some((s: string) => WORKFLOW_SKILLS.has(s))
+  const sessionCompleted = recentlyCompletedWorkflows.get(sessionID) ?? new Set<string>()
+  const hasWorkflowSkill = gateResult?.chain?.some((s: string) => {
+    if (sessionCompleted.has(s)) return false
+    return WORKFLOW_SKILLS.has(s)
+  })
   if (hasWorkflowSkill) {
+    const blockingSkill = gateResult?.chain?.find((s: string) => WORKFLOW_SKILLS.has(s) && !sessionCompleted.has(s))
+    yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Workflow skill present (no longer suppresses spawning): ${blockingSkill} sessionCompleted=[${[...sessionCompleted].join(",")}] keep_shouldSpawn=${evaluation.shouldSpawn}`)
+    debugLog(`[sensor-gate] Workflow skill detected: ${blockingSkill} — complementary specialists still spawn; workflow runs as a skill`)
+  }
+
+  // Clean up recently completed workflow tracking. Personas now spawn even when
+  // a workflow skill is in the chain, so clear stale tracking whenever spawning
+  // succeeded for this session.
+  if (sessionCompleted.size > 0 && evaluation.shouldSpawn) {
+    recentlyCompletedWorkflows.delete(sessionID)
+    debugLog(`[sensor-gate] Cleared recentlyCompletedWorkflows for session ${sessionID} — personas spawned with workflow in chain`)
+  }
+
+  // ─── Gate Toggle: Safety net — skip persona spawning when gate is OFF ──
+  // Gate OFF = minimal cost mode: skills + chain still execute, but personas
+  // are not spawned. Gate ON = full mode: everything including personas.
+  const gateIsEnabled = isSensorGateEnabled()
+  if (!gateIsEnabled) {
+    yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Sensor gate OFF — persona spawning skipped (minimal cost mode)`)
     evaluation = {
       shouldSpawn: false,
-      reason: "Chain includes workflow-managed skill — workflow handles its own agents",
+      reason: "Sensor gate OFF — minimal cost mode, no specialist spawning",
       suggestedCount: 0,
     }
-    debugLog(`[sensor-gate] Workflow skill detected: ${evaluation.reason}`)
   }
 
   if (!evaluation.shouldSpawn) {
+    // Diagnostic: log when spawn is denied despite personas being populated.
+    // This reveals the broken feedback loop where fallback generates personas
+    // but evaluateSpawnNecessity() denies them due to stale default metadata.
+    if (gateResult?.personas?.length > 0) {
+      yield* Effect.logWarning(
+        `[SENSOR-GATE-DIAG] Spawn BLOCKED despite ${gateResult.personas.length} populated personas. ` +
+        `domain_tags=${gateResult.domain_tags?.length} chain=${gateResult.chain?.length} ` +
+        `confidence=${gateResult.confidence} mode=${gateResult.mode} reason=${evaluation.reason}`,
+      )
+    }
     debugLog(`[sensor-gate] Spawn skipped: ${evaluation.reason}`)
     recordTaste({
       timestamp: Date.now(), sessionID, domain: gateResult?.mode ?? "unknown",
@@ -135,7 +201,11 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
   }
   let personas: Persona[] = []
   const rateCheck = checkRateLimit(sessionID)
-  if (evaluation.shouldSpawn && gateResult?.personas?.length > 0 && rateCheck.allowed) {
+  const budgetOk = checkTokenBudget(sessionID, gateResult?.complexity ?? "medium")
+  if (!budgetOk) {
+    yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Token budget exceeded — skipping persona spawn`)
+  }
+  if (evaluation.shouldSpawn && gateResult?.personas?.length > 0 && rateCheck.allowed && budgetOk) {
     personas = gateResult.personas.slice(0, Math.min(evaluation.suggestedCount, rateCheck.remaining))
     recordSpawn(sessionID, personas.length)
     recordTaste({
@@ -144,7 +214,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
       personaNames: personas.map(p => p.name), gateMode: gateResult?.mode ?? "unknown",
       chainCount: gateResult?.chain?.length ?? 0,
     })
-  } else if (explicitSpawnCount > 0 && rateCheck.allowed) {
+  } else if (explicitSpawnCount > 0 && rateCheck.allowed && budgetOk) {
     const spawnCount = Math.min(explicitSpawnCount, rateCheck.remaining)
     recordSpawn(sessionID, spawnCount)
     recordTaste({
@@ -200,7 +270,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
       outcome: "success",
       keyDecisions: [`Gate classification: ${gateResult?.intent ?? "explicit-override"}`, `Round: ${currentRound + 1}`],
       memoryType: "standup",
-    }).pipe(Effect.catch(() => Effect.void))
+    }).pipe(Effect.catch((e) => Effect.logWarning(`[sensor-gate] piecesLTM.persist failed: ${e}`)))
 
     yield* Effect.gen(function* () {
       const named = personas.filter((p: any) => p.name && p.skills?.length > 0) as Array<{ name: string; skills: string[]; role: string; focus: string; task?: string; goals?: string[] }>
@@ -216,7 +286,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
           })),
         })
       }
-    }).pipe(Effect.catch(() => Effect.void))
+    }).pipe(Effect.catch((e) => Effect.logWarning(`[sensor-gate] selfEvolve.capture failed: ${e}`)))
 
     const personaTeam = personas.slice(0, Math.min(personas.length, RATE_MAX_SPAWNS))
     const subtaskOps = yield* ops({ disableTaskTool: true })
@@ -295,6 +365,12 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
           ? "\nOther specialist agents are analyzing related aspects. Do NOT duplicate work.\n"
           : ""
 
+        const modelHint = taskComplexity === "simple"
+          ? "\n[Cost note: This is a simple task — be concise, minimize token usage]\n"
+          : taskComplexity === "complex"
+          ? "\n[Complexity note: This is a complex task — provide thorough, detailed analysis]\n"
+          : ""
+
         const chainObligation = (gateResult?.chain?.length > 0)
           ? [
               "",
@@ -323,6 +399,7 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
           "4. **Confidence**: High/Medium/Low for each finding",
           "",
           "Be CONCISE. Focus on ACTIONABLE items only.",
+          modelHint,
           chainObligation,
           otherCtx,
           "## Synthesis Guide",
@@ -443,6 +520,11 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
       cost: totalCost,
       tokens: totalTokens,
     })
+    // Record token usage for budget tracking
+    const totalInput = (totalTokens.input ?? 0) + (totalTokens.output ?? 0) + (totalTokens.reasoning ?? 0)
+    if (totalInput > 0) {
+      recordTokenUsage(sessionID, totalInput)
+    }
 
     synthesisText = PersonaTracker.buildSynthesisPrompt(allResults)
 
@@ -474,6 +556,25 @@ export const processSensorGatePhase = Effect.fn("SessionPrompt.processSensorGate
       synthetic: true,
     }
     yield* sessions.updatePart(synthesisPart)
+
+    // ─── Persona Window Capping ─────────────────────────────
+    // Only keep the last 50 persona assistant messages to prevent
+    // UI lag/clogging. Persona messages are identified by their
+    // "tool_call" mode and "general" agent.
+    const MAX_PERSONA_WINDOWS = 50
+    const capMsgs = yield* sessions.messages({ sessionID }).pipe(Effect.catch(() => Effect.succeed([])))
+    if (capMsgs.length > 0) {
+      const personaMsgs = (capMsgs as any[]).filter(
+        (m) => m.info?.mode === "tool_call" && m.info?.agent === "general",
+      )
+      if (personaMsgs.length > MAX_PERSONA_WINDOWS) {
+        const toDelete = personaMsgs.slice(0, personaMsgs.length - MAX_PERSONA_WINDOWS)
+        for (const oldMsg of toDelete) {
+          yield* sessions.removeMessage({ sessionID, messageID: oldMsg.info.id }).pipe(Effect.catch(() => Effect.void))
+        }
+        yield* Effect.logWarning(`[SENSOR-GATE-DIAG] Capped persona windows: deleted ${toDelete.length} old persona messages, keeping last ${MAX_PERSONA_WINDOWS}`)
+      }
+    }
   }
 
   return {

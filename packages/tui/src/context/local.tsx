@@ -173,17 +173,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           .then((existing) =>
             writeJsonAtomic(filePath, {
               ...(existing ?? {}),
+              model: modelStore.model,
               recent: modelStore.recent,
               favorite: modelStore.favorite,
               variant: modelStore.variant,
             }),
           )
           .catch(() => {
-            // Read again to get subagentModel field (written by syncModelJson / variant.shared.ts)
             const subagentPath = path.join(paths.state, "subagent.json")
-            return readJson<{ model?: string }>(subagentPath)
+            return readJson<{ model?: { providerID: string; modelID: string } }>(subagentPath)
               .then((sub) =>
                 writeJsonAtomic(filePath, {
+                  model: modelStore.model,
                   recent: modelStore.recent,
                   favorite: modelStore.favorite,
                   variant: modelStore.variant,
@@ -192,6 +193,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               )
               .catch(() =>
                 writeJsonAtomic(filePath, {
+                  model: modelStore.model,
                   recent: modelStore.recent,
                   favorite: modelStore.favorite,
                   variant: modelStore.variant,
@@ -208,6 +210,22 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (Array.isArray(value.favorite)) setModelStore("favorite", value.favorite)
           if (typeof value.variant === "object" && value.variant !== null)
             setModelStore("variant", value.variant as Record<string, string | undefined>)
+          if (typeof value.model === "object" && value.model !== null) {
+            const m = value.model as Record<string, { providerID?: string; modelID?: string } | unknown>
+            for (const [agentName, entry] of Object.entries(m)) {
+              if (
+                entry &&
+                typeof entry === "object" &&
+                typeof (entry as any).providerID === "string" &&
+                typeof (entry as any).modelID === "string"
+              ) {
+                setModelStore("model", agentName, {
+                  providerID: (entry as any).providerID,
+                  modelID: (entry as any).modelID,
+                })
+              }
+            }
+          }
         })
         .catch(() => console.warn("failed to read model.json on init"))
         .finally(() => {
@@ -308,6 +326,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const a = agent.current()
           if (!a) return
           setModelStore("model", a.name, { ...val })
+          save()
         },
         cycleFavorite(direction: 1 | -1) {
           const favorites = modelStore.favorite.filter((item) => isModelValid(item))

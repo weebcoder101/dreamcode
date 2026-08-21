@@ -109,11 +109,6 @@ export const make = Effect.gen(function* () {
   const env = (opts: ChildProcess.CommandOptions) => {
     if (opts.env === undefined) return undefined // inherit all (default Bun/Node behavior)
     if (opts.env === null) return {} // explicit empty env
-    // extendEnv: true merges process.env into the provided env so PATH (and
-    // other system vars) are inherited even when the caller sets custom vars.
-    // Without this, cross-spawn receives env without PATH and fails with ENOENT
-    // for commands like "bun", "git", "node", etc.
-    if (opts.extendEnv) return { ...process.env, ...opts.env }
     return opts.env // use provided env as-is (no process.env spread)
   }
 

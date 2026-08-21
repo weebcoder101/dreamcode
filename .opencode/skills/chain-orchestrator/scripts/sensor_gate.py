@@ -36,20 +36,19 @@ def _find_project_root() -> Path:
     return current
 
 PROJECT_ROOT = _find_project_root()
-EVOLUTION_DIR = Path.home() / ".dreamcode" / "evolution"
 SKILLS_DIR = PROJECT_ROOT / ".dreamcode" / "skills"
-
+EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 CONFIG_PATH = PROJECT_ROOT / ".dreamcode" / "config" / "opencode.yaml"
 SCRIPTS_DIR = PROJECT_ROOT / ".dreamcode" / "scripts"
+
+# Add scripts dir to path for sandbox_manager and agents_md_loader
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 # Add guardian-ai scripts to path
 _guardian_scripts = SKILLS_DIR / "guardian-ai" / "scripts"
 if str(_guardian_scripts) not in sys.path:
     sys.path.insert(0, str(_guardian_scripts))
-
-# Add scripts dir to path for sandbox_manager and agents_md_loader
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -73,29 +72,79 @@ def load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 PATTERN_RULES = [
-    (r'\b(fix|bug|error|issue|crash|broken)\b', "debugging", "high"),
-    (r'\b(refactor|restructure|reorganize|cleanup)\b', "refactoring", "medium"),
-    (r'\b(test|tests|testing|coverage|assert)\b', "testing", "medium"),
-    (r'\b(security|auth|token|secret|vulnerability)\b', "security", "high"),
-    (r'\b(performance|slow|optimize|speed|latency)\b', "performance", "medium"),
-    (r'\b(deploy|docker|ci|cd|pipeline|build)\b', "devops", "medium"),
-    (r'\b(git|commit|branch|merge|pr|pull request)\b', "git", "low"),
-    (r'\b(api|endpoint|route|rest|graphql)\b', "api", "medium"),
+    # All patterns use both leading and trailing \b to prevent partial-word matches.
+    # E.g. "api" must NOT match "api key" as subword — it must match the word "api".
+    # Inflected forms are listed explicitly (fix/fixes/fixed/fixing) instead of relying
+    # on unbounded suffix matching that causes false positives like "classification" matching "fix".
+    (r'\b(fix(?:es|ed|ing)?|bugs?|error|issue|crash(?:es|ed|ing)?|broken)\b', "debugging", "high"),
+    (r'\b(refactor(?:s|ed|ing)?|restructure(?:s|ed|ing)?|reorganize(?:s|ed|ing)?|cleanup)\b', "refactoring", "medium"),
+    (r'\b(test(?:s|ed|ing)?|coverage|assert(?:s|ed|ing)?)\b', "testing", "medium"),
+    (r'\b(security|auth(?:s|ing)?|token(?:s)?|secret(?:s)?|vulnerabilit(?:y|ies))\b', "security", "high"),
+    (r'\b(performance|slow(?:ly|er|est)?|optimize(?:s|ed|ing)?|speed(?:s|ed|ing|y|ier)?|latenc(?:y|ies))\b', "performance", "medium"),
+    (r'\b(deploy(?:s|ed|ing|ment)?|docker|ci|cd|pipeline(?:s)?|build(?:s|ing|s)?)\b', "devops", "medium"),
+    (r'\b(git|commit(?:s|ed|ing)?|branch(?:s|ed|ing)?|merge(?:s|ed|ing)?|pr|pull request(?:s)?)\b', "git", "low"),
+    (r'\b(api|endpoint(?:s)?|route(?:s|ed|ing)?|rest|graphql)\b', "api", "medium"),
     (r'\b(python|django|flask|fastapi)\b', "python", "low"),
-    (r'\b(react|jsx|tsx|component|hooks?)\b', "react", "low"),
-    (r'\b(frontend|ui|css|tailwind|style)\b', "frontend", "low"),
-    (r'\b(quantum|qaoa|qae|qubit)\b', "quantum", "medium"),
-    (r'\b(data|pandas|numpy|analysis)\b', "data", "medium"),
-    (r'\b(plan|planning|roadmap|sprint)\b', "planning", "medium"),
-    (r'\b(architect|architecture|design|pattern)\b', "architecture", "high"),
-    (r'\b(product|feature|user|requirement)\b', "product", "medium"),
-    (r'\b(document|documentation|readme|doc)\b', "documentation", "low"),
-    (r'\b(explain|describe|how does|what is)\b', "communication", "low"),
-    (r'\b(research|investigate|explore|analyze)\b', "research", "medium"),
-    (r'\b(automate|automation|pipeline|workflow)\b', "automation", "medium"),
-    (r'\b(innovate|innovation|breakthrough|novel)\b', "breakthrough-overdrive-innovation", "high"),
-    (r'\b(review|audit|examine|inspect)\b', "neuro", "high"),
-    (r'\b(improve|enhance|better)\b', "neuro", "medium"),
+    (r'\b(react|jsx|tsx|component(?:s)?|hook(?:s)?)\b', "frontend", "low"),
+    (r'\b(frontend|ui|css|tailwind|style(?:s)?)\b', "frontend", "low"),
+    (r'\b(quantum|qaoa|qae|qubit(?:s)?)\b', "quantum", "medium"),
+    (r'\b(data|pandas|numpy|analys(?:is|es))\b', "data", "medium"),
+    (r'\b(plan(?:s|ned|ning)?|roadmap(?:s)?|sprint(?:s)?)\b', "planning", "medium"),
+    (r'\b(architect(?:s|ed|ing|ure)?|design(?:s|ed|ing)?|pattern(?:s)?)\b', "architecture", "high"),
+    (r'\b(product(?:s)?|feature(?:s)?|user(?:s)?|requirement(?:s)?)\b', "product", "medium"),
+    (r'\b(document(?:s|ed|ing|ation)?|readme|doc(?:s)?)\b', "communication", "low"),
+    (r'\b(explain(?:s|ed|ing)?|describe(?:s|ed|ing)?|how does|what is)\b', "communication", "low"),
+    (r'\b(research(?:es|ed|ing)?|investigate(?:s|ed|ing)?|explore(?:s|ed|ing)?|analyz(?:e|es|ed|ing))\b', "research", "medium"),
+    (r'\b(automate(?:s|ed|ing)?|automation|pipeline(?:s)?|workflow(?:s)?)\b', "automation", "medium"),
+    (r'\b(innovate(?:s|ed|ing)?|innovation|breakthrough(?:s)?|novel)\b', "breakthrough-overdrive-innovation", "high"),
+    (r'\b(review(?:s|ed|ing)?|audit(?:s|ed|ing)?|examine(?:s|ed|ing)?|inspect(?:s|ed|ing)?)\b', "neuro", "high"),
+    (r'\b(improve(?:s|ed|ing|ment)?|enhance(?:s|ed|ing)?|better)\b', "neuro", "medium"),
+]
+
+# Weighted scoring rules — drives detection in build_dynamic_graph. Each match
+# contributes a weight; multi-label is preserved (ALL detected task types are
+# kept, never deduped away by priority). Contextual co-occurrence boosts are
+# applied afterward (see BIAS_BOOSTS). PATTERN_RULES above remains for
+# classify_intent() confidence scoring.
+SCORED_RULES = [
+    (r'\b(fix(?:es|ed|ing)?|bugs?|error|issue|crash(?:es|ed|ing)?|broken)\b', "debugging", 3),
+    (r'\b(refactor(?:s|ed|ing)?|restructure(?:s|ed|ing)?|reorganize(?:s|ed|ing)?|cleanup)\b', "refactoring", 2),
+    (r'\b(test(?:s|ed|ing)?|coverage|assert(?:s|ed|ing)?)\b', "testing", 2),
+    (r'\b(security|auth(?:s|ing)?|token(?:s)?|secret(?:s)?|vulnerabilit(?:y|ies))\b', "security", 3),
+    (r'\b(performance|slow(?:ly|er|est)?|optimize(?:s|ed|ing)?|speed(?:s|ed|ing|y|ier)?|latenc(?:y|ies))\b', "performance", 2),
+    (r'\b(deploy(?:s|ed|ing|ment)?|docker|ci|cd|pipeline(?:s)?|build(?:s|ing|s)?)\b', "devops", 2),
+    (r'\b(git|commit(?:s|ed|ing)?|branch(?:s|ed|ing)?|merge(?:s|ed|ing)?|pr|pull request(?:s)?)\b', "git", 1),
+    (r'\b(api|endpoint(?:s)?|route(?:s|ed|ing)?|rest|graphql)\b', "api", 2),
+    (r'\b(python|django|flask|fastapi)\b', "python", 1),
+    (r'\b(react|jsx|tsx|component(?:s)?|hook(?:s)?)\b', "frontend", 1),
+    (r'\b(frontend|ui|css|tailwind|style(?:s)?)\b', "frontend", 1),
+    (r'\b(quantum|qaoa|qae|qubit(?:s)?)\b', "quantum", 2),
+    (r'\b(data|pandas|numpy|analys(?:is|es))\b', "data", 2),
+    (r'\b(plan(?:s|ned|ning)?|roadmap(?:s)?|sprint(?:s)?)\b', "planning", 2),
+    (r'\b(architect(?:s|ed|ing|ure)?|design(?:s|ed|ing)?|pattern(?:s)?)\b', "architecture", 3),
+    (r'\b(product(?:s)?|feature(?:s)?|user(?:s)?|requirement(?:s)?)\b', "product", 2),
+    (r'\b(document(?:s|ed|ing|ation)?|readme|doc(?:s)?)\b', "communication", 1),
+    (r'\b(explain(?:s|ed|ing)?|describe(?:s|ed|ing)?|how does|what is)\b', "communication", 1),
+    (r'\b(research(?:es|ed|ing)?|investigate(?:s|ed|ing)?|explore(?:s|ed|ing)?|analyz(?:e|es|ed|ing))\b', "research", 2),
+    (r'\b(automate(?:s|ed|ing)?|automation|pipeline(?:s)?|workflow(?:s)?)\b', "automation", 2),
+    (r'\b(innovate(?:s|ed|ing)?|innovation|breakthrough(?:s)?|novel)\b', "breakthrough-overdrive-innovation", 3),
+    (r'\b(review(?:s|ed|ing)?|audit(?:s|ed|ing)?|examine(?:s|ed|ing)?|inspect(?:s|ed|ing)?)\b', "neuro", 3),
+    (r'\b(improve(?:s|ed|ing|ment)?|enhance(?:s|ed|ing)?|better)\b', "neuro", 2),
+]
+
+def _scored_has(pattern, lower):
+    return bool(re.search(pattern, lower))
+
+# Contextual co-occurrence boosts — raise an already-detected task's weight when
+# related keywords co-occur, so secondary intents are ranked appropriately.
+BIAS_BOOSTS = [
+    (lambda p: _scored_has(r'\b(fix|fixes|fixed|fixing|resolve)\b', p) and _scored_has(r'\b(bug|error|issue|crash|broken|defect)\b', p), "debugging", 2),
+    (lambda p: _scored_has(r'\b(auth|login|token|session|rbac|oauth)\b', p) and _scored_has(r'\b(security|vulnerab|secret|exploit)\b', p), "security", 2),
+    (lambda p: _scored_has(r'\b(deep|thorough|exhaustive|in-?depth)\b', p) and _scored_has(r'\b(research|investigat|analyz|stud)\b', p), "research", 2),
+    (lambda p: _scored_has(r'\b(refactor|restructure|cleanup)\b', p) and _scored_has(r'\b(architect|design|pattern|module|service)\b', p), "architecture", 2),
+    (lambda p: _scored_has(r'\b(optimi|speed|latency|slow|perf)\b', p) and _scored_has(r'\b(bottleneck|cache|profile|throughput)\b', p), "performance", 2),
+    (lambda p: _scored_has(r'\b(write|add|create)\b', p) and _scored_has(r'\b(test|coverage|spec|pytest)\b', p), "testing", 2),
+    (lambda p: _scored_has(r'\b(security|auth|secret|token|vulnerab)\b', p) and _scored_has(r'\b(review|audit|scan|harden)\b', p), "security", 2),
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -104,52 +153,45 @@ PATTERN_RULES = [
 
 SKILL_GRAPH = {
     # ── META SKILLS ──
-    "breakthrough-overdrive-innovation": {"needs": [], "triggers": ["neuro", "research", "deep-research"], "always": True},
+    "breakthrough-overdrive-innovation": {"needs": [], "triggers": ["neuro", "research", "architecture"], "always": True},
     "context-compactor": {"needs": [], "triggers": [], "always": False},
     "exhaustive-crosscheck": {"needs": [], "triggers": ["neuro"], "always": False},
-    "neuro": {"needs": [], "triggers": ["model-router", "code-hardener"], "always": False},
+    "neuro": {"needs": [], "triggers": ["model-router", "code-hardener", "architecture"], "always": False},
     "model-router": {"needs": ["neuro"], "triggers": [], "always": False},
     "code-hardener": {"needs": ["neuro"], "triggers": ["lint-fixer"], "always": False},
     "lint-fixer": {"needs": [], "triggers": [], "always": False},
     "pieces-ltm": {"needs": [], "triggers": ["automated-learning"], "always": False},
     "automated-learning": {"needs": [], "triggers": [], "always": False},
     "chain-orchestrator": {"needs": [], "triggers": [], "always": False},
-    "guardian-ai": {"needs": [], "triggers": [], "always": False},
-    "automation": {"needs": [], "triggers": [], "always": False},
-    "scheduled-automations": {"needs": ["automation"], "triggers": [], "always": False},
+    "automation": {"needs": [], "triggers": ["neuro", "devops"], "always": False},
 
     # ── CORE SKILLS ──
-    "planning": {"needs": [], "triggers": ["architecture"], "always": False},
-    "architecture": {"needs": [], "triggers": ["code-hardener"], "always": False},
-    "quality": {"needs": [], "triggers": [], "always": False},
-    "security": {"needs": [], "triggers": ["code-hardener"], "always": False},
+    "planning": {"needs": [], "triggers": ["architecture", "product", "research"], "always": False},
+    "architecture": {"needs": [], "triggers": ["planning", "code-hardener", "security", "performance", "refactoring"], "always": False},
+    "security": {"needs": [], "triggers": ["code-hardener", "architecture"], "always": False},
     "testing": {"needs": [], "triggers": [], "always": False},
-    "debugging": {"needs": [], "triggers": ["testing"], "always": False},
-    "performance": {"needs": [], "triggers": ["code-hardener"], "always": False},
+    "debugging": {"needs": [], "triggers": ["testing", "code-hardener"], "always": False},
+    "performance": {"needs": [], "triggers": ["code-hardener", "architecture", "testing"], "always": False},
 
     # ── LANGUAGE SKILLS ──
-    "python": {"needs": [], "triggers": ["quality"], "always": False},
-    "frontend": {"needs": [], "triggers": ["quality"], "always": False},
-    "react": {"needs": ["frontend"], "triggers": ["quality"], "always": False},
-    "api": {"needs": [], "triggers": ["security"], "always": False},
+    "python": {"needs": [], "triggers": ["testing"], "always": False},
+    "frontend": {"needs": [], "triggers": ["testing", "architecture"], "always": False},
+    "api": {"needs": [], "triggers": ["security", "architecture", "performance"], "always": False},
 
     # ── TOOL SKILLS ──
-    "git": {"needs": [], "triggers": ["quality"], "always": False},
-    "git-feature-workflow": {"needs": ["git"], "triggers": [], "always": False},
-    "devops": {"needs": [], "triggers": ["security"], "always": False},
+    "git": {"needs": [], "triggers": ["testing", "devops"], "always": False},
+    "devops": {"needs": [], "triggers": ["security", "automation"], "always": False},
 
     # ── SPECIALIZED SKILLS ──
-    "quantum": {"needs": [], "triggers": ["performance"], "always": False},
-    "data": {"needs": [], "triggers": ["quality"], "always": False},
-    "research": {"needs": [], "triggers": [], "always": False},
-    "deep-research": {"needs": [], "triggers": ["research"], "always": False},
-    "documentation": {"needs": [], "triggers": [], "always": False},
+    "quantum": {"needs": [], "triggers": ["performance", "neuro", "architecture"], "always": False},
+    "data": {"needs": [], "triggers": ["testing", "performance", "python"], "always": False},
+    "research": {"needs": [], "triggers": ["neuro"], "always": False},
 
     # ── SOFT SKILLS ──
     "communication": {"needs": [], "triggers": [], "always": False},
-    "product": {"needs": [], "triggers": ["planning"], "always": False},
-    "refactoring": {"needs": [], "triggers": ["code-hardener", "lint-fixer"], "always": False},
-    "onboarding": {"needs": [], "triggers": ["research"], "always": False},
+    "product": {"needs": [], "triggers": ["planning", "communication"], "always": False},
+    "refactoring": {"needs": [], "triggers": ["code-hardener", "lint-fixer", "testing", "architecture"], "always": False},
+    "onboarding": {"needs": [], "triggers": ["research", "communication"], "always": False},
 
     # ── EXTERNAL ──
     "youtube-transcript": {"needs": [], "triggers": ["research"], "always": False},
@@ -159,23 +201,23 @@ SKILL_GRAPH = {
 TASK_SKILLS = {
     "debugging": ["debugging", "testing"],
     "refactoring": ["refactoring", "code-hardener", "lint-fixer"],
-    "testing": ["testing", "quality"],
+    "testing": ["testing"],
     "security": ["security", "neuro"],
     "performance": ["performance", "neuro"],
     "devops": ["devops", "security"],
     "git": ["git"],
     "api": ["api", "security", "neuro"],
-    "python": ["python", "quality"],
-    "react": ["react", "frontend", "quality"],
-    "frontend": ["frontend", "quality"],
+    "python": ["python"],
+    # react → frontend (merged)
+    "frontend": ["frontend"],
     "quantum": ["quantum", "performance", "neuro"],
-    "data": ["data", "quality"],
+    "data": ["data"],
     "planning": ["planning", "architecture"],
     "architecture": ["architecture", "code-hardener"],
     "product": ["product", "planning"],
-    "documentation": ["documentation"],
+    # documentation → communication (merged)
     "communication": ["communication"],
-    "research": ["research", "deep-research"],
+    "research": ["research"],
     "automation": ["automation", "neuro"],
     "breakthrough-overdrive-innovation": ["neuro"],
     "neuro": ["neuro"],
@@ -193,19 +235,18 @@ def build_dynamic_graph(prompt: str) -> dict:
     """
     prompt_lower = prompt.lower()
     
-    # Detect what tasks are needed
-    detected = []
-    for pattern, task_type, priority in PATTERN_RULES:
+    # Weighted detection — multi-label preserved (ALL detected task types kept)
+    weighted = {}
+    for pattern, task_type, weight in SCORED_RULES:
         if re.search(pattern, prompt_lower):
-            detected.append({"task_type": task_type, "priority": priority})
-    
-    # Dedupe by priority
-    seen = {}
-    for t in detected:
-        tt = t["task_type"]
-        if tt not in seen or _rank(t["priority"]) > _rank(seen[tt]["priority"]):
-            seen[tt] = t
-    tasks = list(seen.values())
+            weighted[task_type] = weighted.get(task_type, 0) + weight
+    # Contextual co-occurrence boosts
+    for check, boost_task, boost in BIAS_BOOSTS:
+        if check(prompt_lower):
+            weighted[boost_task] = weighted.get(boost_task, 0) + boost
+    # Scored task list — no priority dedup (that would drop secondary intents)
+    tasks = [{"task_type": tt, "weight": w} for tt, w in weighted.items()]
+    tasks.sort(key=lambda t: t["weight"], reverse=True)
     
     # Collect skills needed by detected tasks
     needed_skills = set()
@@ -216,7 +257,7 @@ def build_dynamic_graph(prompt: str) -> dict:
     # Only include dream/innovation when task actually requires it
     # (not for trivial communication-only tasks)
     task_types = {t["task_type"] for t in tasks}
-    INNOVATION_TASKS = {"debugging", "refactoring", "security", "performance", "architecture", "quantum", "automation"}
+    INNOVATION_TASKS = {"refactoring", "security", "performance", "quantum", "automation"}
     if task_types & INNOVATION_TASKS:
         needed_skills.add("breakthrough-overdrive-innovation")
     
@@ -237,6 +278,26 @@ def build_dynamic_graph(prompt: str) -> dict:
         if not added:
             resolved.add(skill)
     
+    # ── RELATED-SKILL EXPANSION via `triggers` ──
+    # `triggers` was previously dead code (only `needs` was traversed), so a prompt
+    # like "architecture" only pulled architecture + code-hardener. We now also walk
+    # each resolved skill's `triggers` (plus their prerequisites) so RELATED skills
+    # fire too — directly addressing "more related skills should have fired".
+    # Bounded by MAX_GRAPH_SIZE to prevent unbounded expansion.
+    MAX_GRAPH_SIZE = 12
+    _trigger_queue = list(resolved)
+    while _trigger_queue and len(resolved) < MAX_GRAPH_SIZE:
+        _s = _trigger_queue.pop()
+        for _related in SKILL_GRAPH.get(_s, {}).get("triggers", []):
+            if _related in resolved:
+                continue
+            resolved.add(_related)
+            for _pre in SKILL_GRAPH.get(_related, {}).get("needs", []):
+                if _pre not in resolved:
+                    resolved.add(_pre)
+                    _trigger_queue.append(_pre)
+            _trigger_queue.append(_related)
+
     # Add ending skills if any work was done (non-trivial)
     work_skills = resolved - {"breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning"}
     if work_skills:
@@ -266,8 +327,10 @@ def build_dynamic_graph(prompt: str) -> dict:
                     chain.append(skill)
             chain = _topological_sort(set(chain))
     
-    # Determine complexity
-    complexity = "high" if len(tasks) > 3 else "medium" if len(tasks) > 1 else "low"
+    # Determine complexity from aggregate weighted signal (not just task count)
+    total_weight = sum(t["weight"] for t in tasks)
+    distinct = len(tasks)
+    complexity = "high" if (distinct >= 3 or total_weight >= 6) else "medium" if (distinct >= 2 or total_weight >= 3) else "low"
     
     return {
         "detected_tasks": [t["task_type"] for t in tasks],
@@ -308,6 +371,39 @@ def _topological_sort(skills: set) -> list:
 # ---------------------------------------------------------------------------
 # Stage 0: Chain Classification
 # ---------------------------------------------------------------------------
+
+def run_guardian_stage(prompt: str, chain_result: dict) -> tuple[str, dict | None, bool]:
+    """Run Guardian AI. Returns (block_text, result_dict, is_blocked)."""
+    try:
+        from guardian_ai import run_guardian
+        result = run_guardian(prompt, {"chain": chain_result["chain"]})
+        decision = result.get("decision", "UNKNOWN")
+        risk = result.get("risk_level", "unknown")
+        reason = result.get("reason", "No reason")
+        source = result.get("_source", "unknown")
+
+        block = (
+            f"[GUARDIAN] Safety Review\n"
+            f"- decision: {decision}\n"
+            f"- risk_level: {risk}\n"
+            f"- source: {source}\n"
+            f"- reason: {reason}"
+        )
+
+        if decision == "REJECTED":
+            block += f"\n\n**BLOCKED by Guardian AI:** {reason}"
+            return block, result, True
+
+        if decision == "HUMAN_REQUIRED":
+            block += "\n**Guardian AI requires human approval before proceeding.**"
+
+        return block, result, False
+
+    except ImportError:
+        return "[GUARDIAN] WARNING: guardian_ai module not available", None, False
+    except Exception as e:
+        return f"[GUARDIAN] WARNING: Error: {e}", None, False
+
 
 def classify_chain(prompt: str) -> dict:
     """Build dynamic execution graph — NOT a static chain."""
@@ -410,7 +506,7 @@ PERSONA_TEMPLATES = {
     "sql": {"name": "The Cartographer", "role": "Data Architecture Specialist", "focus": "query analysis, index usage, transaction safety"},
     "frontend": {"name": "The Artisan", "role": "Frontend & UX Specialist", "focus": "component patterns, accessibility, responsive design, state management"},
     "ui": {"name": "The Artisan", "role": "UI/UX Specialist", "focus": "user flows, visual hierarchy, interaction patterns"},
-    "react": {"name": "The Artisan", "role": "React Architecture Specialist", "focus": "hooks, component composition, rendering optimization"},
+    # react → frontend (merged)
     "performance": {"name": "The Optimizer", "role": "Performance & Efficiency Specialist", "focus": "profiling, caching strategies, algorithmic complexity, memory usage"},
     "speed": {"name": "The Optimizer", "role": "Performance Specialist", "focus": "latency reduction, throughput optimization, resource management"},
     "testing": {"name": "The Examiner", "role": "Quality Assurance Specialist", "focus": "test coverage, mocking strategies, edge cases, integration tests"},
@@ -421,13 +517,13 @@ PERSONA_TEMPLATES = {
     "debugging": {"name": "The Detective", "role": "Diagnostic & Root Cause Specialist", "focus": "root cause analysis, stack trace interpretation, logging strategies"},
     "devops": {"name": "The Navigator", "role": "Infrastructure & Deployment Specialist", "focus": "CI/CD pipelines, containerization, monitoring, scaling"},
     "docker": {"name": "The Navigator", "role": "Containerization Specialist", "focus": "Dockerfile optimization, multi-stage builds, security scanning"},
-    "documentation": {"name": "The Chronicler", "role": "Documentation Specialist", "focus": "API docs, architecture decision records, onboarding guides"},
+    # documentation → communication (merged)
     "code-quality": {"name": "The Sculptor", "role": "Code Quality Specialist", "focus": "linting rules, code review standards, technical debt"},
     "error": {"name": "The Detective", "role": "Error Handling Specialist", "focus": "error boundaries, retry strategies, graceful degradation"},
     "logging": {"name": "The Chronicler", "role": "Observability Specialist", "focus": "structured logging, tracing, metrics collection"},
 }
 
-MAX_PERSONAS = 7
+MAX_PERSONAS = 3
 
 
 def generate_personas(chain_result: dict, prompt: str) -> str:
@@ -437,12 +533,13 @@ def generate_personas(chain_result: dict, prompt: str) -> str:
     chain = chain_result.get("chain", [])
     complexity = chain_result.get("complexity", "low")
 
-    # Collect all relevant domain tags from tasks and chain
+    # Collect relevant domain tags ONLY from detected tasks — NOT from chain dependencies.
+    # Chain skills like "testing", "security", "lint-fixer" are injected by dependency
+    # resolution, not by user intent. Adding them here leaks persona tags for skills
+    # the user never asked about (e.g. "The Examiner" appearing for an API endpoint fix).
     all_tags = set(domain_tags)
     for task in detected_tasks:
         all_tags.add(task)
-    for skill in chain:
-        all_tags.add(skill)
 
     # Match tags to persona templates
     matched_personas = []
@@ -455,23 +552,18 @@ def generate_personas(chain_result: dict, prompt: str) -> str:
                 matched_personas.append(template.copy())
                 seen_names.add(template["name"])
 
-    # Determine how many subagents based on complexity
+    # Determine how many subagents based on complexity and matched personas.
+    # MAX_PERSONAS is the absolute cap; we further limit by complexity to avoid
+    # over-spawning on medium tasks.
     if complexity == "low" or len(matched_personas) <= 1:
         num_personas = min(1, len(matched_personas))
     elif complexity == "medium":
-        num_personas = min(3, len(matched_personas))
+        num_personas = min(2, len(matched_personas))
     else:
-        num_personas = min(MAX_PERSONAS, len(matched_personas))
+        num_personas = min(3, len(matched_personas))
 
-    # Always include a general analyst if we have room
-    if num_personas < MAX_PERSONAS and len(matched_personas) < 3:
-        analyst = {"name": "The Analyst", "role": "General Analysis Specialist", "focus": "holistic review, cross-cutting concerns, integration points"}
-        if "The Analyst" not in seen_names:
-            matched_personas.append(analyst)
-            num_personas += 1
-
-    # Cap at MAX_PERSONAS
-    matched_personas = matched_personas[:MAX_PERSONAS]
+    # Cap at computed num_personas (respects complexity-based limit), never exceeding MAX_PERSONAS
+    matched_personas = matched_personas[:min(num_personas, MAX_PERSONAS)]
 
     if not matched_personas:
         matched_personas = [{"name": "The Analyst", "role": "General Analysis Specialist", "focus": "holistic review and analysis"}]
@@ -513,43 +605,6 @@ def load_agents_md() -> str:
     except Exception as e:
         return f"[AGENTS.md] Loader error: {e}"
     return "[AGENTS.md] Loader not available"
-
-
-# ---------------------------------------------------------------------------
-# Stage 3: Guardian AI
-# ---------------------------------------------------------------------------
-
-def run_guardian_stage(prompt: str, chain_result: dict) -> tuple[str, dict | None, bool]:
-    """Run Guardian AI. Returns (block_text, result_dict, is_blocked)."""
-    try:
-        from guardian_ai import run_guardian
-        result = run_guardian(prompt, {"chain": chain_result["chain"]})
-        decision = result.get("decision", "UNKNOWN")
-        risk = result.get("risk_level", "unknown")
-        reason = result.get("reason", "No reason")
-        source = result.get("_source", "unknown")
-
-        block = (
-            f"[GUARDIAN] Safety Review\n"
-            f"- decision: {decision}\n"
-            f"- risk_level: {risk}\n"
-            f"- source: {source}\n"
-            f"- reason: {reason}"
-        )
-
-        if decision == "REJECTED":
-            block += f"\n\n**BLOCKED by Guardian AI:** {reason}"
-            return block, result, True
-
-        if decision == "HUMAN_REQUIRED":
-            block += "\n**Guardian AI requires human approval before proceeding.**"
-
-        return block, result, False
-
-    except ImportError:
-        return "[GUARDIAN] WARNING: guardian_ai module not available", None, False
-    except Exception as e:
-        return f"[GUARDIAN] WARNING: Error: {e}", None, False
 
 
 # ---------------------------------------------------------------------------
@@ -862,33 +917,20 @@ def run_gate(prompt: str) -> dict:
             "is_social_greeting": False,
             "blocked": True,
             "guardian_decision": "REJECTED",
-            "chain": chain_result.get("chain", []),
-            "primary": chain_result.get("primary_task", "general"),
-            "complexity": chain_result.get("complexity", "medium"),
+            "chain": chain_result["chain"],
+            "primary": chain_result["primary_task"],
+            "complexity": chain_result["complexity"],
             "output": output,
         }
 
     # Stage 3.5-3.7: Enforcement checks
     enforcement_block = run_enforcement_checks(config)
 
-    # Stage 4: Plan (defensive — emit_plan may receive malformed chain_result)
-    try:
-        plan_block = emit_plan(chain_result)
-    except Exception as _plan_err:
-        plan_block = (
-            "Skill Plan:\n"
-            f"- primary: {chain_result.get('primary_task', 'general')}\n"
-            f"- supports: \n"
-            f"- automation: {chain_result.get('automation', 'none')}\n"
-            f"- mode: {chain_result.get('mode', 'STANDARD')}\n"
-            f"- chain: {' → '.join(chain_result.get('chain', []))}\n"
-        )
+    # Stage 4: Plan
+    plan_block = emit_plan(chain_result)
 
     # Stage 5: Agent Instructions (MANDATORY)
-    try:
-        instructions_block = emit_agent_instructions(prompt, chain_result)
-    except Exception:
-        instructions_block = "[INSTRUCTIONS] Agent instructions unavailable due to generation error."
+    instructions_block = emit_agent_instructions(prompt, chain_result)
 
     # Output all blocks
     output = f"{intent_block}\n\n{skill_block}\n\n{persona_block}\n\n{agents_md_block}\n\n{guardian_block}\n\n{enforcement_block}\n\n{plan_block}\n\n{instructions_block}"
@@ -898,10 +940,10 @@ def run_gate(prompt: str) -> dict:
         "is_social_greeting": False,
         "blocked": False,
         "guardian_decision": guardian_result.get("decision") if guardian_result else "UNKNOWN",
-        "chain": chain_result.get("chain", []),
+        "chain": chain_result["chain"],
         "personas": persona_block,
-        "primary": chain_result.get("primary_task", "general"),
-        "complexity": chain_result.get("complexity", "medium"),
+        "primary": chain_result["primary_task"],
+        "complexity": chain_result["complexity"],
         "output": output,
     }
 
@@ -931,24 +973,6 @@ if __name__ == "__main__":
     else:
         parser.error("Either --prompt, --prompt-file, or --stdin is required")
 
-    try:
-        result = run_gate(prompt)
-    except Exception as gate_err:
-        result = {
-            "is_social_greeting": False,
-            "blocked": False,
-            "guardian_decision": "APPROVED",
-            "chain": [],
-            "primary": "general",
-            "complexity": "medium",
-            "output": (
-                "- intent: Fallback — sensor gate error\n"
-                "- domain_tags: \n"
-                "- risk_level: medium\n"
-                "- confidence: 0.5\n"
-                "- mode: STANDARD\n"
-                "- chain: \n"
-            ),
-        }
+    result = run_gate(prompt)
     if args.json:
         print(json.dumps(result, indent=2))

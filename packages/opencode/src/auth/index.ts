@@ -163,7 +163,11 @@ export const layer = Layer.effect(
       const data = (yield* fsys.readJson(file).pipe(Effect.orElseSucceed(() => ({})))) as Record<string, unknown>
       return Record.filterMap(data, (value) =>
         Result.fromOption(
-          decode(value).pipe(Option.map((info) => info.type === "oauth" ? decryptOauth(info) : info)),
+          decode(value).pipe(Option.map((info) =>
+            info.type === "oauth" ? decryptOauth(info) :
+            info.type === "api" ? new Api({ ...info, key: decryptToken(info.key) }) :
+            info
+          )),
           () => undefined,
         ),
       )
@@ -178,8 +182,8 @@ export const layer = Layer.effect(
       const data = yield* all()
       if (norm !== key) delete data[key]
       delete data[norm + "/"]
-      // Encrypt OAuth tokens before persisting to disk
-      const stored = info.type === "oauth" ? encryptOauth(info) : info
+      // Encrypt all credential types before persisting to disk
+      const stored = info.type === "oauth" ? encryptOauth(info) : info.type === "api" ? new Api({ ...info, key: encryptToken(info.key) }) : info
       yield* fsys
         .writeJson(file, { ...data, [norm]: stored }, 0o600)
         .pipe(Effect.mapError(fail("Failed to write auth data")))

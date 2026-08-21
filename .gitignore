@@ -58,6 +58,9 @@ evolution/
 **/AGENTS.local.md
 **/sumati-persona*
 **/sumati_bridge*
+**/ankur-chakraborty*
+**/astrology-sutras*
+**/astrology-reading*
 
 # Local dev artifacts
 .ghostty-web-local/
@@ -66,4 +69,5 @@ evolution/
 .dreamcode/todos/
 .opencode/git_push.lock
 .git-rewrite/
-dreamcode
+packages/opencode/bin/dreamcode
+**/sumati-persona*

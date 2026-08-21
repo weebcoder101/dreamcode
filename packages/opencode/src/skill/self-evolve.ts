@@ -21,14 +21,6 @@
 import { Effect, Context, Layer } from "effect"
 import { PiecesLTM } from "@/pieces-ltm"
 import type { PersistInput } from "@/pieces-ltm/service"
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from "fs"
-import { join } from "path"
-import { homedir } from "os"
-
-const EVOLUTION_DIR = join(homedir(), ".dreamcode", "evolution")
-const RUN_LOG = join(EVOLUTION_DIR, "run_log.jsonl")
-const PIECES_WRITES = join(EVOLUTION_DIR, "pieces_writes.jsonl")
-const DEFAULT_KNOWLEDGE = join(EVOLUTION_DIR, "knowledge.jsonl")
 
 export interface LearningSignal {
   /** What went right — the tool, pattern, or approach that worked */
@@ -109,63 +101,25 @@ export const layer = Layer.effect(
     const capture = Effect.fn("SelfEvolve.capture")(function* (input: CaptureInput) {
       if (input.signals.length === 0) return
 
-      // Ensure evolution directory exists
-      try { mkdirSync(EVOLUTION_DIR, { recursive: true }) } catch { /* ignore */ }
-
-      for (const signal of input.signals) {
-        // Write to local evolution file (works WITHOUT Pieces LTM)
-        const entry = {
-          timestamp: new Date().toISOString(),
-          chain: input.chain,
-          intent: input.intent,
-          outcome: input.outcome,
-          whatWorked: signal.whatWorked,
-          whatFailed: signal.whatFailed,
-          whatToChange: signal.whatToChange,
+      // Persist each signal as a separate learn memory (skip if LTM unavailable)
+      if (ltm) { for (const signal of input.signals) {
+        const persistInput: PersistInput = {
+          chainName: input.chain.join(" → "),
+          taskDescription: signal.whatToChange,
+          outcome: input.outcome === "partial" ? "failed" as const : input.outcome,
+          keyDecisions: [
+            signal.whatToChange,
+            `Context: ${signal.whatFailed}`,
+          ],
           filesChanged: input.filesChanged,
-          metrics: input.metrics,
+          metrics: {
+            ...input.metrics,
+            signalCount: input.signals.length,
+          },
+          memoryType: "learn",
         }
-        try {
-          appendFileSync(RUN_LOG, JSON.stringify(entry) + "\n")
-          // Also write to knowledge.jsonl for learned-knowledge injection
-          appendFileSync(DEFAULT_KNOWLEDGE, JSON.stringify({
-            rule: signal.whatToChange,
-            context: signal.whatFailed,
-            source: input.intent,
-            timestamp: entry.timestamp,
-          }) + "\n")
-        } catch { /* ignore */ }
-
-        // Persist to Pieces LTM (skip if unavailable — non-blocking)
-        if (ltm) {
-          const persistInput: PersistInput = {
-            chainName: input.chain.join(" → "),
-            taskDescription: signal.whatToChange,
-            outcome: input.outcome === "partial" ? "failed" as const : input.outcome,
-            keyDecisions: [
-              signal.whatToChange,
-              `Context: ${signal.whatFailed}`,
-            ],
-            filesChanged: input.filesChanged,
-            metrics: {
-              ...input.metrics,
-              signalCount: input.signals.length,
-            },
-            memoryType: "learn",
-          }
-          yield* ltm.persist(persistInput).pipe(Effect.catch(() => Effect.void))
-        }
-
-        // Write pieces_writes.jsonl log
-        try {
-          appendFileSync(PIECES_WRITES, JSON.stringify({
-            timestamp: entry.timestamp,
-            chain: input.chain,
-            signal: signal.whatToChange,
-            persisted: ltm ? "ltm+file" : "file-only",
-          }) + "\n")
-        } catch { /* ignore */ }
-      }
+        yield* ltm.persist(persistInput).pipe(Effect.catch(() => Effect.void))
+      }}
     })
 
     /**
@@ -175,31 +129,6 @@ export const layer = Layer.effect(
     const learnings = Effect.fn("SelfEvolve.learnings")(function* () {
       // Start with hardcoded default learnings (Effect v4 API rules)
       const signals: LearningSignal[] = [...DEFAULT_LEARNINGS]
-
-      // Read from local knowledge.jsonl (works without Pieces LTM)
-      try {
-        if (existsSync(DEFAULT_KNOWLEDGE)) {
-          const content = readFileSync(DEFAULT_KNOWLEDGE, "utf-8").trim()
-          if (content) {
-            const lines = content.split("\n").filter(Boolean)
-            const seen = new Set(signals.map((s) => s.whatToChange.toLowerCase()))
-            for (const line of lines.slice(-50)) { // last 50 entries
-              try {
-                const entry = JSON.parse(line)
-                const rule = entry.rule || entry.description || ""
-                if (rule && !seen.has(rule.toLowerCase())) {
-                  seen.add(rule.toLowerCase())
-                  signals.push({
-                    whatWorked: entry.whatWorked || "Learned from previous execution",
-                    whatFailed: entry.context || entry.whatFailed || "Previous attempt had issues",
-                    whatToChange: rule,
-                  })
-                }
-              } catch { /* skip malformed lines */ }
-            }
-          }
-        }
-      } catch { /* ignore */ }
 
       // Try to supplement with LTM-stored rules (skip if LTM unavailable)
       if (ltm) {
@@ -211,20 +140,20 @@ export const layer = Layer.effect(
         if (raw && typeof raw === "object") {
           const r = raw as { candidates?: Array<{ description?: string; metadata?: Record<string, unknown> }> }
           if (r.candidates) {
+            // Sort deterministically by description to prevent KV cache
+            // invalidation from non-deterministic MCP result ordering.
             const sorted = r.candidates
               .filter((c): c is { description: string; metadata?: Record<string, unknown> } =>
                 typeof c.description === "string" && c.description.length > 0
               )
               .sort((a, b) => a.description.localeCompare(b.description))
             for (const c of sorted) {
-              const rule = c.description
-              if (!signals.some((s) => s.whatToChange.toLowerCase() === rule.toLowerCase())) {
-                signals.push({
-                  whatWorked: "Preserved in Pieces LTM",
-                  whatFailed: "See learning note",
-                  whatToChange: rule,
-                })
-              }
+              // Derived signal from persistent memory
+              signals.push({
+                whatWorked: "Preserved in Pieces LTM",
+                whatFailed: "See learning note",
+                whatToChange: c.description,
+              })
             }
           }
         }

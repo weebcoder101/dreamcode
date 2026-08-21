@@ -46,7 +46,7 @@ export class Service extends ConfigService.Service<Service>()("@dreamcode/Runtim
     dreamcode: Config.boolean("OPENCODE_DREAMCODE_MODE").pipe(Config.withDefault(true)),
   }).pipe(Config.map((flags) => flags.dreamcode || flags.experimental || Option.getOrElse(flags.enabled, () => false))),
   experimentalLspTy: bool("OPENCODE_EXPERIMENTAL_LSP_TY"),
-  experimentalLspTool: enabledByExperimental("OPENCODE_EXPERIMENTAL_LSP_TOOL"),
+  experimentalLspTool: Config.boolean("OPENCODE_EXPERIMENTAL_LSP_TOOL").pipe(Config.withDefault(true)),
   experimentalOxfmt: enabledByExperimental("OPENCODE_EXPERIMENTAL_OXFMT"),
   experimentalPlanMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_PLAN_MODE"),
   experimentalEventSystem: enabledByExperimental("OPENCODE_EXPERIMENTAL_EVENT_SYSTEM"),

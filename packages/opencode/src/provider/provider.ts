@@ -1414,7 +1414,8 @@ export const layer = Layer.effect(
                 interleaved:
                   model.interleaved ??
                   existingModel?.capabilities.interleaved ??
-                  (!existingModel && apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
+                  (apiNpm === "@ai-sdk/openai-compatible" &&
+                  (apiID.includes("deepseek") || model.reasoning || existingModel?.capabilities.reasoning)
                     ? { field: "reasoning_content" }
                     : false),
               },
@@ -1532,7 +1533,7 @@ export const layer = Layer.effect(
                   providers[gitlab].models[modelID] = model
                 }
               }
-            } catch (e) {}
+            } catch (e) { console.warn("gitlab model discovery failed", e) }
           })
         }
 
@@ -1663,7 +1664,13 @@ export const layer = Layer.effect(
         if (existing) return existing
 
         const customFetch = options["fetch"]
-        const chunkTimeout = options["chunkTimeout"]
+        // Default chunk timeout: if no provider-specific chunkTimeout is set,
+        // wrap SSE streams with a 120s per-chunk deadline. This prevents
+        // indefinite hangs when an upstream server stops sending data without
+        // closing the connection (e.g. mid-table-render stalls).
+        const chunkTimeout = typeof options["chunkTimeout"] === "number"
+          ? options["chunkTimeout"]
+          : 120_000
         const headerTimeout = options["headerTimeout"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]

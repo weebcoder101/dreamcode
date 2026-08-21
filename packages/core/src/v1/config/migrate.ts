@@ -60,7 +60,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
       },
       buffer: info.compaction.reserved,
     },
-    skills: info.skills && [...(info.skills.paths ?? []), ...(info.skills.urls ?? [])],
+    skills: (() => { const s = info.skills ? [...(info.skills.paths ?? []), ...(info.skills.urls ?? [])] : undefined; return s && s.length ? s : undefined })(),
     commands: info.command,
     instructions: info.instructions,
     references: info.references ?? info.reference,
@@ -97,8 +97,8 @@ function normalizeAction(action: string) {
 
 function agents(info: typeof ConfigV1.Info.Type) {
   const entries = [
-    ...Object.entries(info.agent ?? {}),
     ...Object.entries(info.mode ?? {}).map(([name, agent]) => [name, { ...agent, mode: "primary" as const }] as const),
+    ...Object.entries(info.agent ?? {})
   ]
   if (!entries.length) return undefined
   return Object.fromEntries(entries.flatMap(([name, agent]) => (agent ? [[name, migrateAgent(agent)]] : [])))
@@ -248,7 +248,7 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type, packageName?: st
     limit: info.limit && {
       context: int(info.limit.context),
       input: info.limit.input === undefined ? undefined : int(info.limit.input),
-      output: int(info.limit.output),
+      output: info.limit.output === undefined ? undefined : int(info.limit.output),
     },
   }
 }

@@ -148,9 +148,12 @@ function createScopedKeymap(keymap: TuiPluginApi["keymap"], scope: PluginScope):
       if (cache.has(prop)) return cache.get(prop)
       const fn = ScopedKeymapMethods.has(prop)
         ? (...args: unknown[]) => {
-            const dispose = (value as (...args: unknown[]) => unknown).apply(target, args)
-            return scope.track(typeof dispose === "function" ? (dispose as () => void) : undefined)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            const result = (value as (...args: unknown[]) => unknown).apply(target, args)
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            return scope.track(typeof result === "function" ? (result as () => void) : undefined)
           }
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         : (...args: unknown[]) => (value as (...args: unknown[]) => unknown).apply(target, args)
       cache.set(prop, fn)
       return fn
@@ -680,8 +683,9 @@ async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => P
       await wait().catch((e) => console.warn("tui: external plugin wait failed", e))
     },
     finish: async (loaded, origin, retry) => {
-      const mod = await Promise.resolve()
-        .then(() => readV1Plugin(loaded.mod as Record<string, unknown>, loaded.spec, "tui") as TuiPluginModule)
+      const mod: TuiPluginModule | undefined = await Promise.resolve()
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+        .then(() => readV1Plugin(loaded.mod, loaded.spec, "tui") as unknown as TuiPluginModule)
         .catch((error) => {
           fail("failed to load tui plugin", {
             path: loaded.spec,
@@ -689,11 +693,11 @@ async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => P
             retry,
             error,
           })
-          return
+          return undefined
         })
-      if (!mod) return
+      if (!mod) return undefined
 
-      const id = await resolvePluginId(
+      const id: string | undefined = await resolvePluginId(
         loaded.source,
         loaded.spec,
         loaded.target,
@@ -701,9 +705,9 @@ async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => P
         loaded.pkg,
       ).catch((error) => {
         fail("failed to load tui plugin", { path: loaded.spec, target: loaded.target, retry, error })
-        return
+        return undefined
       })
-      if (!id) return
+      if (!id) return undefined
 
       const theme_files = await readThemeFiles(loaded.spec, loaded.pkg)
 
@@ -722,17 +726,17 @@ async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => P
     },
     missing: async (loaded, origin, retry) => {
       const theme_files = await readThemeFiles(loaded.spec, loaded.pkg)
-      if (!theme_files.length) return
+      if (!theme_files.length) return undefined
 
       const name =
         typeof loaded.pkg?.json.name === "string" && loaded.pkg.json.name.trim().length > 0
           ? loaded.pkg.json.name.trim()
           : undefined
-      const id = await resolvePluginId(loaded.source, loaded.spec, loaded.target, name, loaded.pkg).catch((error) => {
+      const id: string | undefined = await resolvePluginId(loaded.source, loaded.spec, loaded.target, name, loaded.pkg).catch((error) => {
         fail("failed to load tui plugin", { path: loaded.spec, target: loaded.target, retry, error })
-        return
+        return undefined
       })
-      if (!id) return
+      if (!id) return undefined
 
       return {
         options: loaded.options,
@@ -817,9 +821,9 @@ function defaultPluginOrigin(state: RuntimeState, spec: string): ConfigPlugin.Or
   }
 }
 
-function installCause(err: unknown) {
-  if (!err || typeof err !== "object") return
-  if (!("cause" in err)) return
+function installCause(err: unknown): unknown {
+  if (!err || typeof err !== "object") return undefined
+  if (!("cause" in err)) return undefined
   return (err as { cause?: unknown }).cause
 }
 

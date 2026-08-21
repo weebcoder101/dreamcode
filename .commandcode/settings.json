@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(bun:*)",
+      "Shell(/home/ronya/dreamcode/packages/opencode/dist/dreamcode-linux-x64/bin/dreamcode:*)",
+      "skill"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

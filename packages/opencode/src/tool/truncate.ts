@@ -12,6 +12,41 @@ import { TRUNCATION_DIR } from "./truncation-dir"
 
 const RETENTION = Duration.days(7)
 
+// ─── Smart Truncation (§7.4) ────────────────────────────────────────────
+// Different content types need different truncation strategies:
+//   - Error messages: never truncate (they're small and critical)
+//   - Bash output: preserve tail (exit status, last errors are at the end)
+//   - File reads: preserve head + tail (imports at top, logic in middle)
+//   - Search results: preserve all (they're structured grep output)
+// Research: DeepSeek Harness truncation — context-aware retention beats
+// blind head-only truncation for agent task completion.
+
+const SMART_ERROR_MAX = 5_000   // errors rarely exceed this; keep them full
+const SMART_BASH_TAIL_LINES = 20 // last 20 lines of bash output usually contain the result
+
+/** Apply smart truncation pre-processing before the standard truncation pipeline. */
+export function smartTruncate(text: string, toolName?: string): string {
+  if (!text) return text
+  const lines = text.split("\n")
+
+  // Error detection: if the output looks like an error, keep it full
+  // (errors are small and the model needs the full message to diagnose)
+  if (toolName === "bash" && /error|fail|ENOENT|EACCES|panic|traceback|exception/i.test(text)) {
+    if (text.length < SMART_ERROR_MAX) return text
+  }
+
+  // Bash output: if very long, keep head + tail so the agent sees both
+  // the command invocation and the final result/errors
+  if (toolName === "bash" && lines.length > SMART_BASH_TAIL_LINES + 10) {
+    const head = lines.slice(0, 5).join("\n")
+    const tail = lines.slice(-SMART_BASH_TAIL_LINES).join("\n")
+    const omitted = lines.length - 5 - SMART_BASH_TAIL_LINES
+    return `${head}\n\n[${omitted} lines omitted]\n\n${tail}`
+  }
+
+  return text
+}
+
 export const MAX_LINES = 2000
 export const MAX_BYTES = 50 * 1024
 export const DIR = TRUNCATION_DIR
@@ -23,6 +58,8 @@ export interface Options {
   maxLines?: number
   maxBytes?: number
   direction?: "head" | "tail"
+  /** Tool name for smart truncation (§7.4) — enables content-aware strategies. */
+  toolName?: string
 }
 
 function hasTaskTool(agent?: Agent.Info) {
@@ -83,15 +120,18 @@ export const layer = Layer.effect(
     })
 
     const output = Effect.fn("Truncate.output")(function* (text: string, options: Options = {}, agent?: Agent.Info) {
+      // Smart truncation (§7.4): apply content-aware pre-processing
+      // before the standard truncation pipeline.
+      const smartText = smartTruncate(text, options.toolName)
       const resolved = yield* limits()
       const maxLines = options.maxLines ?? resolved.maxLines
       const maxBytes = options.maxBytes ?? resolved.maxBytes
       const direction = options.direction ?? "head"
-      const lines = text.split("\n")
-      const totalBytes = Buffer.byteLength(text, "utf-8")
+      const lines = smartText.split("\n")
+      const totalBytes = Buffer.byteLength(smartText, "utf-8")
 
       if (lines.length <= maxLines && totalBytes <= maxBytes) {
-        return { content: text, truncated: false } as const
+        return { content: smartText, truncated: false } as const
       }
 
       const out: string[] = []

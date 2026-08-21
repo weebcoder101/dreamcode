@@ -1,4 +1,3 @@
-import fs from "node:fs"
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"
@@ -30,72 +29,6 @@ import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
-
-const LOCKFILE = "/tmp/dreamcode.pid"
-
-function acquireLockfile(): void {
-  // Use O_EXCL (exclusive create) via fs.openSync("wx") to atomically claim
-  // the lockfile. This is race-free: if two instances start simultaneously,
-  // only one open() succeeds; the other gets EEXIST.
-  const tryLock = (retries = 0): boolean => {
-    if (retries > 3) return false
-    try {
-      const fd = fs.openSync(LOCKFILE, "wx", 0o644)
-      fs.writeSync(fd, String(process.pid))
-      fs.closeSync(fd)
-      return true
-    } catch (err: unknown) {
-      const code = typeof err === "object" && err !== null && "code" in err ? (err as { code?: string }).code : undefined
-      if (code !== "EEXIST") return false
-      // Lockfile exists — check if the PID inside is still alive
-      try {
-        const pidStr = fs.readFileSync(LOCKFILE, "utf-8").trim()
-        const pid = parseInt(pidStr, 10)
-        if (!isNaN(pid) && pid > 0) {
-          try {
-            process.kill(pid, 0)
-            // Process is alive — another instance is running
-            console.error(`Error: Another dreamcode instance is already running (PID ${pid})`)
-            console.error(`If this is incorrect, delete ${LOCKFILE} and try again.`)
-            process.exit(1)
-          } catch {
-            // Stale lockfile — remove and retry
-            fs.unlinkSync(LOCKFILE)
-            return tryLock(retries + 1)
-          }
-        }
-        // Invalid PID — remove stale lockfile and retry
-        fs.unlinkSync(LOCKFILE)
-        return tryLock(retries + 1)
-      } catch {
-        // Can't read or remove lockfile — just proceed
-        return false
-      }
-    }
-  }
-
-  try {
-    if (!tryLock()) return // Could not acquire lock — proceed anyway
-
-    // Clean up lockfile on exit — only if we still own it
-    const cleanup = () => {
-      try {
-        if (fs.existsSync(LOCKFILE)) {
-          const current = fs.readFileSync(LOCKFILE, "utf-8").trim()
-          if (current === String(process.pid)) {
-            fs.unlinkSync(LOCKFILE)
-          }
-        }
-      } catch { /* ignore cleanup errors */ }
-    }
-
-    process.on("exit", cleanup)
-  } catch {
-    // If lockfile operations fail (permissions, etc.), just proceed
-  }
-}
-
-acquireLockfile()
 
 const args = hideBin(process.argv)
 

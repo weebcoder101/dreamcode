@@ -12,10 +12,10 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
-import { Effect, Layer, Context, Ref } from "effect"
+import { Effect, Layer, Context, Ref, Scope } from "effect"
 import * as DateTime from "effect/DateTime"
 import { InstanceState } from "@/effect/instance-state"
-import { isOverflow as overflow, usable } from "./overflow"
+import { isOverflow as overflow, isSoftOverflow as softOverflow, usable } from "./overflow"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -26,6 +26,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { ContextCompressor } from "./context-compressor"
+import { indexSummary } from "./memory-index"
 
 export const Event = {
   Compacted: EventV2.define({
@@ -43,6 +44,24 @@ const TOOL_OUTPUT_MAX_CHARS = 2_000
 // 500 chars is enough context for summarization — full outputs are preserved in DB.
 const COMPACT_TOOL_OUTPUT_MAX_CHARS = 500
 const PRUNE_PROTECTED_TOOLS = ["skill"]
+
+// ─── Tiered Compression by Content Type (§3.4) ──────────────────────────
+// Different content types need different compression strategies during
+// compaction. Tool results that produced errors get heavier compression
+// (just the error message), successful read/glob results get medium
+// compression, and assistant text gets light compression (preserve detail).
+const COMPACT_ERROR_MAX_CHARS = 200
+const COMPACT_READ_MAX_CHARS = 800
+const COMPACT_TEXT_MAX_CHARS = 1_000
+
+/** Determine the max chars for a tool output during compaction based on its type. */
+export function compactToolOutputMax(toolName: string, isError: boolean): number {
+  if (isError) return COMPACT_ERROR_MAX_CHARS
+  if (toolName === "read" || toolName === "webfetch") return COMPACT_READ_MAX_CHARS
+  if (toolName === "bash") return COMPACT_READ_MAX_CHARS
+  if (toolName === "grep" || toolName === "glob") return COMPACT_TOOL_OUTPUT_MAX_CHARS
+  return COMPACT_TOOL_OUTPUT_MAX_CHARS
+}
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
@@ -146,6 +165,12 @@ export interface Interface {
     tokens: SessionV1.Assistant["tokens"]
     model: Provider.Model
   }) => Effect.Effect<boolean>
+  // Soft compaction trigger (§3.5): proactive compaction at 70% context
+  // utilization before quality degrades. Returns true between 70-100% of usable.
+  readonly isSoftOverflow: (input: {
+    tokens: SessionV1.Assistant["tokens"]
+    model: Provider.Model
+  }) => Effect.Effect<boolean>
   readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
   readonly process: (input: {
     parentID: MessageID
@@ -184,6 +209,7 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const compressor = yield* ContextCompressor.Service
+    const scope = yield* Scope.Scope
 
     // Compaction gate — prevents auto-compact from firing while parent agent
     // is mid-synthesis. Set by lockCompaction at synthesis start, cleared by
@@ -196,6 +222,21 @@ export const layer = Layer.effect(
       model: Provider.Model
     }) {
       return overflow({
+        cfg: yield* config.get(),
+        tokens: input.tokens,
+        model: input.model,
+        outputTokenMax: flags.outputTokenMax,
+      })
+    })
+
+    // Soft compaction trigger (§3.5): proactive compaction at 70% context
+    // utilization. Performance degrades BEFORE the hard limit, so compacting
+    // at 70% avoids the quality cliff.
+    const isSoftOverflow = Effect.fn("SessionCompaction.isSoftOverflow")(function* (input: {
+      tokens: SessionV1.Assistant["tokens"]
+      model: Provider.Model
+    }) {
+      return softOverflow({
         cfg: yield* config.get(),
         tokens: input.tokens,
         model: input.model,
@@ -373,7 +414,7 @@ export const layer = Layer.effect(
       )
       const nextPrompt = compacting.prompt ?? buildPrompt({ previousSummary, context: compacting.context })
       const msgs = structuredClone(selected.head)
-      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs as any })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
         toolOutputMaxChars: COMPACT_TOOL_OUTPUT_MAX_CHARS,
@@ -511,7 +552,7 @@ export const layer = Layer.effect(
                   info,
                   options: info.options,
                 },
-                message: userMessage,
+                message: userMessage as any,
                 overflow: input.overflow === true,
               },
               { enabled: true },
@@ -561,6 +602,22 @@ export const layer = Layer.effect(
             parts: [],
           },
         )
+        // Historical retrieval index (§3.6): persist compaction summaries so
+        // future sessions can retrieve past decisions (embedding-free, disk
+        // based, best-effort). The session title provides the entry label.
+        if (summary) {
+          const title = yield* session.get(input.sessionID).pipe(
+            Effect.map((s) => s.title ?? ""),
+            Effect.catch(() => Effect.succeed("")),
+          )
+          yield* Effect.sync(() =>
+            indexSummary({
+              sessionID: input.sessionID,
+              title,
+              text: summary,
+            }),
+          ).pipe(Effect.ignore, Effect.forkIn(scope))
+        }
         if (flags.experimentalEventSystem) {
           if (summary)
             yield* events.publish(SessionEvent.Compaction.Ended, {
@@ -612,6 +669,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       isOverflow,
+      isSoftOverflow,
       prune,
       process: processCompaction,
       create,

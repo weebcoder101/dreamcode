@@ -12,23 +12,25 @@ import * as Tool from "./tool"
 import * as path from "path"
 import * as fs from "fs"
 import DESCRIPTION from "./skill.txt"
-import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, HOME, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "@/skill/python-resolver"
+import { resolvePythonCommand, getPythonArgs, resolveSkillsDir, resolveSkillDirName, HOME, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "@/skill/python-resolver"
+import { Global } from "@opencode-ai/core/global"
+import { homedir } from "os"
 
 const SKILLS_DIR = resolveSkillsDir()
-const CHAIN_LOG = path.join(HOME, ".dreamcode", "chain_log.jsonl")
-const SCORE_FILE = path.join(HOME, ".dreamcode", "evolution", "agent_score.json")
-const ERROR_LOG = path.join(HOME, ".dreamcode", "error_log.jsonl")
+// Backward compatibility: check old ~/.dreamcode/ paths first,
+// then fall back to XDG data path (~/.local/share/dreamcode/).
+const oldDreamcodeDir = path.join(homedir(), ".dreamcode")
+const dataDir = fs.existsSync(oldDreamcodeDir) ? oldDreamcodeDir : Global.Path.data
+const CHAIN_LOG = path.join(dataDir, "chain_log.jsonl")
+const SCORE_FILE = path.join(dataDir, "evolution", "agent_score.json")
+const ERROR_LOG = path.join(dataDir, "error_log.jsonl")
 
 function findSensorGate(): string | undefined {
-  const candidates = [
-    path.join(SKILLS_DIR, "chain-orchestrator", "scripts", "sensor_gate.py"),
-  ]
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p
-    } catch (e) {
-      console.warn("[tool/skill] findSensorGate error:", String(e))
-    }
+  const candidate = path.join(SKILLS_DIR, "chain-orchestrator", "scripts", "sensor_gate.py")
+  try {
+    if (fs.existsSync(candidate)) return candidate
+  } catch (e) {
+    console.warn("[tool/skill] findSensorGate error:", String(e))
   }
   return undefined
 }
@@ -344,7 +346,8 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
             }
           }
 
-          const skillDir = path.join(SKILLS_DIR, skillName)
+          const resolvedName = resolveSkillDirName(skillName) || skillName
+          const skillDir = path.join(SKILLS_DIR, resolvedName)
           const skillScript = path.join(skillDir, "scripts", `${skillName}.py`)
           const skillMd = path.join(skillDir, "SKILL.md")
 

@@ -84,6 +84,12 @@ export function spawnCountForComplexity(complexity: ComplexityLevel): number {
   return Math.round((config.min + config.max) / 2)
 }
 
+/** Safely parse an unknown string into a ComplexityLevel, falling back to "low". */
+export function parseComplexityLevel(value: string): ComplexityLevel {
+  if (value === "high" || value === "medium" || value === "low") return value
+  return "low"
+}
+
 export function isSocialGreeting(text: string): boolean {
   return SOCIAL_GREETING_RE.test(text.trim())
 }

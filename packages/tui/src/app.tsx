@@ -235,18 +235,15 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         Effect.sync(() => registerOpencodeKeymap(keymap, renderer, input.config)),
         (unregister) => Effect.sync(unregister),
       )
-      yield* Effect.addFinalizer(() => {
-        let disposed = false
-        return Effect.promise(async () => {
-          if (disposed) return
-          disposed = true
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
           try {
             await input.pluginHost.dispose()
           } catch (error) {
             console.error("Failed to dispose TUI plugins", error)
           }
-        })
-      })
+        }),
+      )
       yield* Effect.addFinalizer(() => Effect.sync(TuiAudio.dispose))
       const shutdown = yield* Deferred.make<unknown>()
       const onSighup = () => destroyRenderer(renderer)
@@ -295,9 +292,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                     >
                       <TuiStartupProvider
                         value={{
-                          initialRoute: process.env.OPENCODE_ROUTE
-                            ? (() => { try { return JSON.parse(process.env.OPENCODE_ROUTE) } catch { return undefined } })()
-                            : undefined,
+                          initialRoute: process.env.OPENCODE_ROUTE ? JSON.parse(process.env.OPENCODE_ROUTE) : undefined,
                           skipInitialLoading: Boolean(process.env.OPENCODE_FAST_BOOT),
                         }}
                       >
@@ -438,17 +433,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       setReady(true)
     })
 
-  // Let selection copy/dismiss win ahead of normal bindings when explicit
-  // copy is required. On Linux this is gated behind the
-  // OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT flag (defaults false)
-  // because terminals handle native mouse selection independently — the
-  // dialog's own Esc/Ctrl+C handlers clear stale selections internally.
-  // Ctrl+C with text selection should copy on all platforms. On Windows the
-  // flag controls this because Windows has native Ctrl+C copy, but on Linux/WSL2
-  // we need our own handler since clipboard tools may be missing.
+  // Let selection copy/dismiss win ahead of normal bindings when explicit copy is required.
   const offSelectionKeys = keymap.intercept(
     "key",
     ({ event }) => {
+      if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
       Selection.handleSelectionKey(renderer, toast, event, clipboard)
     },
     { priority: 1 },
@@ -456,7 +445,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   onCleanup(() => {
     offSelectionKeys()
     attention.dispose()
-    for (const unsub of unsubs) unsub()
   })
 
   // Wire up console copy-to-clipboard via opentui's onCopySelection callback
@@ -478,7 +466,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   // Update terminal window title based on current route and session
   createEffect(() => {
     if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
-    if (!route.data) return
 
     if (route.data.type === "home") {
       renderer.setTerminalTitle("DreamCode")
@@ -541,9 +528,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           } else {
             toast.show({ message: "Failed to fork session", variant: "error" })
           }
-        }).catch((error) => {
-          toast.show({ message: "Failed to fork session", variant: "error" })
-          console.error("Session fork failed", error)
         })
       } else {
         route.navigate({ type: "session", sessionID: match })
@@ -564,9 +548,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       } else {
         toast.show({ message: "Failed to fork session", variant: "error" })
       }
-    }).catch((error) => {
-      toast.show({ message: "Failed to fork session", variant: "error" })
-      console.error("Session fork failed", error)
     })
   })
 
@@ -854,7 +835,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "docs.open",
         title: "Open docs",
         run: () => {
-          open("https://dreamcode.ai/docs").catch(() => console.warn("Failed to open docs URL"))
+          open("https://dreamcode.ai/docs").catch(() => {})
           dialog.clear()
         },
         category: "System",
@@ -1007,77 +988,53 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     bindings: tuiConfig.keybinds.gather("app_exit", ["app.exit"]),
   }))
 
-  const unsubs: (() => void)[] = []
-  unsubs.push(
-    event.on("tui.command.execute", (evt, { workspace }) => {
-      if (workspace !== project.workspace.current()) return
-      keymap.dispatchCommand(evt.properties.command)
-    }),
-  )
+  event.on("tui.command.execute", (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
+    keymap.dispatchCommand(evt.properties.command)
+  })
 
-  unsubs.push(
-    event.on("tui.toast.show", (evt, { workspace }) => {
-      if (workspace !== project.workspace.current()) return
+  event.on("tui.toast.show", (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
+    toast.show({
+      title: evt.properties.title,
+      message: evt.properties.message,
+      variant: evt.properties.variant,
+      duration: evt.properties.duration,
+    })
+  })
+
+  event.on("tui.session.select", (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
+    route.navigate({
+      type: "session",
+      sessionID: evt.properties.sessionID,
+    })
+  })
+
+  event.on("session.deleted", (evt) => {
+    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+      route.navigate({ type: "home" })
       toast.show({
-        title: evt.properties.title,
-        message: evt.properties.message,
-        variant: evt.properties.variant,
-        duration: evt.properties.duration,
+        variant: "info",
+        message: "The current session was deleted",
       })
-    }),
-  )
+    }
+  })
 
-  unsubs.push(
-    event.on("tui.session.select", (evt, { workspace }) => {
-      if (workspace !== project.workspace.current()) return
-      route.navigate({
-        type: "session",
-        sessionID: evt.properties.sessionID,
-      })
-    }),
-  )
+  event.on("session.error", (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
+    const error = evt.properties.error
+    if (error && typeof error === "object" && error.name === "MessageAbortedError") return
+    const message = errorMessage(error)
 
-  unsubs.push(
-    event.on("session.deleted", (evt) => {
-      if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
-        try {
-          require("node:fs").appendFileSync(
-            "/tmp/dreamcode-diag.log",
-            `[${Date.now()}] app.session.deleted NAVIGATING HOME sessionID=${evt.properties.info.id} title="${evt.properties.info.title?.slice(0, 60) ?? ""}"\n`,
-          )
-        } catch {}
-        route.navigate({ type: "home" })
-        toast.show({
-          variant: "info",
-          message: "The current session was deleted",
-        })
-      }
-    }),
-  )
+    toast.show({
+      variant: "error",
+      message,
+      duration: 5000,
+    })
+  })
 
-  unsubs.push(
-    event.on("session.error", (evt, { workspace }) => {
-      if (workspace !== project.workspace.current()) return
-      const error = evt.properties.error
-      if (error && typeof error === "object" && error.name === "MessageAbortedError") return
-      const message = errorMessage(error)
-      try {
-        require("node:fs").appendFileSync(
-          "/tmp/dreamcode-diag.log",
-          `[${Date.now()}] app.session.error sessionID=${evt.properties.sessionID ?? "?"} message="${message.slice(0, 200)}"\n`,
-        )
-      } catch {}
-
-      toast.show({
-        variant: "error",
-        message,
-        duration: 5000,
-      })
-    }),
-  )
-
-  unsubs.push(
-    event.on("installation.update-available", async (evt) => {
+  event.on("installation.update-available", async (evt) => {
     const version = evt.properties.version
 
     const skipped = kv.get("skipped_version")
@@ -1122,7 +1079,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     )
 
     void exit()
-  }))
+  })
 
   const plugin = createMemo(() => {
     if (!ready()) return
@@ -1139,11 +1096,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       flexDirection="column"
       backgroundColor={theme.background}
       onMouseDown={(evt) => {
-        // Clear stale selection at the outermost event boundary before any
-        // per-component handler sees getSelection(). This is the definitive
-        // defense against stale selection blocking future interactions.
-        Selection.clearStaleSelection(renderer)
-
         if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
         if (evt.button !== MouseButton.RIGHT) return
 
@@ -1153,12 +1105,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       }}
       onMouseUp={
         !Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT
-          ? () => {
-              // Skip copy if a dialog is mid-clear — the render tree may be
-              // inconsistent and getSelection() could reference destroyed nodes.
-              if (dialog.clearing) return
-              Selection.copy(renderer, toast, clipboard)
-            }
+          ? () => Selection.copy(renderer, toast, clipboard)
           : undefined
       }
     >

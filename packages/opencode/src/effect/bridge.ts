@@ -56,18 +56,23 @@ export function make(): Effect.Effect<Shape> {
     const captured = captureSync()
     const instance = (yield* InstanceRef) ?? captured.instance
     const workspace = (yield* WorkspaceRef) ?? captured.workspace
+    // Capture the FULL effect context, not just the instance/workspace refs.
+    // Tool execute callbacks (and fibers they fork, e.g. background subagent
+    // jobs) run inside this bridge; without the layer context they crash with
+    // "Service not found: .../Database" — the refs alone are not services.
+    const fullContext = yield* Effect.context()
     const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       attachWith(effect as Effect.Effect<A, E, never>, { instance, workspace })
 
     return {
       promise: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        restoreWorkspace(workspace, () => Effect.runPromise(wrap(effect))),
+        restoreWorkspace(workspace, () => Effect.runPromiseWith(fullContext as Context.Context<never>)(wrap(effect) as Effect.Effect<A, E, never>)),
       fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        restoreWorkspace(workspace, () => Effect.runFork(wrap(effect))),
+        restoreWorkspace(workspace, () => Effect.runFork(wrap(effect) as Effect.Effect<A, E, never>)),
       run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.callback<A, E>((resume) => {
           restoreWorkspace(workspace, () =>
-            Effect.runPromiseExit(wrap(effect)).then((exit) =>
+            Effect.runPromiseExitWith(fullContext as Context.Context<never>)(wrap(effect) as Effect.Effect<A, E, never>).then((exit) =>
               resume(Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause)),
             ),
           )

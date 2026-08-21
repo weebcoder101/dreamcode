@@ -134,6 +134,10 @@ export interface Interface {
   readonly prepareCallHierarchy: (input: LocInput) => Effect.Effect<any[]>
   readonly incomingCalls: (input: LocInput) => Effect.Effect<any[]>
   readonly outgoingCalls: (input: LocInput) => Effect.Effect<any[]>
+  readonly typeDefinition: (input: LocInput) => Effect.Effect<any[]>
+  readonly documentHighlight: (input: LocInput) => Effect.Effect<any[]>
+  readonly codeAction: (input: LocInput) => Effect.Effect<any[]>
+  readonly rename: (input: LocInput & { newName: string }) => Effect.Effect<any>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/LSP") {}
@@ -482,6 +486,59 @@ export const layer = Layer.effect(
       return yield* callHierarchyRequest(input, "callHierarchy/outgoingCalls")
     })
 
+    const typeDefinition = Effect.fn("LSP.typeDefinition")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/typeDefinition", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+          })
+          .catch(() => null),
+      )
+      return results.flat().filter(Boolean)
+    })
+
+    const documentHighlight = Effect.fn("LSP.documentHighlight")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/documentHighlight", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+          })
+          .catch(() => []),
+      )
+      return results.flat().filter(Boolean)
+    })
+
+    const codeAction = Effect.fn("LSP.codeAction")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/codeAction", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            range: {
+              start: { line: input.line, character: input.character },
+              end: { line: input.line, character: input.character },
+            },
+            context: { diagnostics: [] },
+          })
+          .catch(() => []),
+      )
+      return results.flat().filter(Boolean)
+    })
+
+    const rename = Effect.fn("LSP.rename")(function* (input: LocInput & { newName: string }) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/rename", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+            newName: input.newName,
+          })
+          .catch(() => null),
+      )
+      return results.flat().filter(Boolean)
+    })
+
     return Service.of({
       init,
       status,
@@ -497,6 +554,10 @@ export const layer = Layer.effect(
       prepareCallHierarchy,
       incomingCalls,
       outgoingCalls,
+      typeDefinition,
+      documentHighlight,
+      codeAction,
+      rename,
     })
   }),
 )

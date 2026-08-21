@@ -18,6 +18,10 @@ const operations = [
   "prepareCallHierarchy",
   "incomingCalls",
   "outgoingCalls",
+  "typeDefinition",
+  "documentHighlight",
+  "codeAction",
+  "rename",
 ] as const
 
 export const Parameters = Schema.Struct({
@@ -31,6 +35,9 @@ export const Parameters = Schema.Struct({
   }),
   query: Schema.optional(Schema.String).annotate({
     description: "Search query for workspaceSymbol. Empty string requests all symbols.",
+  }),
+  newName: Schema.optional(Schema.String).annotate({
+    description: "The new symbol name (required for rename operation)",
   }),
 })
 
@@ -99,6 +106,15 @@ export const LspTool = Tool.define(
                 return lsp.incomingCalls(position)
               case "outgoingCalls":
                 return lsp.outgoingCalls(position)
+              case "typeDefinition":
+                return lsp.typeDefinition(position)
+              case "documentHighlight":
+                return lsp.documentHighlight(position)
+              case "codeAction":
+                return lsp.codeAction(position)
+              case "rename":
+                if (!args.newName) throw new Error("newName is required for rename operation")
+                return lsp.rename({ ...position, newName: args.newName })
             }
           })()
 

@@ -29,7 +29,7 @@ export type WorkspaceInfo = {
   name: string
   branch: string | null
   directory: string | null
-  extra: unknown | null
+  extra: unknown
   projectID: string
 }
 
@@ -247,10 +247,10 @@ export interface Hooks {
   "chat.params"?: (
     input: { sessionID: string; agent: string; model: Model; provider: ProviderContext; message: UserMessage },
     output: {
-      temperature: number
-      topP: number
-      topK: number
-      maxOutputTokens: number | undefined
+      temperature?: number
+      topP?: number
+      topK?: number
+      maxOutputTokens?: number
       options: Record<string, any>
     },
   ) => Promise<void>

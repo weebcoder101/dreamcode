@@ -116,6 +116,41 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("migrates v1 model limits without an output field", () =>
+    Effect.sync(() => {
+      // A config written with `limit: { context }` only (no `output`) must
+      // validate and migrate cleanly instead of failing with
+      // "Missing key ... limit.output" (regression: cmdc provider block).
+      const migrated = ConfigMigrateV1.migrate({
+        provider: {
+          cmdc: {
+            name: "Command Code",
+            npm: "@ai-sdk/openai-compatible",
+            api: "https://api.commandcode.ai/provider/v1",
+            env: ["CMD_API_KEY"],
+            models: {
+              "claude-sonnet-5": {
+                name: "Claude Sonnet 5",
+                tool_call: true,
+                limit: { context: 1000000 },
+                cost: { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
+              },
+            },
+          },
+        },
+      })
+
+      const model = migrated.providers?.cmdc?.models?.["claude-sonnet-5"]
+      expect(model?.limit).toEqual({ context: 1000000, input: undefined, output: undefined })
+      // Migrated output must be undefined (not NaN) so it survives V2 decode.
+      expect(Number.isNaN(model?.limit?.output)).toBe(false)
+      // The full migrated document must decode as valid V2 configuration.
+      expect(() =>
+        Schema.decodeUnknownSync(Config.Info)(migrated, { errors: "all" }),
+      ).not.toThrow()
+    }),
+  )
+
   it.effect("migrates v1 command configuration", () =>
     Effect.sync(() => {
       expect(

@@ -82,10 +82,14 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "${CYAN}Updating existing DreamCode install...${NC}"
   CURRENT_BRANCH=$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
   echo -e "${MUTED}Branch: $CURRENT_BRANCH${NC}"
-  # Stash any local changes first so git pull doesn't abort
-  git -C "$INSTALL_DIR" stash --include-untracked 2>/dev/null || true
-  if ! git -C "$INSTALL_DIR" pull origin "$CURRENT_BRANCH"; then
-    echo -e "${ORANGE}WARN: git pull failed on '$CURRENT_BRANCH'. Continuing with existing clone.${NC}"
+  if [ "$CURRENT_BRANCH" = "HEAD" ]; then
+    echo -e "${MUTED}Detached HEAD — skipping git pull (CI mode)${NC}"
+  elif [ "$CURRENT_BRANCH" != "stable-release" ]; then
+    echo -e "${CYAN}Switching to stable-release branch...${NC}"
+    git -C "$INSTALL_DIR" fetch origin stable-release 2>/dev/null || true
+    git -C "$INSTALL_DIR" checkout stable-release 2>/dev/null || git -C "$INSTALL_DIR" checkout -b stable-release origin/stable-release
+  elif ! git -C "$INSTALL_DIR" pull origin stable-release; then
+    echo -e "${ORANGE}WARN: git pull failed on stable-release. Continuing with existing clone.${NC}"
   fi
 else
   if [ -d "$INSTALL_DIR" ]; then
@@ -94,8 +98,8 @@ else
     echo -e "${ORANGE}Or set DREAMCODE_DIR to a different path.${NC}"
     exit 1
   fi
-  echo -e "${CYAN}Cloning DreamCode...${NC}"
-  git clone https://github.com/weebcoder101/dreamcode.git "$INSTALL_DIR"
+  echo -e "${CYAN}Cloning DreamCode (stable-release branch)...${NC}"
+  git clone -b stable-release https://github.com/weebcoder101/dreamcode.git "$INSTALL_DIR"
 fi
 
 # ─── Phase 2: Re-exec from repo (skip if already there) ──────────────
@@ -181,6 +185,37 @@ else
   echo -e "${GREEN}Sandbox: OFF (full filesystem access)${NC}"
 fi
 
+# ─── Python 3 ────────────────────────────────────────────────────────
+PYTHON_OK=false
+if command -v python3 &> /dev/null; then
+  PY_VER=$(python3 --version 2>&1 | sed 's/Python //' | cut -d. -f1,2)
+  if [ -n "$PY_VER" ]; then
+    PYTHON_OK=true
+    echo -e "${GREEN}Python 3 found: python3 (${PY_VER})${NC}"
+  fi
+elif command -v python &> /dev/null; then
+  PY_VER=$(python --version 2>&1 | sed 's/Python //' | cut -d. -f1,2)
+  if [ -n "$PY_VER" ]; then
+    PYTHON_OK=true
+    echo -e "${GREEN}Python 3 found: python (${PY_VER})${NC}"
+  fi
+fi
+if [ "$PYTHON_OK" = false ]; then
+  echo ""
+  echo -e "${RED}WARNING: Python 3 not found on your system!${NC}"
+  echo -e "${ORANGE}The persona/skill/chain features require Python 3.${NC}"
+  echo ""
+  echo -e "${CYAN}To install Python 3:${NC}"
+  echo -e "  Ubuntu/Debian:  ${MUTED}sudo apt install python3 python3-pip${NC}"
+  echo -e "  macOS:          ${MUTED}brew install python3${NC}"
+  echo -e "  Fedora/RHEL:    ${MUTED}sudo dnf install python3${NC}"
+  echo ""
+  echo -e "${ORANGE}Or install via your package manager, then re-run this script.${NC}"
+  echo -e "${MUTED}Without Python, you can still use DreamCode for basic tasks.${NC}"
+  echo -e "${MUTED}Personas and skill chains will be disabled.${NC}"
+  echo ""
+fi
+
 # ─── Bun ──────────────────────────────────────────────────────────────
 if ! command -v bun &> /dev/null; then
   echo -e "${CYAN}Installing bun...${NC}"
@@ -261,54 +296,34 @@ fi
 
 # 3) Binary version must match expected version
 DIST_BIN="$(pwd)/${NATIVE_BIN}"
-echo -e "${MUTED}  Binary path: $DIST_BIN${NC}"
-# Capture both stdout and stderr for diagnostics, but use only stdout for version
-ACTUAL_VERSION=$("$DIST_BIN" --version 2>&1 || true)
+ACTUAL_VERSION=$("$DIST_BIN" --version 2>/dev/null || echo "FAILED")
 if echo "$ACTUAL_VERSION" | grep -qF "$OPENCODE_VERSION"; then
-  echo -e "${GREEN}✓ Version verified: $(echo "$ACTUAL_VERSION" | head -1)${NC}"
+  echo -e "${GREEN}✓ Version verified: $ACTUAL_VERSION${NC}"
 else
-  echo -e "${RED}ERROR: Binary reports '$(echo "$ACTUAL_VERSION" | head -1)', expected '$OPENCODE_VERSION'${NC}"
-  echo -e "${MUTED}  Full output: $ACTUAL_VERSION${NC}"
+  echo -e "${RED}ERROR: Binary reports '$ACTUAL_VERSION', expected '$OPENCODE_VERSION'${NC}"
   echo -e "${ORANGE}Retrying build with explicit OPENCODE_VERSION...${NC}"
   if ! OPENCODE_VERSION="$OPENCODE_VERSION" bun run build $BUILD_ARGS; then
     echo -e "${RED}Rebuild also failed. Please report this error.${NC}"
     exit 1
   fi
-  ACTUAL_VERSION=$("$DIST_BIN" --version 2>&1 || true)
+  ACTUAL_VERSION=$("$DIST_BIN" --version 2>/dev/null || echo "FAILED")
   if ! echo "$ACTUAL_VERSION" | grep -qF "$OPENCODE_VERSION"; then
-    echo -e "${RED}ERROR: Rebuilt binary still reports '$(echo "$ACTUAL_VERSION" | head -1)'.${NC}"
-    echo -e "${ORANGE}  This is likely a build/environment issue. Check:${NC}"
-    echo -e "${ORANGE}  - packages/opencode/script/build.ts (OPENCODE_VERSION define)${NC}"
-    echo -e "${ORANGE}  - packages/core/src/installation/version.ts (InstallationVersion)${NC}"
-    echo -e "${ORANGE}  - Ensure bun is up to date: bun upgrade${NC}"
-    # Non-fatal: continue with install anyway, warn user
-    echo -e "${ORANGE}  Continuing with install (version check non-fatal).${NC}"
-  else
-    echo -e "${GREEN}✓ Version verified after rebuild: $(echo "$ACTUAL_VERSION" | head -1)${NC}"
+    echo -e "${RED}ERROR: Rebuilt binary still reports '$ACTUAL_VERSION'. Version string mismatch persists.${NC}"
+    echo -e "${ORANGE}Check packages/opencode/script/build.ts and packages/script/src/index.ts${NC}"
+    exit 1
   fi
+  echo -e "${GREEN}✓ Version verified after rebuild: $ACTUAL_VERSION${NC}"
 fi
 
 # ─── Create binary symlinks ───────────────────────────────────────────
 echo -e "${CYAN}Creating symlinks...${NC}"
 
-# Update repo launcher script (bin/dreamcode) to point to the actual compiled binary.
-# This launcher follows symlinks so it works correctly even when accessed via bun link.
-LAUNCHER_PATH="$(pwd)/bin/dreamcode"
-mkdir -p "$(dirname "$LAUNCHER_PATH")"
-cat > "$LAUNCHER_PATH" << LAUNCHER
-#!/usr/bin/env bash
-# Resolve real directory even if accessed via symlink (bun link)
-SCRIPT_SOURCE="\${BASH_SOURCE[0]}"
-while [ -h "\$SCRIPT_SOURCE" ]; do
-  SCRIPT_SOURCE="\$(readlink "\$SCRIPT_SOURCE")"
-done
-SCRIPT_DIR="\$(cd "\$(dirname "\$SCRIPT_SOURCE")" && pwd)"
-exec "\$SCRIPT_DIR/${NATIVE_BIN}" "\$@"
-LAUNCHER
-chmod +x "$LAUNCHER_PATH"
-echo -e "${GREEN}Updated repo launcher: $LAUNCHER_PATH -> $NATIVE_BIN${NC}"
+# Absolute symlink inside repo (for package.json "bin" field)
+mkdir -p "$(pwd)/bin"
+ln -sf "$DIST_BIN" "$(pwd)/bin/dreamcode"
+echo -e "${GREEN}Linked repo bin/dreamcode → ${DIST_BIN}${NC}"
 
-# Absolute symlink in ~/.local/bin — THE canonical entry point (used over bun link)
+# Absolute symlink in ~/.local/bin — THE canonical entry point
 LOCAL_BIN="$HOME/.local/bin"
 mkdir -p "$LOCAL_BIN"
 ln -sf "$DIST_BIN" "$LOCAL_BIN/dreamcode"
@@ -321,6 +336,19 @@ if [ -f "$REAL_TARGET" ] && [ -x "$REAL_TARGET" ]; then
 else
   echo -e "${RED}ERROR: Symlink target is missing or not executable: $REAL_TARGET${NC}"
   exit 1
+fi
+
+# ─── Copy skills/plugins alongside binary (binary-bundled fallback) ──
+# The resolver checks dirname(process.execPath)/skills first. Copying here
+# ensures skills/plugins work even if XDG config is cleared.
+REAL_BIN_DIR="$(dirname "$REAL_TARGET")"
+if [ -d "$CONFIG_SKILLS" ] && [ "$REAL_BIN_DIR" != "$CONFIG_SKILLS" ]; then
+  cp -r "$CONFIG_SKILLS" "$REAL_BIN_DIR/skills" 2>/dev/null || true
+  echo -e "${GREEN}Copied skills alongside binary: $REAL_BIN_DIR/skills${NC}"
+fi
+if [ -d "$CONFIG_PLUGINS" ] && [ "$REAL_BIN_DIR" != "$CONFIG_PLUGINS" ]; then
+  cp -r "$CONFIG_PLUGINS" "$REAL_BIN_DIR/plugins" 2>/dev/null || true
+  echo -e "${GREEN}Copied plugins alongside binary: $REAL_BIN_DIR/plugins${NC}"
 fi
 
 # ─── PATH for current session ─────────────────────────────────────────
@@ -378,26 +406,33 @@ echo -e "${GREEN}Created dreamcode directories at $INSTALL_DIR${NC}"
 
 # ─── Install skills to global config ──────────────────────────────────
 CONFIG_SKILLS="$HOME/.config/dreamcode/skills"
+CONFIG_PLUGINS="$HOME/.config/dreamcode/plugins"
 REPO_SKILLS="$INSTALL_DIR/.dreamcode/skills"
 REPO_SKILLS_ALT="$INSTALL_DIR/.opencode/skills"
-PACKAGE_SKILLS="$INSTALL_DIR/packages/opencode/src/skill/dreamcode/skills"
 mkdir -p "$CONFIG_SKILLS"
-# Package source is canonical (43 skills); .dreamcode/skills is stale (39 skills)
-if [ -d "$PACKAGE_SKILLS" ] && ls "$PACKAGE_SKILLS"/*/SKILL.md &>/dev/null 2>/dev/null; then
-  cp -r "$PACKAGE_SKILLS/"* "$CONFIG_SKILLS/" 2>/dev/null || true
-  SKILL_COUNT=$(ls -d "$PACKAGE_SKILLS"/*/ 2>/dev/null | wc -l)
-  echo -e "${GREEN}Installed $SKILL_COUNT skills to $CONFIG_SKILLS${NC}"
-elif [ -d "$REPO_SKILLS" ] && ls "$REPO_SKILLS"/*/SKILL.md &>/dev/null 2>/dev/null; then
+if [ -d "$REPO_SKILLS" ]; then
   cp -r "$REPO_SKILLS/"* "$CONFIG_SKILLS/" 2>/dev/null || true
   SKILL_COUNT=$(ls -d "$REPO_SKILLS"/*/ 2>/dev/null | wc -l)
   echo -e "${GREEN}Installed $SKILL_COUNT skills to $CONFIG_SKILLS${NC}"
-elif [ -d "$REPO_SKILLS_ALT" ] && ls "$REPO_SKILLS_ALT"/*/SKILL.md &>/dev/null 2>/dev/null; then
+elif [ -d "$REPO_SKILLS_ALT" ]; then
   cp -r "$REPO_SKILLS_ALT/"* "$CONFIG_SKILLS/" 2>/dev/null || true
   SKILL_COUNT=$(ls -d "$REPO_SKILLS_ALT"/*/ 2>/dev/null | wc -l)
   echo -e "${GREEN}Installed $SKILL_COUNT skills to $CONFIG_SKILLS${NC}"
 else
   echo -e "${ORANGE}WARN: No skills found in repo to install${NC}"
 fi
+
+# ─── Install plugins to global config ─────────────────────────────────
+REPO_PLUGINS="$INSTALL_DIR/.opencode/plugins"
+mkdir -p "$CONFIG_PLUGINS"
+if [ -d "$REPO_PLUGINS" ]; then
+  cp -r "$REPO_PLUGINS/"* "$CONFIG_PLUGINS/" 2>/dev/null || true
+  PLUGIN_COUNT=$(ls "$REPO_PLUGINS/"*.ts 2>/dev/null | wc -l)
+  echo -e "${GREEN}Installed $PLUGIN_COUNT plugins to $CONFIG_PLUGINS${NC}"
+else
+  echo -e "${ORANGE}WARN: No plugins found in repo to install${NC}"
+fi
+
 # Also copy scripts and automations if they exist
 if [ -d "$INSTALL_DIR/.dreamcode/scripts" ]; then
   cp -r "$INSTALL_DIR/.dreamcode/scripts/"* "$INSTALL_DIR/scripts/" 2>/dev/null || true

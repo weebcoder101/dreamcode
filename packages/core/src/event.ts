@@ -88,7 +88,7 @@ export class InvalidSyncEventError extends Schema.TaggedErrorClass<InvalidSyncEv
  */
 export const dieSyncError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
-    Effect.catchTag("EventV2.InvalidSyncEvent" as any, (e: any) => Effect.die(e)),
+    Effect.catchTag("EventV2.InvalidSyncEvent" as any, (e) => Effect.die(e))
   ) as Effect.Effect<A, Exclude<E, { _tag: "EventV2.InvalidSyncEvent" }>, R>
 
 export function versionedType(type: string, version: number) {

@@ -4,10 +4,12 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  ErrorBoundary,
   For,
   Match,
   on,
   onCleanup,
+  onMount,
   Show,
   Switch,
   untrack,
@@ -16,9 +18,8 @@ import {
 import { Dynamic } from "solid-js/web"
 import path from "node:path"
 import { mkdir, writeFile } from "node:fs/promises"
-import fs from "node:fs"
+import { appendFileSync } from "node:fs"
 import { useRoute, useRouteData } from "../../context/route"
-import { hasTextSelection } from "../../util/selection"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
@@ -213,47 +214,6 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
-
-  // DIAG: detect when session view renders empty while store has data
-  // This helps identify if a Solid reactivity glitch causes the session
-  // to show no messages despite data being in the store.
-  //
-  // Auto-recovery: ONLY when the store is truly empty (data was wiped),
-  // NOT when the reactive memo returns empty but store has data (reactivity glitch).
-  // Calling recover() on a reactivity glitch WIPES the store with stale server data,
-  // making the problem worse — this was the feedback loop causing the black screen.
-  let lastEmptyRenderRecover = 0
-  const EMPTY_RENDER_COOLDOWN = 5_000
-  createEffect(() => {
-    const s = session()
-    const msgs = messages()
-    if (s && msgs.length === 0) {
-      const storeMsgs = sync.data.message[route.sessionID]
-      try {
-        require("node:fs").appendFileSync(
-          "/tmp/dreamcode-diag.log",
-          `[${Date.now()}] EMPTY-RENDER sessionID=${route.sessionID} sessionExists=true sessionTitle="${(s.title ?? "").slice(0, 40)}" messagesInStore=${storeMsgs?.length ?? 0} messageKeys=${Object.keys(sync.data.message).length}\n`,
-        )
-      } catch {}
-      // ONLY recover when store is truly empty — not when it's a reactivity glitch.
-      // If store has messages but render is empty, that's a reactivity issue
-      // that recover() would make WORSE by wiping the store with stale server data.
-      if (!storeMsgs || storeMsgs.length === 0) {
-        const now = Date.now()
-        if (now - lastEmptyRenderRecover > EMPTY_RENDER_COOLDOWN) {
-          lastEmptyRenderRecover = now
-          try {
-            require("node:fs").appendFileSync(
-              "/tmp/dreamcode-diag.log",
-              `[${now}] EMPTY-RECOVER sessionID=${route.sessionID} storeHas=${storeMsgs?.length ?? 0} RECOVERING\n`,
-            )
-          } catch {}
-          void sync.session.recover(route.sessionID).catch(() => {})
-        }
-      }
-    }
-  })
-
   const foregroundTasks = createMemo(() =>
     messages().flatMap((message) =>
       (sync.data.part[message.id] ?? []).filter(
@@ -329,8 +289,10 @@ export function Session() {
     const sessionID = route.sessionID
     void (async () => {
       const previousWorkspace = untrack(() => project.workspace.current())
+      try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] TRIGGER-RESYNC sessionID=${sessionID}\n`) } catch {}
       const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
       if (!result.data) {
+        try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] TRIGGER-RESYNC NULL-DATA sessionID=${sessionID}\n`) } catch {}
         // DIAG: server returned null for this session — check for race
         const localMessages = sync.data.message[sessionID]
         if (localMessages && localMessages.length > 0) {
@@ -1266,7 +1228,7 @@ export function Session() {
       >
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
-             <Show when={session()}>
+            <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
                 viewportOptions={{
@@ -1356,7 +1318,7 @@ export function Session() {
                         <UserMessage
                           index={index()}
                           onMouseUp={() => {
-                            if (hasTextSelection(renderer)) return
+                            if (renderer.getSelection()?.getSelectedText()) return
                             dialog.replace(() => (
                               <DialogMessage
                                 messageID={message.id}
@@ -1424,6 +1386,17 @@ export function Session() {
             <Toast />
           </box>
           <Show when={sidebarVisible()}>
+            <ErrorBoundary
+              fallback={(error) => {
+                try {
+                  appendFileSync(
+                    "/tmp/dreamcode-diag.log",
+                    `[${Date.now()}] RENDER-ERROR sidebar sessionID=${route.sessionID} error=${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}\n`,
+                  )
+                } catch {}
+                return <></>
+              }}
+            >
               <Switch>
                 <Match when={wide()}>
                   <Sidebar sessionID={route.sessionID} />
@@ -1442,6 +1415,7 @@ export function Session() {
                   </box>
                 </Match>
               </Switch>
+            </ErrorBoundary>
           </Show>
         </box>
       </context.Provider>
@@ -1637,7 +1611,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.error}
         >
-           <text fg={theme.textMuted}>{errorMessage(props.message.error)}</text>
+          <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
         </box>
       </Show>
       <Switch>
@@ -1874,9 +1848,6 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={display() === "skill"}>
           <Skill {...toolprops} />
         </Match>
-        <Match when={display() === "execute"}>
-          <Execute {...toolprops} />
-        </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
         </Match>
@@ -1997,17 +1968,16 @@ function InlineTool(props: {
       onMouseOver={() => clickable() && setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseDown={() => {
-        // Clear stale selection at boundary; navigation deferred to onMouseUp
-        // so terminal-native PRIMARY selection on Linux completes before any
-        // click action fires.
+        if (renderer.getSelection()?.getSelectedText()) return
+        if (failed()) return
+        props.onClick?.()
       }}
       onMouseUp={() => {
-        if (hasTextSelection(renderer)) return
+        if (renderer.getSelection()?.getSelectedText()) return
         if (failed()) {
           setErrorExpanded((value) => !value)
           return
         }
-        props.onClick?.()
       }}
     >
       {props.children}
@@ -2136,7 +2106,7 @@ function BlockTool(props: {
       onMouseOver={() => props.onClick && setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={() => {
-        if (hasTextSelection(renderer)) return
+        if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
       }}
     >
@@ -2337,6 +2307,14 @@ function Task(props: ToolProps) {
   const sync = useSync()
   const dialog = useDialog()
 
+  onMount(() => {
+    if (props.part.state.status === "pending") return
+    const childSessionID = stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
+    if (childSessionID && !sync.data.message[childSessionID]?.length) sync.session.sync(childSessionID).catch((e: any) => {
+      try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] ONMOUNT-SYNC-ERROR childSessionID=${childSessionID} error=${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}\n`) } catch {}
+    })
+  })
+
   const sessionID = createMemo(() => {
     return stringValue("metadata" in props.part.state ? props.part.state.metadata?.sessionId : undefined)
   })
@@ -2417,8 +2395,10 @@ function Task(props: ToolProps) {
       pending="Delegating..."
       part={props.part}
       onClick={() => {
-        if (sessionID()) {
-          navigate({ type: "session", sessionID: sessionID()! })
+        const sid = sessionID()
+        try { require("node:fs").appendFileSync("/tmp/dreamcode-diag.log", `[${Date.now()}] TASK-CLICK sessionID=${sid ?? "undefined"} partID=${props.part.id} status=${props.part.state.status} hasMetadata=${"metadata" in props.part.state}\n`) } catch {}
+        if (sid) {
+          navigate({ type: "session", sessionID: sid })
         }
         const status = retry()
         if (status) void DialogAlert.show(dialog, "Retry Error", status.message)
@@ -2444,65 +2424,6 @@ export function formatSubagentRetry(attempt: number, message: string) {
 export function formatCompletedSubagentDetail(toolcalls: number, duration: string) {
   if (toolcalls === 0) return duration
   return `${formatSubagentToolcalls(toolcalls)} · ${duration}`
-}
-
-type ExecuteCall = { tool: string; status: "running" | "completed" | "error"; input?: Record<string, unknown> }
-
-function executeCalls(value: unknown): ExecuteCall[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((call) => {
-    const item = recordValue(call)
-    const tool = stringValue(item?.tool)
-    const status = stringValue(item?.status)
-    if (!tool || !status || !["running", "completed", "error"].includes(status)) return []
-    return [{ tool, status: status as ExecuteCall["status"], input: recordValue(item?.input) }]
-  })
-}
-
-function Execute(props: ToolProps) {
-  const ctx = use()
-  const { theme } = useTheme()
-  const isLoading = createMemo(() => props.part.state.status === "pending" || props.part.state.status === "running")
-  const calls = createMemo(() => executeCalls(props.metadata.toolCalls))
-  const output = createMemo(() => stripAnsi(props.output?.trim() ?? ""))
-  const hasRuntimeError = createMemo(() => props.metadata.error === true)
-  const outputPreview = createMemo(() => collapseToolOutput(output(), 4, 4 * Math.max(20, ctx.width - 6)).output)
-  const showOutput = createMemo(() => output() && hasRuntimeError())
-  const content = createMemo(() => {
-    const lines = ["execute"]
-    for (const call of calls()) {
-      const args = input(call.input ?? {})
-      lines.push(`↳ ${call.tool}${args ? ` ${args}` : ""}${call.status === "error" ? " (failed)" : ""}`)
-    }
-    return lines.join("\n")
-  })
-
-  return (
-    <>
-      <InlineTool
-        icon={hasRuntimeError() ? "✗" : props.part.state.status === "completed" ? "✓" : "│"}
-        color={hasRuntimeError() ? theme.error : undefined}
-        spinner={isLoading()}
-        pending="execute"
-        complete={true}
-        part={props.part}
-      >
-        {content()}
-      </InlineTool>
-      <Show when={showOutput()}>
-        <box paddingLeft={3}>
-          <For each={outputPreview().split("\n")}>
-            {(line, index) => (
-              <text paddingLeft={3} fg={theme.error}>
-                {index() === 0 ? "↳ " : "  "}
-                {line}
-              </text>
-            )}
-          </For>
-        </box>
-      </Show>
-    </>
-  )
 }
 
 function Edit(props: ToolProps) {
@@ -2761,7 +2682,6 @@ const toolDisplays = new Set([
   "todowrite",
   "question",
   "skill",
-  "execute",
 ])
 
 export function toolDisplay(tool: string) {

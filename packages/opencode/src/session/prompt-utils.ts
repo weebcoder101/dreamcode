@@ -1,8 +1,37 @@
 import { Effect } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import type { SessionID } from "./schema"
 import type { ChainResult } from "@/skill/chain-executor"
 import { debugLog } from "@/skill/python-resolver"
+import DREAM_PROTOCOL from "./prompt/dream-protocol.txt"
+
+/**
+ * KV-cache-disciplined system-prompt assembly (DeepSeek/Anthropic/OpenAI).
+ * Byte-stable static content leads (env w/o date, dream protocol, instructions,
+ * skills, self-check); everything that mutates — the knowledge block (rebuilt
+ * from LTM on capture), the date, and the taste profile (rewritten on
+ * consolidation) — trails LAST so a change only re-bills the small tail,
+ * never the ~250k-token cached prefix.
+ * Exported for the byte-identity regression test (kv-cache.test.ts).
+ */
+export function buildSystemPrompt(input: {
+  env: string[]
+  instructions: string[]
+  skills?: string
+  knowledge?: string
+  taste?: string
+  selfCheck: string
+}): string[] {
+  return [
+    ...input.env.filter((e) => !e.includes("Today's date:")),
+    DREAM_PROTOCOL,
+    ...input.instructions,
+    ...(input.skills ? [input.skills] : []),
+    input.selfCheck,
+    ...(input.knowledge ? [input.knowledge] : []),
+    ...input.env.filter((e) => e.includes("Today's date:")),
+    ...(input.taste ? [input.taste] : []),
+  ]
+}
 
 const DEFAULT_KNOWLEDGE_BLOCK = `<learned-knowledge>
 Cross-session Effect v4 API rules (persistent across sessions):
@@ -99,10 +128,14 @@ function scanForSkillToolCalls(msgs: any[]): { loaded: Set<string>; acknowledged
   const loaded = new Set<string>()
   let acknowledged = false
   for (const msg of msgs) {
-    if (msg.info.role !== "assistant") continue
-    for (const part of msg.parts) {
-      if (part.type === "tool" && part.tool === "skill" && part.state.status === "completed") {
-        loaded.add(part.state.input.name ?? "")
+    const role = msg.info?.role ?? msg.role
+    if (role !== "assistant") continue
+    for (const part of msg.parts ?? []) {
+      const isSkillTool = (part.type === "tool" && part.tool === "skill") || part.type === "tool-skill"
+      const status = part.state?.status
+      if (isSkillTool && status === "completed") {
+        const input = part.state?.input ?? part.input ?? {}
+        loaded.add(input.name ?? input.skill ?? "")
       }
       if (part.type === "text" && part.text?.includes("[SKILLS LOADED]")) {
         acknowledged = true
@@ -144,8 +177,17 @@ function injectSkillLoadingGap(
   system: string[],
   gateResult: any,
   msgs: any[],
+  preExecutedSkills?: string[],
 ): void {
   const { loaded, acknowledged } = scanForSkillToolCalls(msgs)
+  // Skills that were pre-executed by the chain executor (script results injected
+  // as <script-result> blocks) should NOT trigger loading warnings — the agent
+  // already has their output in context.
+  if (preExecutedSkills) {
+    for (const name of preExecutedSkills) {
+      loaded.add(name)
+    }
+  }
   const unloadedChainSkills = gateResult.chain.filter((name: string) => !loaded.has(name))
   // If the agent has already acknowledged [SKILLS LOADED] but some skills
   // are still missing from tool calls, trust the acknowledgment — the agent
@@ -166,10 +208,28 @@ function injectSkillChainObligation(
   gateResult: any,
   scriptResults: ChainResult[],
   contentResults: ChainResult[],
+  msgs?: any[],
 ): void {
   const scriptSkillNames = scriptResults.map(r => r.name)
   const contentSkillNames = contentResults.map(r => r.name)
+  // Idempotency: skills already loaded via the `skill` tool earlier in this
+  // session are present in the conversation context — do NOT tell the agent to
+  // reload them. This applies in both sensor-gate modes (ON and OFF), since the
+  // per-turn enforcement block runs regardless of the gate toggle.
+  const loaded = msgs ? scanForSkillToolCalls(msgs).loaded : new Set<string>()
+  // Only skills whose SKILL.md CONTENT was actually injected (executionType
+  // "content") are present in context — treat those as already loaded. Script-
+  // pre-executed skills (executionType "script") only have a <script-result>
+  // block in context, NOT their SKILL.md workflow instructions, so they must
+  // NOT be marked loaded. They fall through to the [EXECUTED] branch below and
+  // the agent loads SKILL.md via the skill tool. This keeps enforcement
+  // idempotent in BOTH sensor-gate modes without hiding script-only skills.
+  for (const name of contentSkillNames) loaded.add(name)
+  const unloaded = gateResult.chain.filter((name: string) => !loaded.has(name))
   const chainItems = gateResult.chain.map((name: string) => {
+    if (loaded.has(name)) {
+      return `  [ALREADY-LOADED] \`skill\` name="${sanitizeForSystemPrompt(name)}" — content already in context, DO NOT reload`
+    }
     if (contentSkillNames.includes(name)) {
       return `  [MUST-LOAD] Call \`skill\` with name="${sanitizeForSystemPrompt(name)}" — content NOT injected, REQUIRED to load via tool`
     }
@@ -182,17 +242,19 @@ function injectSkillChainObligation(
     "",
     "<skill-chain-obligation mode=\"strict\">",
     "The sensor gate has classified this prompt and produced a mandatory skill chain.",
-    "Every skill in this chain MUST be loaded via the `skill` tool:",
+    `Idempotency: ${gateResult.chain.length - unloaded.length} of ${gateResult.chain.length} chain skills are ALREADY loaded in this session's context.`,
+    "Only skills marked [MUST-LOAD] or [EXECUTED] must be loaded via the `skill` tool. [ALREADY-LOADED] skills must NOT be reloaded.",
     "",
     ...chainItems,
     "",
     "Rules:",
     "  1. [MUST-LOAD] skills were NOT pre-injected — you MUST call the `skill` tool to load their content",
     "  2. [EXECUTED] skills had their automation script pre-run; load SKILL.md via `skill` tool for workflow instructions",
-    "  3. Follow each skill's workflow instructions after loading",
-    "  4. Any subagent you spawn MUST also load the same chain skills",
-    "  5. After ALL chain skills are loaded, acknowledge with: [SKILLS LOADED]",
-    "  6. FAILURE to load all chain skills will produce INCOMPLETE results",
+    "  3. [ALREADY-LOADED] skills are already present in your context — DO NOT call the `skill` tool for them again",
+    "  4. Follow each skill's workflow instructions after loading",
+    "  5. Any subagent you spawn MUST also load the same chain skills",
+    "  6. After ALL required (unloaded) chain skills are loaded, acknowledge with: [SKILLS LOADED]",
+    "  7. FAILURE to load unloaded chain skills will produce INCOMPLETE results",
     "</skill-chain-obligation>",
   ].join("\n"))
 }

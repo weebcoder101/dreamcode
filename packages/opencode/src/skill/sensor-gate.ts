@@ -1,16 +1,17 @@
 import { Effect, Context, Layer, Duration } from "effect"
-// Stream and ChildProcess removed — replaced with Bun.spawn (compiled binary fix)
-import * as fs from "fs"
-import * as path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { buildPrompt } from "./prompt-engine"
-import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, HOME, isWindows, debugLog, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "./python-resolver"
-import { SOCIAL_GREETING_RE, COMPLEXITY_SPAWN_MAP, COMPLEXITY_SCORES, maxComplexityFromQuestions, spawnCountForComplexity, type RatedQuestion, type ComplexityLevel } from "./question-complexity-schema"
+import { resolvePythonCommand, resolvePythonCommands, getPythonArgs, resolveSkillsDir, resolveScript as resolveScriptImpl, debugLog, writePromptToTmpFile, cleanupTmpFile, BASE_SUBPROCESS_ENV } from "./python-resolver"
+import { SOCIAL_GREETING_RE, COMPLEXITY_SCORES, maxComplexityFromQuestions, spawnCountForComplexity, type RatedQuestion, type ComplexityLevel } from "./question-complexity-schema"
 
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
 
 const RATE_MAX_SPAWNS = 5
+
+export const WORKFLOW_SKILLS = new Set(["research"])
+
+const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
 
 // ─── NEURO Result Cache ─────────────────────────────────────────────
 // Caches NEURO results per project root to avoid redundant re-runs
@@ -77,7 +78,7 @@ const PERSONA_PROFILES: PersonaProfile[] = [
     role: "Code Quality Specialist",
     focus: "Implementation, code style, best practices, and idiomatic patterns",
     skills: ["code-quality", "best-practices", "implementation"],
-    tags: ["implementation", "code", "quality", "refactoring", "python", "react", "frontend"],
+    tags: ["implementation", "code", "testing", "refactoring", "python", "frontend"],
     minComplexity: 1,
   },
   {
@@ -125,15 +126,15 @@ const PERSONA_PROFILES: PersonaProfile[] = [
     role: "Test Coverage Specialist",
     focus: "Test gaps, test quality, edge coverage, and assertion strength",
     skills: ["testing", "coverage", "quality-assurance"],
-    tags: ["testing", "test", "coverage", "quality"],
+    tags: ["testing", "test", "coverage"],
     minComplexity: 2,
   },
   {
     name: "The Cartographer",
     role: "Documentation & API Surface Specialist",
     focus: "API contracts, documentation, type definitions, and public interfaces",
-    skills: ["documentation", "api-design", "interfaces"],
-    tags: ["documentation", "api", "design", "communication"],
+    skills: ["communication", "api", "interfaces"],
+    tags: ["api", "design", "communication"],
     minComplexity: 2,
   },
   {
@@ -176,14 +177,6 @@ const PERSONA_PROFILES: PersonaProfile[] = [
     tags: ["architecture", "integration", "api", "system"],
     minComplexity: 3,
   },
-  {
-    name: "Bill Gates",
-    role: "Windows Platform Expert",
-    focus: "Windows-specific issues: PowerShell, paths, registry, COM, Win32 API, WSL, MSI installers, .NET, Windows services, ACLs, UAC, etc.",
-    skills: ["windows", "platform", "compatibility"],
-    tags: ["windows", "win32", "powershell", "cmd", ".net", "registry", "wsl", "msi", "com", "uac", "acl"],
-    minComplexity: 1,
-  },
 ]
 
 function dynamicTaskFor(persona: { name: string; role: string; focus: string }, intent: string): string {
@@ -202,13 +195,12 @@ function dynamicTaskFor(persona: { name: string; role: string; focus: string }, 
     "The Sculptor": `Identify refactoring opportunities, dead code, simplification, and technical debt for: ${intent}. Focus on code duplication, complex logic that needs decomposition, and cleanup candidates.`,
     "The Strategist": `Explore novel approaches, alternative solutions, and creative improvements for: ${intent}. Focus on breakthrough ideas, technology choices, architectural pivots, and innovation opportunities.`,
     "The Integrator": `Evaluate cross-module integration, data flow, and compatibility for: ${intent}. Focus on interface contracts, data format consistency, error propagation across boundaries, and system cohesion.`,
-    "Bill Gates": `Analyze Windows-specific aspects of: ${intent}. Focus on platform compatibility, PowerShell/cmd scripting, file path handling, registry, UAC, Windows services, .NET integration, WSL, installer design, ACLs, and Windows API usage. Provide Windows-native solutions and warn about cross-platform pitfalls.`,
   }
   return t[persona.name] ?? `Analyze from ${persona.role} perspective for: ${intent}.`
 }
 
 function dynamicGoalsFor(persona: { name: string; role: string; focus: string }, intent: string): string[] {
-  const base = `Analyze ${intent} from ${persona.role} perspective`
+  const _base = `Analyze ${intent} from ${persona.role} perspective`
   return [
     `Identify all ${persona.focus} aspects relevant to the task`,
     `Provide specific, actionable findings with code/file references`,
@@ -220,10 +212,6 @@ function dynamicGoalsFor(persona: { name: string; role: string; focus: string },
 
 function dynamicSynthesisFor(persona: { name: string; role: string; focus: string }): string {
   return `When synthesizing, include ${persona.name}'s findings on ${persona.focus}. Prioritize actionable ${persona.role} recommendations, flag any blocking issues, and note confidence levels for each finding.`
-}
-
-function dynamicTaskForPersona(p: PersonaProfile, intent: string): string {
-  return dynamicTaskFor({ name: p.name, role: p.role, focus: p.focus }, intent)
 }
 
 function overlapCheck(personas: Persona[]): Persona[] {
@@ -285,7 +273,6 @@ export function evaluateSpawnNecessity(
   // CPU-HEAVY TASK DETECTION: cap personas to 2 for compute-bound operations.
   // Typecheck, build, and compilation tasks are CPU-intensive — running 5+ parallel
   // tsc/bun processes causes OOM and degrades performance without benefit.
-  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
   const isCpuHeavy = CPU_HEAVY_RE.test(prompt)
   if (isCpuHeavy) {
     return {
@@ -295,20 +282,24 @@ export function evaluateSpawnNecessity(
     }
   }
 
-  // HARD RULE: DREAM_INNOVATION always spawns — creative tasks need multiple perspectives
-  if (result.mode === "DREAM_INNOVATION") {
-    return {
-      shouldSpawn: true,
-      reason: "DREAM_INNOVATION mode — mandatory multi-perspective analysis",
-      suggestedCount: Math.max(3, Math.min(5, Math.ceil(depthScore(result) * 1.5))),
-    }
-  }
+  // NOTE: DREAM_INNOVATION early-return was REMOVED. The mode boost at line 350
+  // already handles DREAM_INNOVATION by adding +2 to spawn score. Keeping the early
+  // return here would bypass the simplicity check below, meaning any prompt containing
+  // "fix" would force DREAM_INNOVATION mode (via debugging → INNOVATION_TASKS) and
+  // skip the simplicity check entirely. The cascading failure chain was:
+  //   "fix" → debugging task → INNOVATION_TASKS → DREAM_INNOVATION mode → early return
+  //   → simplicity check NEVER reached → always spawns 3-5 agents.
+  // The root cause (debugging in INNOVATION_TASKS) is fixed in sensor_gate.py.
+  // The mode boost at line 350 provides the correct scoring uplift.
 
   // Simplicity threshold: high confidence + low risk + single domain + simple phrasing
   // Trivial prompts include: short status checks ("alive?", "done?"), single-word
   // confirmations ("ok", "thanks", "looks good"), quick commands, and simple edits.
   const TRIVIAL_PROMPT_RE = /^(?:(?:alive|done|ready|good|ok|okay|yes|no|thanks|ty|np|👍|✅)\s*)?$/i
-  const simplicityPatterns = /^(fix|update|change|add|remove|bump|upgrade|downgrade|check|run|bump|bump\s|pin|drop)\s/i
+  // Catch both conventional commands AND status/observation prompts.
+  // Prompts like "A valid API key is required" or "it still says Nara error"
+  // are simple observational statements that don't need specialist spawns.
+  const simplicityPatterns = /\b(fix|update|change|add|remove|bump|upgrade|downgrade|check|run|pin|drop|it says|it still|still|error:|status:|why|how do|what does|test)\s/i
   const isSimpleTask = (result.confidence >= 0.8
     && result.risk_level === "low"
     && uniqueDomains <= 1
@@ -319,6 +310,14 @@ export function evaluateSpawnNecessity(
 
   if (isSimpleTask) {
     return { shouldSpawn: false, reason: "Simple high-confidence task — agent handles directly", suggestedCount: 0 }
+  }
+
+  // NEW: Config/provider task detection — short-circuit spawning for configuration prompts.
+  // Prompts about /connect, API keys, base URLs, provider setup, etc. are routine config
+  // tasks that don't need specialist personas. The agent handles them directly.
+  const CONFIG_TASK_RE = /\b(configure?|setup?|auth|connect|provider|api.?key|base.?url|token|credential|login|logout)\b/i
+  if (CONFIG_TASK_RE.test(prompt) && uniqueDomains <= 2 && result.risk_level !== "high") {
+    return { shouldSpawn: false, reason: "Configuration task — agent handles directly", suggestedCount: 0 }
   }
 
   // NEW: Incorporate question complexity into spawn count
@@ -347,11 +346,10 @@ export function evaluateSpawnNecessity(
     score += 2
   }
 
-  // Filter "always" skills (like breakthrough-overdrive-innovation) from chain-length scoring.
+  // Filter "always" skills from chain-length scoring.
   // deep-research is a workflow skill that manages its own subagents — it should NOT inflate
   // the spawn score, otherwise it causes persona spawning alongside workflow spawning (infinite loop).
-  const alwaysSkills = new Set(["breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning", "lint-fixer", "context-compactor", "deep-research"])
-  const effectiveChainLen = result.chain.filter((s) => !alwaysSkills.has(s)).length
+  const effectiveChainLen = result.chain.filter((s) => !ALWAYS_SKILLS.has(s)).length
   if (effectiveChainLen >= 2) {
     reasons.push("Complex skill chain — parallel analysis beneficial")
     score += effectiveChainLen >= 4 ? 3 : 2
@@ -369,19 +367,7 @@ export function evaluateSpawnNecessity(
 
   // Allow zero specialists for simple tasks
   // NOTE: score 0 → ceil(0/2) = 0 (no spawns). score 1 → ceil(1/2) = 1. score 2 → ceil(2/2) = 1.
-  let suggestedCount = Math.min(5, Math.max(0, Math.ceil(score / 2)))
-
-  // FALLBACK FLOOR: Only force 1 spawn when the sensor gate returned empty
-  // classification (domain_tags is empty, suggesting Python script failed or
-  // returned defaults), but TS fallback still generated personas. In this case
-  // the scoring system has no signal to work with so the 0 is misleading.
-  // When Python DID produce valid classification (domain_tags non-empty),
-  // trust the scoring system — spawning would waste compute on trivial tasks.
-  const hasNoClassificationSignal = result.domain_tags.filter(Boolean).length === 0
-  if (suggestedCount === 0 && result.personas.length > 0 && hasNoClassificationSignal && !result.is_social_greeting) {
-    suggestedCount = 1
-    reasons.push("Fallback: Python gate returned empty — spawning 1 specialist for coverage")
-  }
+  const suggestedCount = Math.min(5, Math.max(0, Math.ceil(score / 2)))
 
   return {
     shouldSpawn: suggestedCount > 0,
@@ -390,67 +376,66 @@ export function evaluateSpawnNecessity(
   }
 }
 
+export const ALWAYS_SKILLS = new Set([
+  "breakthrough-overdrive-innovation", "pieces-ltm", "automated-learning",
+])
+
+// ─── Smart Chain Optimization ──────────────────────────────────
+// Caps skill chain at MAX_CHAIN_SIZE skills. Scores each skill by keyword
+// overlap with the user prompt. ALWAYS_SKILLS are always included regardless
+// of score. Low-relevance skills are dropped.
+const MAX_CHAIN_SIZE = 12
+
+function optimizeChain(result: SensorGateResult, prompt: string): SensorGateResult {
+  if (result.chain.length <= MAX_CHAIN_SIZE) return result
+
+  const promptWords = new Set(
+    prompt.toLowerCase().split(/\s+/).filter(w => w.length > 3)
+  )
+
+  const scored = result.chain.map(skill => {
+    const skillWords = new Set(skill.toLowerCase().split(/[-_/]/).filter(w => w.length > 3))
+    let overlap = 0
+    // Exact word match between skill name and prompt
+    for (const w of skillWords) {
+      if (promptWords.has(w)) overlap += 3
+    }
+    // Partial match: prompt word appears in skill name
+    for (const w of promptWords) {
+      if (skill.includes(w)) overlap += 1
+    }
+    // ALWAYS_SKILLS get a bonus to ensure they stay
+    if (ALWAYS_SKILLS.has(skill)) overlap += 10
+    return { skill, score: overlap }
+  })
+
+  scored.sort((a, b) => b.score - a.score)
+  result.chain = scored
+    .slice(0, MAX_CHAIN_SIZE)
+    .map(s => s.skill)
+
+  return result
+}
+
 export function depthScore(result: SensorGateResult): number {
-  // Compute task depth from multiple signals on a 1-5 scale
+  // Compute task depth from multiple signals on a 1-5 scale.
+  // CRITICAL: Filter "always" skills from chain length — they're present on
+  // every chain and inflate the depth score, causing over-spawning.
   const tags = result.domain_tags.filter(Boolean).length
-  const chainLen = result.chain.filter(Boolean).length
+  const effectiveChainLen = result.chain.filter((s) => !ALWAYS_SKILLS.has(s)).length
   const risk = result.risk_level === "high" ? 3 : result.risk_level === "medium" ? 2 : 1
   const tagDiversity = Math.min(tags, 5)
-  const chainDepth = Math.min(chainLen, 4)
+  const chainDepth = Math.min(effectiveChainLen, 4)
   return Math.max(0, Math.min(5, Math.ceil((risk + tagDiversity + chainDepth) / 3)))
 }
 
-// ─── Windows Detection ──────────────────────────────────────────────
-// 60 example questions/patterns that indicate a Windows-related task.
-// If ANY of these patterns match the prompt, Bill Gates persona fires
-// as an ADDITIONAL persona alongside whatever selectPersonas() returns.
-
-const WINDOWS_QUESTIONS = [
-  "install", "setup", "windows", "win32", "win64", "powershell", "cmd",
-  "batch", ".bat", ".ps1", "registry", "regedit", "COM object", "comctl",
-  "winapi", "kernel32", "user32", "gdi32", "msi", "installer", "msix",
-  "appx", "sxs", "side-by-side", "manifest", "UAC", "admin", "elevate",
-  "ACL", "permission", "NTFS", "FAT32", "drive letter", "C:\\", "D:\\",
-  "backslash", "path separator", "environment variable", "%PATH%",
-  "Windows Service", "SCM", "SERVICE", "wmic", "wmi", "cim",
-  ".NET", "dotnet", "CLR", "AppDomain", "PInvoke", "DllImport",
-  "WSL", "wsl2", "linux subsystem", "microsoft store", "store app",
-  "Hyper-V", "virtualization", "DirectX", "d3d", "winrt", "WinRT",
-  "Windows Forms", "WinForms", "WPF", "UWP", "WinUI", "MAUI",
-  "MFC", "ATL", "C++/CLI", "C++/WinRT", "Rust windows crate",
-  "system32", "syswow64", "program files", "appdata", "localappdata",
-  "temp", "temporary files", "Windows Update", "SFC", "DISM",
-  "chkdsk", "defrag", "mstsc", "rdp", "remote desktop", "task manager",
-  "performance monitor", "event viewer", "event log", "Application log",
-  "security log", "system log", "Windows Firewall", "netsh", "ipconfig",
-  "ping windows", "tracert", "nslookup windows", "Get-WmiObject",
-  "Get-ChildItem", "New-Item", "Remove-Item", "Set-ExecutionPolicy",
-  "Windows Terminal", "conhost", "console host", "codepage", "chcp",
-  "ANSI", "UTF-8 windows", "CRLF", "line ending", "carriage return",
-  "Windows CRLF", "windows-1252", "code page", "SMB", "network share",
-  "UNC path", "mapped drive", "symbolic link windows", "junction",
-  "hard link windows", "reparse point", "sparse file", "encrypted file",
-  "BitLocker", "TPM", "secure boot", "Windows Hello", "credential manager",
-]
-
-function isWindowsRelated(prompt: string): boolean {
-  const lower = prompt.toLowerCase()
-  // Check each pattern — if any match, it's Windows-related
-  for (const q of WINDOWS_QUESTIONS) {
-    if (lower.includes(q.toLowerCase())) return true
-  }
-  // Also check for backslash paths (Windows-style paths)
-  if (/[a-zA-Z]:\\/.test(prompt)) return true
-  return false
-}
-export function selectPersonas(result: SensorGateResult, prompt?: string): Persona[] {
-  // Workflow skills (deep-research) manage their own subagents internally.
-  // Skip persona selection entirely when a workflow skill is present — otherwise
-  // both systems spawn subagents simultaneously, causing infinite spawn loops.
-  const WORKFLOW_SKILLS = new Set(["deep-research"])
-  if (result.chain.some((s) => WORKFLOW_SKILLS.has(s))) {
-    return []
-  }
+export function selectPersonas(result: SensorGateResult): Persona[] {
+  // NOTE: Workflow skills (deep-research) are NOT filtered here. They manage
+  // their own subagents, but the spawning decision belongs in
+  // processSensorGatePhase (prompt-sensor-gate-phase.ts), which uses a
+  // recentlyCompletedWorkflows mechanism to allow persona spawning on
+  // subsequent turns after a workflow skill completes. Filtering here would
+  // prevent the caller from ever seeing personas for workflow chains.
 
   const tags = new Set(result.domain_tags.map((t) => t.trim().toLowerCase()))
   const chain = new Set(result.chain.map((s) => s.trim().toLowerCase()))
@@ -471,8 +456,10 @@ export function selectPersonas(result: SensorGateResult, prompt?: string): Perso
     return { profile, score }
   })
 
-  // Minimum score threshold — require at least 1 tag match to justify a persona
-  const eligible = scored.filter((s) => s.score >= 1).sort((a, b) => b.score - a.score)
+  // Minimum score threshold — require at least 2 tag matches to justify a persona.
+  // With threshold < 2, almost every profile scores >= 1 from generic chain skills
+  // like "neuro" (tags: "audit", "examine"), making nearly all 14 profiles eligible.
+  const eligible = scored.filter((s) => s.score >= 2).sort((a, b) => b.score - a.score)
 
   // For simple/low-risk tasks, skip personas entirely
   if (complexityScore <= 1 && mode !== "DREAM_INNOVATION" && eligible.length === 0) {
@@ -493,7 +480,6 @@ export function selectPersonas(result: SensorGateResult, prompt?: string): Perso
   const dd = depthScore(result)
   let count: number
   // CPU-heavy task override — max 2 personas for build/typecheck/compile
-  const CPU_HEAVY_RE = /\b(typecheck|type.?check|tsc|build|compile|compilation|bun run build)\b/i
   const isCpuHeavy = CPU_HEAVY_RE.test(result.intent)
   if (isCpuHeavy) {
     count = Math.min(2, Math.max(1, Math.ceil(dd / 2)))
@@ -506,9 +492,9 @@ export function selectPersonas(result: SensorGateResult, prompt?: string): Perso
   }
   count = Math.min(count, deduped.length)
 
-  if (count < 1 && !(prompt && isWindowsRelated(prompt))) return []
+  if (count < 1) return []
 
-  const selected = overlapCheck(deduped.slice(0, count).map((s) => ({
+  return overlapCheck(deduped.slice(0, count).map((s) => ({
     name: s.profile.name,
     role: s.profile.role,
     focus: s.profile.focus,
@@ -517,24 +503,6 @@ export function selectPersonas(result: SensorGateResult, prompt?: string): Perso
     goals: dynamicGoalsFor(s.profile, result.intent),
     synthesisGuide: dynamicSynthesisFor(s.profile),
   })))
-
-  // Append Bill Gates if Windows-related
-  if (prompt && isWindowsRelated(prompt) && !selected.find((p) => p.name === "Bill Gates")) {
-    const billProfile = PERSONA_PROFILES.find((p) => p.name === "Bill Gates")
-    if (billProfile) {
-      selected.push({
-        name: billProfile.name,
-        role: billProfile.role,
-        focus: billProfile.focus,
-        skills: billProfile.skills,
-        task: dynamicTaskFor(billProfile, result.intent),
-        goals: dynamicGoalsFor(billProfile, result.intent),
-        synthesisGuide: dynamicSynthesisFor(billProfile),
-      })
-    }
-  }
-
-  return selected
 }
 
 export interface SensorGateResult {
@@ -657,6 +625,7 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
       const trimmed = line.trim()
       if (trimmed.startsWith("- name:")) {
         if (currentPersona?.name) {
+          // eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion
           result.personas.push(currentPersona as Persona)
         }
         currentPersona = { name: trimmed.slice(7).trim(), role: "", focus: "", skills: [] }
@@ -669,6 +638,7 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
       }
     }
     if (currentPersona?.name) {
+      // eslint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       result.personas.push(currentPersona as Persona)
     }
   }
@@ -689,8 +659,11 @@ export function parseSensorGateOutput(output: string): SensorGateResult {
 // Re-export resolveSkillsDir and resolveScript from python-resolver for backward compatibility
 export { resolveSkillsDir, resolveScript } from "./python-resolver"
 
-const INITIAL_TIMEOUT_MS = 150_000
-const RETRY_TIMEOUT_MS = 300_000
+// Reduced timeouts: sensor gate is a quick Python classification (pattern matching only).
+// 30s/60s is generous for a pure pattern-matching script. Previous 150s/300s was causing
+// users to wait 2.5-5 minutes before seeing fallback persona generation (over-spawning).
+const INITIAL_TIMEOUT_MS = 30_000
+const RETRY_TIMEOUT_MS = 60_000
 
 /** Shared retry-with-timeout: runs the effect with INITIAL_TIMEOUT, then RETRY_TIMEOUT on null. */
 function retryWithTimeout<T>(run: (timeoutMs: number) => Effect.Effect<T | null>): Effect.Effect<T | null> {
@@ -706,36 +679,10 @@ function runSensorGateEffect(
   prompt: string,
   projectRoot: string,
 ): Effect.Effect<SensorGateResult | null> {
-  const resolveSkillsDir_ = resolveSkillsDir()
   const sensorGate = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
-  console.warn(`[sensor-gate-diag] resolveSkillsDir=${resolveSkillsDir_} execPath=${typeof process !== "undefined" ? process.execPath : "N/A"}`)
-  console.warn(`[sensor-gate-diag] resolveScript sensor_gate.py=${sensorGate ?? "NOT FOUND"} projectRoot=${projectRoot}`)
   if (!sensorGate) {
-    console.warn("[sensor-gate] sensor_gate.py not found — using TypeScript fallback personas")
-    // Return a default result so TS fallback personas are generated instead of returning null.
-    // Returning null causes processSensorGatePhase to be skipped entirely.
-    return Effect.succeed({
-      confidence: 0.5,
-      risk_level: "medium" as const,
-      domain_tags: [] as string[],
-      chain: [] as string[],
-      personas: [] as Persona[],
-      mode: "STANDARD" as const,
-      intent: prompt.slice(0, 200),
-      is_social_greeting: false,
-      complexity: "medium" as const,
-      // ── Defaults for missing fields ───────────
-      time_sensitivity: "medium" as const,
-      requires_tools: "files",
-      deliverable_type: "multi",
-      primary_skill: "",
-      support_skills: [] as string[],
-      automation: "none" as const,
-      guardian_decision: "APPROVED" as const,
-      guardian_risk: "low" as const,
-      skill_plan: "",
-      raw_output: "[Fallback: sensor_gate.py not found]",
-    })
+    debugLog("[sensor-gate] sensor_gate.py not found in any skills directory")
+    return Effect.succeed(null)
   }
 
   const clamped = prompt.length > SAFE_PROMPT_MAX
@@ -753,12 +700,11 @@ function runSensorGateEffect(
       try {
         tmpFile = writePromptToTmpFile(clamped, projectRoot, "sg-")
         debugLog("[sensor-gate] temp file created:", tmpFile)
-        console.warn(`[sensor-gate-diag] temp file created: ${tmpFile}`)
       } catch (e) {
         // Temp file creation failed — do NOT fall back to --prompt CLI arg
         // which would leak the prompt in process listings.
-        console.warn("[sensor-gate] failed to create tmp file:", e)
-        return yield* Effect.fail(new Error(`[sensor-gate] Failed to create temp file for prompt: ${e}`))
+        debugLog("[sensor-gate] failed to create tmp file:", e)
+        return yield* Effect.fail(new Error(`[sensor-gate] Failed to create temp file for prompt: ${String(e)}`))
       }
 
       // Cross-platform Python resolution with fallback chain.
@@ -784,11 +730,11 @@ function runSensorGateEffect(
                   PROJECT_ROOT: projectRoot,
                 },
               })
-              const text = await new Response(proc.stdout as ReadableStream<Uint8Array>).text()
+              const text = await new Response(proc.stdout as ReadableStream<Uint8Array>).text() // eslint-disable-line typescript-eslint/no-unsafe-type-assertion
               // Wait for process to fully exit before checking output
               // Without this, Windows may close pipes before the process flushes
               await proc.exited
-              const stderrText = await new Response(proc.stderr as ReadableStream<Uint8Array>).text().catch(() => "")
+              const stderrText = await new Response(proc.stderr as ReadableStream<Uint8Array>).text().catch(() => "") // eslint-disable-line typescript-eslint/no-unsafe-type-assertion
               if (stderrText.trim()) {
                 debugLog("[sensor-gate] python subprocess stderr:", stderrText.slice(0, 2000))
               }
@@ -803,7 +749,7 @@ function runSensorGateEffect(
               lastError = e
             }
           }
-          console.warn("[sensor-gate] ALL Python commands failed:", lastError)
+          debugLog("[sensor-gate] ALL Python commands failed:", lastError)
           return "" as string
         }
       ).pipe(
@@ -822,8 +768,9 @@ function runSensorGateEffect(
       // Clean up temp file
       cleanupTmpFile(tmpFile)
       if (!output) {
+        console.warn("[sensor-gate] Python subprocess returned EMPTY output — returning default result for fallback persona generation")
         debugLog("[sensor-gate] empty output from subprocess — returning default result")
-        return parseSensorGateOutput("")
+        return defaultSensorGateResult()
       }
       return parseSensorGateOutput(output)
     }).pipe(
@@ -841,7 +788,7 @@ export function validateNeuroOutput(output: string): string | null {
   // Parse the LAST complete JSON object from the output to handle this.
   const lines = output.trim().split("\n")
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!.trim()
+    const line = (lines[i] ?? "").trim()
     if (!line.startsWith("{")) continue
     try {
       const parsed = JSON.parse(line)
@@ -937,8 +884,19 @@ function runNeuroHarnessEffect(
   return retryWithTimeout(runWithTimeout)
 }
 
+export function defaultSensorGateResult(): SensorGateResult {
+  return {
+    intent: "", domain_tags: [], risk_level: "medium", confidence: 0.5,
+    complexity: "medium", time_sensitivity: "medium", requires_tools: "files",
+    deliverable_type: "multi", is_social_greeting: false, primary_skill: "",
+    support_skills: [], automation: "none", mode: "STANDARD", chain: [],
+    personas: [], guardian_decision: "APPROVED", guardian_risk: "low",
+    skill_plan: "", raw_output: "",
+  }
+}
+
 export interface Interface {
-  readonly classify: (prompt: string) => Effect.Effect<SensorGateResult | null>
+  readonly classify: (prompt: string) => Effect.Effect<SensorGateResult>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@dreamcode/SensorGate") {}
@@ -946,37 +904,28 @@ export class Service extends Context.Service<Service, Interface>()("@dreamcode/S
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    // ─── Startup self-test: Verify sensor_gate.py is resolvable ──────
-    const sgResolve = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
-    const sgDir = resolveSkillsDir()
-    if (!sgResolve) {
-      yield* Effect.logWarning(`[SENSOR-GATE-DIAG] STARTUP FAIL: sensor_gate.py not resolvable. skillsDir=${sgDir}`)
-    } else {
-      yield* Effect.logWarning(`[SENSOR-GATE-DIAG] STARTUP OK: sensor_gate.py=${sgResolve} skillsDir=${sgDir}`)
-    }
-
     return Service.of({
       classify: Effect.fn("SensorGate.classify")(function* (prompt: string) {
         const ctx = yield* InstanceState.context
         const directory = ctx.directory
-        const resolveSkillsDirResult = resolveSkillsDir()
-        const sensorGateScript = resolveScriptImpl("chain-orchestrator/scripts/sensor_gate.py")
-        yield* Effect.logDebug(`[SENSOR-GATE-DIAG] classify called directory=${directory} promptLen=${prompt.length} resolveSkillsDir=${resolveSkillsDirResult} sensorGateScript=${sensorGateScript ?? "NULL"} python=${resolvePythonCommand()}`)
-
         const result = yield* runSensorGateEffect(prompt, directory)
-        yield* Effect.logDebug(`[SENSOR-GATE-DIAG] classify result=${result ? "OK" : "NULL"} personas=${result?.personas?.length ?? 0} mode=${result?.mode ?? "N/A"} domain_tags=${(result?.domain_tags ?? []).join(",")}`)
-        if (!result) return null
+        if (!result) {
+          debugLog("[sensor-gate] classify: sensor gate returned null — using default result")
+          return defaultSensorGateResult()
+        }
+
+        // Optimize chain: cap at MAX_CHAIN_SIZE, score by prompt relevance
+        optimizeChain(result, prompt)
 
         // Generate personas from TypeScript when Python script doesn't output them
         if (result.personas.length === 0) {
-          result.personas = selectPersonas(result, prompt)
-          // Fallback: when Python script fails (empty domain_tags = default result),
-          // selectPersonas() returns [] because there are no tags to match.
-          // Generate fallback personas so natural prompts can still trigger spawning.
-          // Defense-in-depth: also check the raw prompt for social greetings, since Python's
-          // social greeting early-return produces empty stdout and is_social_greeting is false.
+          result.personas = selectPersonas(result)
+          // Fallback: ONLY when Python script produced NO domain_tags (empty/default result).
+          // If Python produced domain_tags but no personas, the tag matching failed legitimately
+          // and we should NOT override Python's classification with a blind fallback.
+          // Defense-in-depth: also check the raw prompt for social greetings.
           const promptIsSocialGreeting = result.is_social_greeting || SOCIAL_GREETING_RE.test(prompt.trim())
-          if (result.personas.length === 0 && !promptIsSocialGreeting) {
+          if (result.personas.length === 0 && result.domain_tags.length === 0 && !promptIsSocialGreeting) {
             // Use question complexity to determine fallback count instead of hardcoded 3.
             // If we have active rated questions, use their max complexity; otherwise default to medium.
             const complexity: ComplexityLevel = result.complexity === "high" ? "high"
@@ -984,8 +933,9 @@ export const layer = Layer.effect(
               : result.risk_level === "high" ? "high"
               : result.risk_level === "medium" ? "medium"
               : "low"
-            const spawnConfig = COMPLEXITY_SPAWN_MAP[complexity]
-            const fallbackMax = Math.min(spawnConfig.max, PERSONA_PROFILES.length)
+            // Use midpoint (spawnCountForComplexity) not max — prevents always spawning
+            // max count when Python fails. E.g. medium complexity → 2 not 3.
+            const fallbackMax = Math.min(spawnCountForComplexity(complexity), PERSONA_PROFILES.length)
             // Use depthScore + minComplexity to select relevant personas instead of blind first-N.
             // Simple tasks (depth 1-2) get only foundation personas (minComplexity=1).
             // Complex tasks (depth 3-5) get specialized and advanced personas too.
@@ -994,7 +944,7 @@ export const layer = Layer.effect(
               .filter((p) => p.minComplexity <= taskDepth)
               .sort((a, b) => a.minComplexity - b.minComplexity) // foundation first
             const fallbackCount = Math.min(fallbackMax, eligible.length)
-            debugLog(`[sensor-gate] fallback personas: complexity=${complexity}, taskDepth=${taskDepth}, count=${fallbackCount}`)
+            console.warn(`[sensor-gate] FALLBACK personas: complexity=${complexity}, taskDepth=${taskDepth}, count=${fallbackCount}, eligible=${eligible.length}`)
             result.personas = eligible.slice(0, fallbackCount).map((p) => ({
               name: p.name,
               role: p.role,
@@ -1004,6 +954,15 @@ export const layer = Layer.effect(
               goals: dynamicGoalsFor(p, result.intent || prompt.slice(0, 200)),
               synthesisGuide: dynamicSynthesisFor(p),
             }))
+            // When fallback generates personas but Python produced no chain,
+            // set a minimum chain (["neuro"]) so the skill loading pipeline fires:
+            // chain executor runs, <script-result> blocks are injected,
+            // and the pre-turn skill enforcer prompts the agent to load skills.
+            // Without this, chain.length === 0 silences the enforcer completely.
+            if (result.chain.length === 0 && result.personas.length > 0) {
+              result.chain = ["neuro"]
+              debugLog(`[sensor-gate] fallback chain set to [neuro] for skill loading`)
+            }
           }
         } else {
           // Fill in dynamic task/goals/synthesisGuide for Python-provided personas
@@ -1037,25 +996,6 @@ export const layer = Layer.effect(
               goals: dynamicGoalsFor(d, result.intent),
               synthesisGuide: dynamicSynthesisFor(d),
             })
-          }
-        }
-
-        // ─── Bill Gates: Windows-specific persona ────────────────────
-        // If the prompt matches Windows-related patterns, inject Bill Gates
-        // as an ADDITIONAL persona regardless of what selectPersonas() returned.
-        if (isWindowsRelated(prompt)) {
-          const billProfile = PERSONA_PROFILES.find((p) => p.name === "Bill Gates")
-          if (billProfile && !result.personas.some((p) => p.name === "Bill Gates")) {
-            result.personas.push({
-              name: billProfile.name,
-              role: billProfile.role,
-              focus: billProfile.focus,
-              skills: billProfile.skills,
-              task: dynamicTaskFor(billProfile, result.intent || prompt.slice(0, 200)),
-              goals: dynamicGoalsFor(billProfile, result.intent || prompt.slice(0, 200)),
-              synthesisGuide: dynamicSynthesisFor(billProfile),
-            })
-            debugLog("[sensor-gate] Windows-related prompt detected — appended Bill Gates persona")
           }
         }
 

@@ -7,7 +7,7 @@
  * This module also resolves the path to Python scripts that are installed
  * alongside the dreamcode binary.
  */
-import { existsSync, statSync, appendFileSync, mkdirSync, writeFileSync, mkdtempSync, chmodSync, unlinkSync, rmdirSync, realpathSync } from "fs"
+import { existsSync, statSync, readdirSync, appendFileSync, mkdirSync, writeFileSync, mkdtempSync, chmodSync, unlinkSync, rmdirSync, realpathSync } from "fs"
 import { join, dirname, sep, resolve, isAbsolute } from "path"
 import { homedir } from "os"
 
@@ -143,48 +143,66 @@ export function getPythonArgs(cmd?: string): string[] {
 // ---------------------------------------------------------------------------
 // Skill Directory Name Aliases
 // ---------------------------------------------------------------------------
-// The source tree (src/skill/dreamcode/skills/) uses short names (api, data, etc.)
-// while the deployed directory (.dreamcode/skills/) uses descriptive names (api-design, etc.).
-// This mapping bridges the gap without filesystem changes.
+// The source tree and deployed directory now use consistent short names (api, data, etc.).
+// The alias map is maintained as a compatibility layer for any remaining
+// canonical-name lookups. All aliases are identity mappings.
 
 const SKILL_DIR_ALIASES: Record<string, string> = {
   // Sensor-gate canonical name → registered SKILL.md name
   // The sensor gate emits short names (api, data, git, ...) but SKILL.md
   // frontmatter may use descriptive names (api-design, data-science, ...).
   // This mapping bridges the gap so skillService.require() finds the right skill.
-  "api": "api-design",
-  "data": "data-science",
-  "git": "git-workflow",
-  "product": "product-thinking",
-  "python": "python-best-practices",
-  "quantum": "quantum-poc",
+  "api": "api",
+  "data": "data",
+  "git": "git",
+  "product": "product",
+  "python": "python",
+  "quantum": "quantum",
 }
 
 /**
- * Resolve a skill name to its actual registered skill name, checking aliases.
- * Checks the alias map first (canonical → registered), then falls back to
- * directory existence check, then returns the name as-is.
+ * Resolve a skill name to its actual registered skill name.
+ * Existence-first: prefer whatever directory actually exists on disk (canonical
+ * name, then aliased name), so resolution is robust to layout divergence between
+ * the bundled binary tree and the deployed global config skill tree.
  */
 export function resolveSkillDirName(canonicalName: string): string {
-  // Check alias map first (canonical sensor-gate name → registered SKILL.md name)
-  const aliased = SKILL_DIR_ALIASES[canonicalName]
-  if (aliased) return aliased
-
-  // If no alias, check if the name exists as a directory directly
   const skillsDir = resolveSkillsDir()
   if (skillsDir) {
+    const direct = join(skillsDir, canonicalName)
     try {
-      if (existsSync(join(skillsDir, canonicalName)) && statSync(join(skillsDir, canonicalName)).isDirectory()) {
-        return canonicalName
-      }
+      if (existsSync(direct) && statSync(direct).isDirectory()) return canonicalName
     } catch { /* fall through */ }
+
+    const aliased = SKILL_DIR_ALIASES[canonicalName]
+    if (aliased) {
+      const aliasedPath = join(skillsDir, aliased)
+      try {
+        if (existsSync(aliasedPath) && statSync(aliasedPath).isDirectory()) return aliased
+      } catch { /* fall through */ }
+    }
   }
+
+  const aliased = SKILL_DIR_ALIASES[canonicalName]
+  if (aliased) return aliased
   return canonicalName
 }
 
 /**
  * Resolve the skills directory path.
- * Checks multiple candidate locations in order.
+ *
+ * SINGLE SOURCE OF TRUTH: There is ONE canonical skills directory per install.
+ * The resolution order is:
+ *
+ * 1. DREAMCODE_SKILLS_DIR env var (explicit override)
+ * 2. Binary-bundled skills dir (dirname(process.execPath)/skills) — for compiled binaries
+ * 3. Global config dir (~/.config/dreamcode/skills) — for npm/bun installs
+ * 4. Project-local dir (./.dreamcode/skills) — for development within the dreamcode repo
+ *
+ * The old candidates (~/.dreamcode/skills, ~/.opencode/skills, ~/.config/opencode/skills,
+ * ./opencode/skills) have been REMOVED to eliminate the confusion of multiple parallel
+ * skill directories. Users running from the dreamcode repo should use ./packages/opencode/src/skill/dreamcode/skills
+ * (the source tree path) or set DREAMCODE_SKILLS_DIR explicitly.
  */
 export function resolveSkillsDir(): string {
   // Environment variable override (highest priority)
@@ -198,31 +216,35 @@ export function resolveSkillsDir(): string {
   }
 
   const candidates = [
-    // Check if scripts are bundled alongside the binary itself (release artifact)
-    ...(isWindows() ? [
-      join(dirname(process.execPath), "skills"),
-      join(HOME, "AppData", "Roaming", "dreamcode", "skills"),
-      join(HOME, "AppData", "Local", "dreamcode", "skills"),
-      ...(process.env.APPDATA ? [join(process.env.APPDATA, "dreamcode", "skills")] : []),
-      ...(process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, "dreamcode", "skills")] : []),
-    ] : [
-      join(dirname(process.execPath), "skills"),
-    ]),
-    // Standard XDG/Unix paths
+    // 1. Binary-bundled skills (release artifact): skills/ is copied next to the binary during build
+    join(dirname(process.execPath), "skills"),
+    // 2. Global config dir (XDG): ~/.config/dreamcode/skills
     join(HOME, ".config", "dreamcode", "skills"),
+    // 3. Legacy config dir: ~/.dreamcode/skills (backward compat for old installs)
     join(HOME, ".dreamcode", "skills"),
-    // Install dir path (cloned repo at ~/.dreamcode)
-    join(HOME, ".dreamcode", ".dreamcode", "skills"),
-    join(HOME, ".dreamcode", ".opencode", "skills"),
-    // Global opencode fallbacks
-    join(HOME, ".config", "opencode", "skills"),
-    join(HOME, ".opencode", "skills"),
+    // 4. Project-local dir: ./.dreamcode/skills (for development within dreamcode repo)
+    join(process.cwd(), ".dreamcode", "skills"),
+    // 5. Source tree path (for development / unbundled installs)
+    join(process.cwd(), "packages", "opencode", "src", "skill", "dreamcode", "skills"),
   ]
   for (const dir of candidates) {
     try {
       if (existsSync(dir) && statSync(dir).isDirectory()) {
-        debugLog("[python-resolver] found skills dir:", dir)
-        return dir
+        // Verify directory has at least one subdirectory with a SKILL.md file.
+        // Empty dirs (e.g. ~/.config/dreamcode/skills/ created by a prior run
+        // that exited before syncing) should NOT be accepted — they'd cause
+        // getAvailableSkills() to return [] and all skill lookups to fail.
+        const entries = readdirSync(dir)
+        const hasContent = entries.some((entry) => {
+          const subdir = join(dir, entry)
+          try { return statSync(subdir).isDirectory() && existsSync(join(subdir, "SKILL.md")) } catch { return false }
+        })
+        if (hasContent) {
+          debugLog("[python-resolver] found skills dir:", dir)
+          return dir
+        }
+        debugLog("[python-resolver] skills dir exists but empty:", dir)
+        continue // Don't stop at empty dirs — check next candidate
       }
       debugLog("[python-resolver] skills dir not found:", dir)
     } catch (e) {
@@ -297,16 +319,16 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
   }
   const skillsDir = resolveSkillsDir()
   const allowedGlobal = skillsDir ? resolve(skillsDir) : null
-  const allowedHome = resolve(HOME, ".dreamcode", "skills")
-  const allowedInstall = resolve(HOME, ".dreamcode", ".dreamcode", "skills")
-  // Allow project-local skills at <cwd>/.dreamcode/skills/...
-  // (used by integration tests and project-local skill installations)
-  const allowedCwd = cwd ? resolve(cwd, ".dreamcode", "skills") : null
+  const allowedBinary = resolve(dirname(process.execPath), "skills")
+  const allowedXdg = resolve(HOME, ".config", "dreamcode", "skills")
+  const allowedLegacy = resolve(HOME, ".dreamcode", "skills")
+  const allowedProject = resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
   return (
     (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
-    isUnderPrefix(realpath, allowedHome) ||
-    isUnderPrefix(realpath, allowedInstall) ||
-    (allowedCwd !== null && isUnderPrefix(realpath, allowedCwd))
+    isUnderPrefix(realpath, allowedBinary) ||
+    isUnderPrefix(realpath, allowedXdg) ||
+    isUnderPrefix(realpath, allowedLegacy) ||
+    isUnderPrefix(realpath, allowedProject)
   )
 }
 
@@ -331,9 +353,10 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
  */
 export const BASE_SUBPROCESS_ENV: Record<string, string | undefined> = {
   PATH: process.env.PATH,
-  HOME: process.env.HOME ?? process.env.USERPROFILE,
-  USERPROFILE: process.env.USERPROFILE,
+  HOME: process.env.HOME,
   PYTHONPATH: process.env.PYTHONPATH ?? "",
+  PYTHONIOENCODING: "utf-8",
+  PYTHONUTF8: "1",
 }
 
 

@@ -517,6 +517,7 @@ export interface Interface {
     partID: PartID
     field: string
     delta: string
+    value: string
   }) => Effect.Effect<void>
   /** Finds the first message matching the predicate, searching newest-first. */
   readonly findMessage: (
@@ -920,9 +921,34 @@ export const layer: Layer.Layer<
       messageID: MessageID
       partID: PartID
       field: string
+      /** Incremental delta text (for backward-compat PartDelta events). */
       delta: string
+      /** Full accumulated value (not a delta). Each call is an idempotent
+       *  overwrite so concurrent writes from different fibers always land
+       *  the authoritative in-memory text — no lost updates. */
+      value: string
     }) {
       yield* dieSyncError(events.publish(MessageV2.Event.PartDelta, input))
+      // Read-modify-write to preserve sibling fields (metadata, etc.) in
+      // the JSON blob while overwriting the target field idempotently.
+      // The SELECT is a single-row PK lookup — fast. The overwrite (not
+      // append) guarantees the DB converges to the in-memory truth even
+      // if concurrent fibers interleave.
+      const row = yield* db
+        .select()
+        .from(PartTable)
+        .where(and(eq(PartTable.session_id, input.sessionID), eq(PartTable.message_id, input.messageID), eq(PartTable.id, input.partID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return
+      const data = { ...row.data } as Record<string, unknown>
+      data[input.field] = input.value
+      yield* db
+        .update(PartTable)
+        .set({ data: data as any, time_updated: Date.now() })
+        .where(and(eq(PartTable.id, input.partID), eq(PartTable.session_id, input.sessionID)))
+        .run()
+        .pipe(Effect.orDie)
     })
 
     /** Finds the first message matching the predicate, searching newest-first. */

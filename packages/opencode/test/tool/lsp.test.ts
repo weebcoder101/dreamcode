@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import path from "path"
@@ -52,11 +53,22 @@ const lsp = Layer.succeed(
     prepareCallHierarchy: () => Effect.succeed([]),
     incomingCalls: () => Effect.succeed([]),
     outgoingCalls: () => Effect.succeed([]),
+    typeDefinition: () => Effect.succeed([]),
+    documentHighlight: () => Effect.succeed([]),
+    codeAction: () => Effect.succeed([]),
+    rename: () => Effect.succeed({}),
   }),
 )
 
 const it = testEffect(
-  Layer.mergeAll(Agent.defaultLayer, FSUtil.defaultLayer, CrossSpawnSpawner.defaultLayer, Truncate.defaultLayer, lsp),
+  Layer.mergeAll(
+    Agent.defaultLayer,
+    FSUtil.defaultLayer,
+    CrossSpawnSpawner.defaultLayer,
+    Truncate.defaultLayer,
+    Layer.succeed(PluginBoot.Service, { wait: () => Effect.void }),
+    lsp,
+  ),
 )
 
 const init = Effect.fn("LspToolTest.init")(function* () {

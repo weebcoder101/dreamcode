@@ -1,58 +1,4 @@
-/**
- * ========================================================
- * IMPORTANT: Stale Selection Contract
- * ========================================================
- *
- * The renderer (@opentui/core) maintains a Selection object that can outlive
- * the renderable nodes it references. When renderables are destroyed (e.g.
- * during dialog.clear()), getSelection() STILL returns the Selection object,
- * but getSelectedText() on the destroyed nodes returns "" because the text
- * extraction walks a now-empty tree.
- *
- * This means:
- *   - getSelection() !== null  DOES NOT mean there is valid selected text
- *   - getSelectedText() === "" CAN indicate a stale selection
- *   - Callers MUST NOT treat "selection exists" as a binary dismiss guard
- *   - Callers MUST treat empty-text selections as stale and clear them
- *
- * The functions in this file handle this correctly. External callers should
- * use hasTextSelection() and clearStaleSelection() rather than calling
- * getSelection() directly.
- * ========================================================
- */
-
 import type { ClipboardService } from "../context/clipboard"
-
-/** Standardized selection guard result: true = handler should return (text selected) */
-export function hasTextSelection(renderer: Renderer): boolean {
-  const sel = renderer.getSelection()
-  if (!sel) return false
-  const text = sel.getSelectedText()
-  if (!text) {
-    // Stale selection: object exists but all referenced nodes are destroyed.
-    // Clear it so downstream guards see getSelection() === null.
-    renderer.clearSelection()
-    return false
-  }
-  return true
-}
-
-/**
- * Proactively clear any stale selection at the outermost event boundary.
- * Returns true if a stale selection was found and cleared.
- *
- * Call this ONCE at the root of an event handler before any per-component
- * selective handlers run. This eliminates the need for individual call sites
- * to reason about stale selection — they simply see getSelection() === null.
- */
-export function clearStaleSelection(renderer: Renderer): boolean {
-  const sel = renderer.getSelection()
-  if (!sel) return false
-  const text = sel.getSelectedText()
-  if (text) return false
-  renderer.clearSelection()
-  return true
-}
 
 type Toast = {
   show: (input: { message: string; variant: "info" | "success" | "warning" | "error" }) => void
@@ -119,20 +65,15 @@ export function handleSelectionKey(
 
   if (event.name === "escape") {
     renderer.clearSelection()
-    // Do NOT stopPropagation — the dialog's own Esc binding needs to fire
-    // in the same keypress to actually dismiss the overlay. Stopping here
-    // forces a second Esc press.
     event.preventDefault()
+    event.stopPropagation()
     return
   }
 
-  // Do NOT clear selection on arbitrary keypresses — doing so on Linux
-  // breaks terminal-native mouse selection (primary buffer copy). The
-  // stale-selection defense is handled by hasTextSelection() /
-  // clearStaleSelection() at mouse-event boundaries and by the dialog
-  // Esc handler.
   const focus = renderer.currentFocusedRenderable
   if (focus?.hasSelection() && selection.selectedRenderables.includes(focus)) return
+
+  renderer.clearSelection()
 }
 
 export * as Selection from "./selection"

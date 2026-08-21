@@ -10,7 +10,6 @@
 // back to the usual two-press exit sequence through RunFooter.requestExit().
 import path from "path"
 import { CliRenderEvents, createCliRenderer, type CliRenderer, type ScrollbackWriter } from "@opentui/core"
-import fs from "node:fs"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { Global } from "@opencode-ai/core/global"
 import { openEditor } from "@opencode-ai/tui/editor"
@@ -186,9 +185,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       stdin: source.stdin,
       targetFps: 30,
       maxFps: 60,
-      // Enable SGR mouse mode for subagent tab clicking, model selection, etc.
-      // On Linux terminals, hold Shift while dragging to select/copy text.
-      useMouse: true,
+      useMouse: false,
       autoFocus: false,
       openConsoleOnError: false,
       exitOnCtrlC: false,
@@ -374,12 +371,6 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
           width = renderer.terminalWidth
           height = renderer.terminalHeight
-          try {
-            fs.appendFileSync(
-              "/tmp/dreamcode-diag.log",
-              `[${Date.now()}] RESIZE-FIRE oldWidth=${width} oldHeight=${height} newWidth=${renderer.terminalWidth} newHeight=${renderer.terminalHeight}\n`,
-            )
-          } catch {}
           fn()
         }
         renderer.on(CliRenderEvents.RESIZE, resize)

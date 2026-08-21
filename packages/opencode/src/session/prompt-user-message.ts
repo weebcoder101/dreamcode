@@ -22,7 +22,7 @@ import { Image } from "@/image/image"
 import { LSP } from "@/lsp/lsp"
 import { Session } from "./session"
 
-export const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput & {
+export var createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput & {
   sessions: any
   agents: any
   provider: Provider.Interface

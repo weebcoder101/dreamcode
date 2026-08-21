@@ -2,14 +2,14 @@ import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
-import { EventV2Bridge } from "@/event-v2-bridge"
 import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Session } from "@/session/session"
-import type { SessionPrompt } from "../../src/session/prompt"
+import type { PromptInput } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -22,6 +22,9 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { saveSubagentModel, clearSubagentModel } from "../../src/cli/cmd/run/variant.shared"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -36,16 +39,18 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Layer.mergeAll(
     Agent.defaultLayer,
     BackgroundJob.defaultLayer,
-    EventV2Bridge.defaultLayer,
     Config.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
-    Session.defaultLayer,
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
     Truncate.defaultLayer,
     ToolRegistry.defaultLayer,
     Database.defaultLayer,
+    Layer.succeed(PluginBoot.Service, { wait: () => Effect.void }),
     RuntimeFlags.layer(flags),
+    LayerNode.buildLayer(
+      LayerNode.group([Session.node, SessionProjector.node, Database.node]),
+    ),
   ).pipe(Layer.provide(Ripgrep.defaultLayer))
 
 const it = testEffect(layer())
@@ -89,7 +94,7 @@ const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   return { chat, assistant }
 })
 
-function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void; text?: string }): TaskPromptOps {
+function stubOps(opts?: { onPrompt?: (input: PromptInput) => void; text?: string }): TaskPromptOps {
   return {
     cancel: () => Effect.void,
     resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
@@ -101,7 +106,7 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
   }
 }
 
-function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
+function reply(input: PromptInput, text: string): SessionV1.WithParts {
   const id = MessageID.ascending()
   return {
     info: {
@@ -216,8 +221,13 @@ describe("tool.task", () => {
       const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
-      const promptOps = stubOps({ text: "resumed", onPrompt: (input) => (seen = input) })
+      let seen: PromptInput | undefined
+      const promptOps = stubOps({
+        text: "resumed",
+        onPrompt: (input) => {
+          if (input.agent === "general") seen = input
+        },
+      })
 
       const result = yield* def.execute(
         {
@@ -299,7 +309,7 @@ describe("tool.task", () => {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      const ready = defer<SessionPrompt.PromptInput>()
+      const ready = defer<PromptInput>()
       const cancelled = defer<SessionID>()
       const abort = new AbortController()
       const promptOps: TaskPromptOps = {
@@ -344,14 +354,119 @@ describe("tool.task", () => {
     }),
   )
 
+  it.instance("subagent uses user-selected subagentModel over parent model", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let seen: PromptInput | undefined
+      const promptOps = stubOps({ onPrompt: (input) => { if (!seen) seen = input } })
+
+      const userPick = {
+        providerID: ProviderV2.ID.make("openai"),
+        modelID: ModelV2.ID.make("gpt-5"),
+      }
+      saveSubagentModel(userPick)
+      try {
+        const result = yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        expect(result.metadata.sessionId).toBeTruthy()
+        expect(String(seen?.model?.modelID)).toBe("gpt-5")
+        expect(String(seen?.model?.providerID)).toBe("openai")
+      } finally {
+        clearSubagentModel()
+      }
+    }),
+  )
+
+  it.instance("aborted subagent still propagates billed cost to parent session", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const ready = defer<PromptInput>()
+      const cancelled = defer<SessionID>()
+      const abort = new AbortController()
+      const promptOps: TaskPromptOps = {
+        cancel: (sessionID) =>
+          Effect.sync(() => {
+            cancelled.resolve(sessionID)
+          }),
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.promise(() => {
+            ready.resolve(input)
+            return cancelled.promise
+          }).pipe(
+            Effect.as({
+              ...reply(input, "partial"),
+              info: { ...reply(input, "partial").info, cost: 0.15, tokens: { input: 1000, output: 500, reasoning: 0, cache: { read: 0, write: 0 } } },
+            }),
+          ),
+      }
+
+      const fiber = yield* def
+        .execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: abort.signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.forkChild)
+
+      const input = yield* Effect.promise(() => ready.promise)
+      abort.abort()
+      yield* Effect.promise(() => cancelled.promise)
+      yield* Fiber.await(fiber)
+
+      // The parent session row must include the child's billed cost even though
+      // the task was aborted (propagateCostToParent writes a step-finish part).
+      const parent = yield* sessions.get(chat.id)
+      expect(parent.cost).toBeGreaterThan(0)
+    }),
+  )
+
   it.instance("execute creates a child when task_id does not exist", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
-      const promptOps = stubOps({ text: "created", onPrompt: (input) => (seen = input) })
+      let seen: PromptInput | undefined
+      const promptOps = stubOps({
+        text: "created",
+        onPrompt: (input) => {
+          if (input.agent === "general") seen = input
+        },
+      })
 
       const result = yield* def.execute(
         {
@@ -389,7 +504,7 @@ describe("tool.task", () => {
         const { chat, assistant } = yield* seed()
         const tool = yield* TaskTool
         const def = yield* tool.init()
-        let seen: SessionPrompt.PromptInput | undefined
+        let seen: PromptInput | undefined
         const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
 
         const result = yield* def.execute(
@@ -491,7 +606,7 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const ready = yield* Deferred.make<void>()
       const done = yield* Deferred.make<void>()
-      const injected = yield* Deferred.make<SessionPrompt.PromptInput>()
+      const injected = yield* Deferred.make<PromptInput>()
       let runs = 0
       const promptOps: TaskPromptOps = {
         cancel: () => Effect.void,
@@ -595,8 +710,8 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const first = defer<void>()
       const second = defer<void>()
-      const updated = defer<SessionPrompt.PromptInput>()
-      const injected = defer<SessionPrompt.PromptInput>()
+      const updated = defer<PromptInput>()
+      const injected = defer<PromptInput>()
       let prompts = 0
       const promptOps: TaskPromptOps = {
         ...stubOps(),

@@ -38,3 +38,28 @@ export function isOverflow(input: {
     input.tokens.total || input.tokens.input + input.tokens.output + input.tokens.cache.read + input.tokens.cache.write
   return count >= usable(input)
 }
+
+// ─── Soft compaction trigger (HARNESS-IMPROVEMENT-PLAN §3.5) ──────────────
+// Proactively compact at 70% context utilization BEFORE quality degrades.
+// Research shows performance degrades *before* the hard limit — triggering
+// at 70% avoids the cliff. Returns true if utilization exceeds the soft
+// threshold but hasn't yet hit the hard overflow.
+const SOFT_COMPACTION_THRESHOLD = 0.70
+
+export function isSoftOverflow(input: {
+  cfg: ConfigV1.Info
+  tokens: SessionV1.Assistant["tokens"]
+  model: Provider.Model
+  outputTokenMax?: number
+}): boolean {
+  if (input.cfg.compaction?.auto === false) return false
+  if (input.model.limit.context === 0) return false
+
+  const usableTokens = usable(input)
+  if (usableTokens === 0) return false
+
+  const count =
+    input.tokens.total || input.tokens.input + input.tokens.output + input.tokens.cache.read + input.tokens.cache.write
+  // Soft trigger: between 70% and 100% of usable context
+  return count >= usableTokens * SOFT_COMPACTION_THRESHOLD && count < usableTokens
+}

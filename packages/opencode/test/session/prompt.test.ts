@@ -37,6 +37,8 @@ import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
+import { SelfEvolve } from "../../src/skill/self-evolve"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@opencode-ai/core/session"
@@ -152,6 +154,10 @@ const lsp = Layer.succeed(
     prepareCallHierarchy: () => Effect.succeed([]),
     incomingCalls: () => Effect.succeed([]),
     outgoingCalls: () => Effect.succeed([]),
+    typeDefinition: () => Effect.succeed([]),
+    documentHighlight: () => Effect.succeed([]),
+    codeAction: () => Effect.succeed([]),
+    rename: () => Effect.succeed({}),
   }),
 )
 
@@ -213,6 +219,11 @@ function makePrompt(input?: { processor?: "blocking" }) {
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    SelfEvolve.defaultLayer,
+    Layer.succeed(PluginBoot.Service, {
+      add: () => Effect.void,
+      boot: () => Effect.void,
+    } as any),
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))

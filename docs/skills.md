@@ -1,6 +1,6 @@
-# Skills Reference — 37 Native Skills
+# Skills Reference — 36 Native Skills
 
-DreamCode has 37 native skills organized in a dynamic dependency graph. Each skill is a TypeScript tool, not an external script.
+DreamCode has 36 native skills organized in a dynamic dependency graph. Each skill is a TypeScript tool, not an external script.
 
 ## Skill Categories
 
@@ -50,11 +50,12 @@ DreamCode has 37 native skills organized in a dynamic dependency graph. Each ski
 | `git-feature-workflow` | Structured feature branch workflow | Feature development |
 | `devops` | CI/CD, Docker, deployment, infrastructure | Deployment/infra tasks |
 
-### SPECIALIZED (5) — Domain-specific analysis
+### SPECIALIZED (6) — Domain-specific analysis
 
 | Skill | Description | Activation |
 |-------|-------------|------------|
 | `quantum-poc` | Quantum computing proof-of-concept | Quantum-related tasks |
+| `quantum-smart` | Execution-verified Qiskit patterns (distilled from the trained harness adapter: GHZ, Grover, QFT, teleportation, VQE, encoding; always verify by execution) | Qiskit/PennyLane circuit coding |
 | `data-science` | Data analysis, ML pipeline, visualization | Data tasks |
 | `research` | Information gathering, literature review | Research requests |
 | `deep-research` | Comprehensive multi-source investigation | Complex research |

@@ -2,7 +2,7 @@ name: Dreamcode CI
 
 on:
   push:
-    branches: [main, dev, ci]
+    branches: [stable-release, dev]
   pull_request:
   workflow_dispatch:
 
@@ -62,7 +62,7 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - name: Build dreamcode binary
-        run: bun run packages/opencode/script/build.ts --single
+        run: bun run packages/opencode/script/build.ts
       - name: Binary smoke test
         run: |
           chmod +x packages/opencode/dist/dreamcode-linux-x64/bin/dreamcode

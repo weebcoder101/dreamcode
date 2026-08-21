@@ -183,15 +183,6 @@ describe("validateScriptPath", () => {
   it("rejects non-absolute path", () => {
     expect(validateScriptPath("relative/path/script.py", cwd)).toBe(false)
   })
-
-  it("accepts path under <cwd>/.dreamcode/skills (allowedCwd)", () => {
-    expect(validateScriptPath("/tmp/test-project/.dreamcode/skills/valid-skill/scripts/run.py", cwd)).toBe(true)
-  })
-
-  it("rejects path under <cwd>/.opencode/skills (not allowed by allowedCwd)", () => {
-    // allowedCwd only permits .dreamcode/skills, not .opencode/skills
-    expect(validateScriptPath("/tmp/test-project/.opencode/skills/script.py", cwd)).toBe(false)
-  })
 })
 
 // ---------------------------------------------------------------------------

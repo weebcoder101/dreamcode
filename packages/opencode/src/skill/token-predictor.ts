@@ -15,7 +15,7 @@
 import { Effect } from "effect"
 import { resolvePythonCommand, resolveSkillsDir, getPythonArgs, writePromptToTmpFile, cleanupTmpFile, validateScriptPath, BASE_SUBPROCESS_ENV } from "./python-resolver.js"
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker.js"
-import { categorizeQuestion } from "./question-complexity-schema.js"
+import { categorizeQuestion, parseComplexityLevel } from "./question-complexity-schema.js"
 import { createHash } from "crypto"
 import path from "path"
 
@@ -115,7 +115,7 @@ const generateImpl = (params: {
         neuroTmpFile = writePromptToTmpFile(params.neuroResult, cwd, "tp-neuro-")
       }
     } catch (e) {
-      return yield* Effect.fail(`Failed to create temp files: ${e}`)
+      return yield* Effect.fail(`Failed to create temp files: ${String(e)}`)
     }
 
     // Build args — use temp file paths instead of inline data to avoid ps aux leaks
@@ -187,24 +187,25 @@ const generateImpl = (params: {
     }
 
     // Parse JSON output
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(result.stdout) as {
-        questions: Array<{ question: string; complexity: string }>
-        max_complexity: string
-        context_hash: string
-        signals: Record<string, boolean>
-        project_context: string
-        timestamp: string
-      },
-      catch: () => `Failed to parse predictor output: ${result.stdout.slice(0, 500)}`,
-    })
+    const parsed: {
+      questions: Array<{ question: string; complexity: string }>
+      max_complexity: string
+      context_hash: string
+      signals: Record<string, boolean>
+      project_context: string
+      timestamp: string
+    } = JSON.parse(result.stdout)
+    // Validate shape minimally
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.questions)) {
+      return yield* Effect.fail(`Predictor output missing 'questions' array: ${result.stdout.slice(0, 500)}`)
+    }
 
     predictorBreaker.recordSuccess()
 
     // Map to typed result — use real SHA-256 hashes for dedup
     const questions: ShippingQuestion[] = parsed.questions.map((q) => ({
       question: typeof q === "string" ? q : q.question,
-      complexity: (typeof q === "object" && "complexity" in q ? q.complexity : "low") as "low" | "medium" | "high",
+      complexity: parseComplexityLevel(typeof q === "object" && "complexity" in q ? q.complexity : "low"),
       questionHash: createHash("sha256").update((typeof q === "string" ? q : q.question).toLowerCase().trim()).digest("hex"),
       category: categorizeQuestion(typeof q === "string" ? q : q.question),
     }))
@@ -213,7 +214,7 @@ const generateImpl = (params: {
 
     return {
       questions,
-      maxComplexity: (parsed.max_complexity ?? "low") as "low" | "medium" | "high",
+      maxComplexity: parseComplexityLevel(parsed.max_complexity ?? "low"),
       contextHash: parsed.context_hash,
       signals: parsed.signals,
       projectContext: parsed.project_context,

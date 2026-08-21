@@ -53,15 +53,15 @@ function lock(file: string) {
   return `plugin-meta:${file}`
 }
 
-function fileTarget(spec: string, target: string) {
+function fileTarget(spec: string, target: string): string | undefined {
   if (spec.startsWith("file://")) return fileURLToPath(spec)
   if (target.startsWith("file://")) return fileURLToPath(target)
-  return
+  return undefined
 }
 
-async function modifiedAt(file: string) {
+async function modifiedAt(file: string): Promise<number | undefined> {
   const stat = await Filesystem.statAsync(file)
-  if (!stat) return
+  if (!stat) return undefined
   const mtime = stat.mtimeMs
   return Math.floor(typeof mtime === "bigint" ? Number(mtime) : mtime)
 }

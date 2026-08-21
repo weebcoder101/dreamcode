@@ -26,9 +26,14 @@ export const layer = Layer.effect(
 
     yield* db.run("PRAGMA journal_mode = WAL")
     yield* db.run("PRAGMA synchronous = NORMAL")
-    yield* db.run("PRAGMA busy_timeout = 5000")
+    // 30s write-lock wait: multiple dreamcode processes can share one SQLite
+    // DB (WAL mode allows one writer at a time). The old 5s busy_timeout made
+    // writes fail with LockTimeoutError whenever a checkpoint or another
+    // process held the lock longer than 5s. 30s queues the write instead.
+    yield* db.run("PRAGMA busy_timeout = 30000")
     yield* db.run("PRAGMA cache_size = -64000")
     yield* db.run("PRAGMA foreign_keys = ON")
+    yield* db.run("PRAGMA wal_autocheckpoint = 1000")
     yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
     yield* DatabaseMigration.apply(db)
 

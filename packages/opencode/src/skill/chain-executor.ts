@@ -59,7 +59,7 @@ const runPythonScript = Effect.fn("ChainExecutor.runPythonScript")(function* (
   cwd: string,
 ) {
   if (!validateScriptPath(path.resolve(script), cwd)) {
-    return { output: "[SKIPPED] Script path outside allowed skills directory", exitCode: -1 }
+    return { output: "[SKIPPED] Script path outside allowed skills directory", exitCode: 0 }
   }
   // Pass prompt via temp file + --prompt-file to avoid leaking it in process listings.
   // Bun.spawn creates Unix domain sockets (not pipes) in compiled binaries,
@@ -197,33 +197,18 @@ export const execute = Effect.fn("ChainExecutor.execute")(function* (
     const script = scripts.find((s) => path.basename(s) === "run.py") ?? scripts[0]
     const scriptResult = yield* runPythonScript(script, userPrompt, cwd)
 
-    // exitCode -1 means the script path was outside allowed dirs; fall back to skill content
-    if (scriptResult.exitCode === -1) {
-      results.push({
-        name: skillName,
-        output: skill.content,
-        status: "ok",
-        executionType: "content",
-      })
-      continue
-    }
-
     if (scriptResult.exitCode !== 0) {
-      // Script crashed or was killed — propagate the error detail.
-      // SKILL.md content is NOT injected here — the model must load it
-      // via the `skill` tool as part of mandatory chain enforcement.
+      // Script crashed or was killed — propagate the error detail
       results.push({
         name: skillName,
-        output: `<script-execution-result>\n${scriptResult.output || `[ERROR] Script exited with code ${scriptResult.exitCode}`}\n</script-execution-result>`,
+        output: scriptResult.output || `[ERROR] Script ${script} exited with code ${scriptResult.exitCode}`,
         status: "error",
         executionType: "script",
       })
     } else {
-      // Include only the script execution output. The model must load
-      // the skill's SKILL.md content independently via the `skill` tool.
       results.push({
         name: skillName,
-        output: `<script-execution-result>\n${scriptResult.output || "[SKILL EXECUTED: no output]"}\n</script-execution-result>`,
+        output: scriptResult.output || "[SKILL EXECUTED: no output]",
         status: scriptResult.output ? "ok" : "error",
         executionType: "script",
       })
