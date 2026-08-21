@@ -575,13 +575,18 @@ export const TaskTool = Tool.define(
         if (session?.model) {
           return { modelID: ModelV2.ID.make(session.model.id), providerID: ProviderV2.ID.make(session.model.providerID) }
         }
-        // Last resort: read the first user message's model from the DB
+        // Last resort: read the first user message's model from the DB.
+        // User-role messages carry the model nested at info.model.
         const firstUser = yield* MessageV2.stream(ctx.sessionID).pipe(
           Effect.provideService(Database.Service, database),
-          Effect.map((msgs) => msgs.find((m) => m.info.role === "user" && m.info.modelID)),
+          Effect.map((msgs) => msgs.find((m) => m.info.role === "user" && m.info.model)),
         )
-        if (firstUser?.info.modelID) {
-          return { modelID: ModelV2.ID.make(firstUser.info.modelID), providerID: ProviderV2.ID.make(firstUser.info.providerID) }
+        const firstUserInfo = firstUser?.info
+        if (firstUserInfo?.role === "user" && firstUserInfo.model) {
+          return {
+            modelID: ModelV2.ID.make(firstUserInfo.model.modelID),
+            providerID: ProviderV2.ID.make(firstUserInfo.model.providerID),
+          }
         }
         // Should never reach here, but if we do, use the subagent model
         // as absolute last resort (better than crashing)
