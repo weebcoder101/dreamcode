@@ -2,6 +2,7 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { EditTool } from "../../src/tool/edit"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
@@ -14,6 +15,15 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
+
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
 
 const ctx = {
   sessionID: SessionID.make("ses_test-edit-session"),
@@ -36,7 +46,7 @@ const layer = Layer.mergeAll(
   Format.defaultLayer,
   EventV2Bridge.defaultLayer,
   Truncate.defaultLayer,
-  Agent.defaultLayer,
+  Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
 )
 
 const it = testEffect(layer)

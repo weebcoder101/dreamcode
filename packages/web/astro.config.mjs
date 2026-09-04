@@ -21,7 +21,11 @@ export default defineConfig({
     enabled: false,
   },
   server: {
-    host: "0.0.0.0",
+    // SECURITY: bind to loopback by default. The previous hard-coded
+    // TEST-NET-2 leaked the internal host layout to every contributor's
+    // dev server. Allow override via WEB_HOST env var. See wave5-retry
+    // F-MISC-01.
+    host: process.env.WEB_HOST || "127.0.0.1",
   },
   markdown: {
     rehypePlugins: [rehypeHeadingIds, [rehypeAutolinkHeadings, { behavior: "wrap" }]],

@@ -24,11 +24,74 @@ export function serverName(conn?: ServerConnection.Any, ignoreDisplayName = fals
 
 function isLocalHost(url: string) {
   const host = url.replace(/^https?:\/\//, "").split(":")[0]
+  // F-003: the local-allowlist no longer hardcodes a TEST-NET IP. The only
+  // universally-recognized loopback names are "localhost" and "127.0.0.1".
   if (host === "localhost" || host === "127.0.0.1") return "local"
+}
+
+// F-003: server credential storage. User-entered remote-server passwords
+// are kept encrypted via Electron's safeStorage in the main process, keyed
+// by ServerConnection.key(). Renderer-side code only ever holds a boolean
+// "hasCredential" hint in Persist state; the plaintext is fetched transiently
+// at SDK call time.
+type CredentialApi = {
+  setServerCredential?: (key: string, password: string) => Promise<void>
+  getServerCredential?: (key: string) => Promise<string | null>
+  deleteServerCredential?: (key: string) => Promise<void>
+}
+
+function credentialApi(): CredentialApi {
+  if (typeof window === "undefined") return {}
+  return (window as unknown as { api?: CredentialApi }).api ?? {}
+}
+
+export async function setServerPassword(serverKey: string, password: string): Promise<void> {
+  const api = credentialApi()
+  if (!api.setServerCredential) {
+    throw new Error("Server credential storage is not available in this environment")
+  }
+  await api.setServerCredential(serverKey, password)
+}
+
+export async function getServerPassword(serverKey: string): Promise<string | null> {
+  const api = credentialApi()
+  if (!api.getServerCredential) return null
+  return api.getServerCredential(serverKey)
+}
+
+export async function clearServerPassword(serverKey: string): Promise<void> {
+  const api = credentialApi()
+  if (!api.deleteServerCredential) return
+  await api.deleteServerCredential(serverKey)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+// F-003: v3 -> v4. Drop the password field from any HttpBase entries; encrypted
+// credentials are stored separately via the safeStorage-backed bridge.
+export function migrateV3ToV4(value: unknown): unknown {
+  if (!Array.isArray(value)) return value
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object") return entry
+    const obj = entry as Record<string, unknown>
+    if ("http" in obj && obj.http && typeof obj.http === "object") {
+      const http = obj.http as Record<string, unknown>
+      if ("password" in http) {
+        const password = http.password
+        const { password: _password, ...rest } = http
+        return {
+          ...obj,
+          http: {
+            ...rest,
+            hasCredential: typeof password === "string" && password.length > 0,
+          },
+        }
+      }
+    }
+    return obj
+  })
 }
 
 export function migrateCanonicalLocalServerState(value: unknown, canonicalLocalServer?: ServerConnection.Key) {
@@ -150,7 +213,12 @@ export namespace ServerConnection {
   export type HttpBase = {
     url: string
     username?: string
+    // F-003: passwords live in memory only during SDK calls and the health check.
+    // They are NEVER persisted — see StoredServer for the on-disk shape and the
+    // v3 -> v4 migration that drops this field on read. Persisted state instead
+    // carries `hasCredential: true` so the UI can render a "•••" hint.
     password?: string
+    hasCredential?: boolean
   }
 
   // Regular web connections
@@ -228,8 +296,8 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
   }) => {
     const [store, setStore, _, ready] = persisted(
       {
-        ...Persist.global("server", ["server.v3"]),
-        migrate: (value) => migrateCanonicalLocalServerState(value, props.canonicalLocalServer),
+        ...Persist.global("server", ["server.v4"]),
+        migrate: (value) => migrateV3ToV4(migrateCanonicalLocalServerState(value, props.canonicalLocalServer)),
       },
       createStore({
         list: [] as StoredServer[],
@@ -252,11 +320,25 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       if (state.active !== input) setState("active", input)
     }
 
-    function add(input: ServerConnection.Http) {
+    async function add(input: ServerConnection.Http) {
       const url_ = normalizeServerUrl(input.http.url)
       if (!url_) return
-      const conn: ServerConnection.Http = { ...input, authToken: undefined, http: { ...input.http, url: url_ } }
-      return batch(() => {
+      // F-003: strip the in-memory password before persisting. The plaintext
+      // lives in main-process safeStorage and is fetched on demand at SDK
+      // call time. The "hasCredential" boolean is the only credential signal
+      // that touches the persisted store.
+      const password = input.http.password
+      const persistedHttp: ServerConnection.HttpBase = {
+        ...input.http,
+        hasCredential: typeof password === "string" && password.length > 0,
+      }
+      delete persistedHttp.password
+      const conn: ServerConnection.Http = {
+        ...input,
+        authToken: undefined,
+        http: { ...persistedHttp, url: url_ },
+      }
+      const result = batch(() => {
         const existing = store.list.findIndex((x) => url(x) === url_)
         if (existing !== -1) {
           setStore("list", existing, conn)
@@ -266,6 +348,23 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
         setState("active", ServerConnection.key(conn))
         return conn
       })
+      // Persist or clear the credential at the new key. The credential bridge
+      // is best-effort: if the API is unavailable (e.g. running outside the
+      // desktop shell) we just keep the boolean hint and let the user re-enter
+      // the password later.
+      if (result) {
+        const newKey = ServerConnection.key(result)
+        try {
+          if (password && password.length > 0) {
+            await setServerPassword(newKey, password)
+          } else {
+            await clearServerPassword(newKey)
+          }
+        } catch {
+          // Credential bridge unavailable; persistence is best-effort.
+        }
+      }
+      return result
     }
 
     function remove(key: ServerConnection.Key) {

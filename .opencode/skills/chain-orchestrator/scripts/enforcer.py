@@ -10,7 +10,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path.cwd() if (Path.cwd() / ".opencode").is_dir() else next(p for p in [Path.cwd()] + list(Path.cwd().parents) if (p / ".opencode").is_dir())
+PROJECT_ROOT = Path.cwd() if (Path.cwd() / ".opencode").is_dir() else next((p for p in [Path.cwd()] + list(Path.cwd().parents) if (p / ".opencode").is_dir()), Path.cwd())
 LOG_PATH = PROJECT_ROOT / "evolution" / "chain_execution.jsonl"
 
 

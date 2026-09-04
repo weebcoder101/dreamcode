@@ -148,7 +148,13 @@ function recordSpawn(sessionID: SessionID, count: number) {
 }
 
 function parseExplicitSpawnCount(text: string): number {
-  const match = text.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
+  // Scan ONLY the tail of the message. Explicit spawn directives live in the
+  // user's own closing words; matches deeper in the text come overwhelmingly
+  // from pasted transcripts/logs (e.g. "use 4-5 subagents" quoted inside a
+  // session dump) and must not trigger the hard spawn override.
+  const TAIL_CHARS = 400
+  const tail = text.length > TAIL_CHARS ? text.slice(-TAIL_CHARS) : text
+  const match = tail.match(/(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i)
   return match ? Math.min(parseInt(match[1], 10), RATE_MAX_SPAWNS) : 0
 }
 
@@ -193,5 +199,23 @@ export function recordTokenUsage(sessionID: SessionID, tokens: number) {
 }
 
 export function resetTokenBudget(sessionID: SessionID) {
+  TOKEN_BUDGET_MAP.delete(sessionID)
+}
+
+/**
+ * Clean up ALL per-session state stored in module-level Maps. Must be called
+ * when a session ends (cancel, complete, error) to prevent unbounded memory
+ * growth on long-running servers.
+ *
+ * The 3 "stored*" Maps and TOKEN_BUDGET_MAP were previously leaked — they
+ * grew proportionally to (sessions × turns) for the lifetime of the process.
+ * See P0-03/P0-04 in the test audit.
+ */
+export function cleanupSession(sessionID: SessionID) {
+  storedGateResultMap.delete(sessionID)
+  storedScriptResultsMap.delete(sessionID)
+  storedContentResultsMap.delete(sessionID)
+  personaRoundMap.delete(sessionID)
+  spawnHistory.delete(sessionID)
   TOKEN_BUDGET_MAP.delete(sessionID)
 }

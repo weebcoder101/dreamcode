@@ -80,8 +80,9 @@ def main():
 
     api_key = os.environ.get("NEURO_API_KEY")
     if not api_key:
-        print("ERROR: NEURO_API_KEY environment variable missing.")
-        sys.exit(20)
+        print("WARNING: NEURO_API_KEY not set. NEURO analysis skipped. Sign up at https://neurometric.ai to get your free API key.", file=sys.stderr)
+        print(json.dumps({"status": "skipped", "reason": "NEURO_API_KEY not set"}))
+        sys.exit(0)
 
     api_url = os.environ.get("NEURO_API_BASE_URL", "https://api.neurometric.ai/v1")
 

@@ -5,6 +5,22 @@ import { Effect } from "effect"
 import { sql } from "drizzle-orm"
 import { effectCmd } from "../effect-cmd"
 
+// Minimal env for the sqlite3 REPL spawn. We deliberately don't inherit
+// arbitrary environment variables (the parent process may carry API keys
+// or MDM-style secrets) — only the keys the REPL needs to find `sqlite3`
+// and to render output.
+function minimalEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    TERM: process.env.TERM,
+    SHELL: process.env.SHELL,
+    USER: process.env.USER,
+  }
+}
+
 const QueryCommand = effectCmd({
   command: "$0 [query]",
   describe: "open an interactive sqlite3 shell or run a query",
@@ -37,6 +53,7 @@ const QueryCommand = effectCmd({
     }
     const child = spawn("sqlite3", [Database.path()], {
       stdio: "inherit",
+      env: minimalEnv(),
     })
     yield* Effect.promise(() => new Promise((resolve) => child.on("close", resolve)))
   }),

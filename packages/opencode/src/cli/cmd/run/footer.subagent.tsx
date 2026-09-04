@@ -133,12 +133,10 @@ export function RunFooterSubagentBody(props: {
       height="100%"
       flexDirection="column"
       backgroundColor={footer().surface}
-      onClick={handleClick}
-      onMouseDown={handleClick}
+      {...({ onClick: handleClick, onMouseDown: handleClick } as any)}
     >
       <box paddingTop={1} paddingLeft={1} paddingRight={3} paddingBottom={1} flexDirection="column" flexGrow={1}
-        onClick={handleClick}
-        onMouseDown={handleClick}
+        {...({ onClick: handleClick, onMouseDown: handleClick } as any)}
       >
         <Show when={tab()}>
           {(current) => (
@@ -175,8 +173,7 @@ export function RunFooterSubagentBody(props: {
           ref={(item) => {
             scroll = item
           }}
-          onClick={handleClick}
-          onMouseDown={handleClick}
+          {...({ onClick: handleClick, onMouseDown: handleClick } as any)}
         >
           <box width="100%" flexDirection="column" gap={0}>
             {commits().length > 0 ? (

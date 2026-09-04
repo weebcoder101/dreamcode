@@ -23,29 +23,9 @@ triggers:
 Ensures every skill chain result is persisted to Pieces LTM, and provides
 improved retrieval patterns for future context queries.
 
-## Critical: Health Check & User Warning
+## Health Check
 
-**BEFORE using any Pieces LTM tool or querying LTM memory, you MUST:**
-
-1. **Check health**: Call `PiecesLTM.Service.health()` to verify Pieces MCP is reachable at `localhost:39302`
-2. **Warn if unavailable**: If health returns `{ reachable: false }`, immediately warn the user:
-   ```
-   [WARN] Pieces LTM is not configured or MCP server is unreachable.
-   The pieces-ltm skill requires the Pieces for Developers MCP server.
-   
-   To install Pieces for Developers:
-     1. Visit https://pieces.app and download the app
-     2. Install and launch Pieces Desktop
-     3. The MCP server runs automatically at localhost:39302
-     4. Verify with: curl http://localhost:39302/health
-   
-   Without Pieces MCP, long-term memory features will be unavailable.
-   Agent will proceed without LTM persistence and retrieval.
-   ```
-3. **Proceed gracefully**: Continue the task without LTM — do NOT block on Pieces unavailability
-
-This warning MUST be emitted every time the skill fires and Pieces is unreachable.
-Do NOT silently fail — the user needs to know LTM features are unavailable.
+Pieces LTM persistence degrades gracefully. If `PIECES_MCP_URL` is unreachable, the write is logged to `evolution/pieces_writes.jsonl` and the orchestrator continues without LTM. No health-check call is required before use; the `call_mcp_tool` helper transparently falls back to the log on connection error.
 
 ## Architecture
 

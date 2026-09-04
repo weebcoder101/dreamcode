@@ -19,7 +19,14 @@ export function terminalWebSocketURL(input: {
     next.searchParams.set("ticket", input.ticket)
     return next
   }
-  if (input.password && (!input.sameOrigin || input.authToken))
+  // SECURITY: only attach the auth_token in the URL for cross-origin
+  // connections. The previous behavior also attached it whenever the
+  // caller opted in via `authToken`, but that flag is set on the
+  // same-origin Electron renderer path and leaks the password into
+  // the WS upgrade URL, browser history, and HTTP server access logs.
+  // For same-origin the browser's same-origin policy already protects
+  // the connection, so the credential is unnecessary.
+  if (input.password && input.sameOrigin === false)
     next.searchParams.set(
       "auth_token",
       authTokenFromCredentials({ username: input.username, password: input.password }),

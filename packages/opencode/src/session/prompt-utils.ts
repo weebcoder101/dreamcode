@@ -16,7 +16,15 @@ Cross-session Effect v4 API rules (persistent across sessions):
 </learned-knowledge>`
 
 function sanitizeForSystemPrompt(text: string): string {
-  return text
+  // P0-1 (session audit): NFKC normalize before any escape so that Unicode look-alikes of `<`
+  // (U+FF1C "＜", U+3008 "〈", U+FE64 "﹤", U+00AB "«" etc.) and `>` (U+FF1E "＞", U+3009 "〉")
+  // are folded into ASCII before the regex strips. Without normalization, an attacker who can
+  // write into chain-script output, MCP tool results, or fetched URL content can inject text
+  // that the model interprets as fake `</system-reminder>`, `<script-result>`, or
+  // `<synthesis-request>` boundaries. Effect/builtin String#normalize is available in Node 20+,
+  // which is already the opencode runtime floor.
+  const normalized = typeof text.normalize === "function" ? text.normalize("NFKC") : text
+  return normalized
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -105,7 +113,17 @@ function scanForSkillToolCalls(msgs: any[]): { loaded: Set<string>; acknowledged
       const status = part.state?.status
       if (isSkillTool && status === "completed") {
         const input = part.state?.input ?? part.input ?? {}
-        loaded.add(input.name ?? input.skill ?? "")
+        // Only trust the explicit load marker: a completed tool call whose
+        // output lacks it may be a legacy-path failure masquerading as a load.
+        const outputText =
+          typeof part.state?.output === "string"
+            ? part.state.output
+            : typeof part.metadata?.output === "string"
+              ? (part.metadata.output as string)
+              : ""
+        if (typeof outputText === "string" && outputText.includes(`[SKILL LOADED:`)) {
+          loaded.add(input.name ?? input.skill ?? "")
+        }
       }
       if (part.type === "text" && part.text?.includes("[SKILLS LOADED]")) {
         acknowledged = true

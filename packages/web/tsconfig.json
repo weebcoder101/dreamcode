@@ -1,9 +1,34 @@
 {
   "extends": "astro/tsconfigs/strict",
-  "include": [".astro/types.d.ts", "**/*"],
-  "exclude": ["dist"],
+  "include": [
+    ".astro/types.d.ts",
+    "src/**/*"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "node_modules/**",
+    "../opencode/**",
+    "../core/**"
+  ],
   "compilerOptions": {
     "jsx": "preserve",
-    "jsxImportSource": "solid-js"
+    "jsxImportSource": "solid-js",
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "dreamcode/session/message-v2": [
+        "./src/types/opencode-types"
+      ],
+      "dreamcode/session/session": [
+        "./src/types/opencode-types"
+      ],
+      "dreamcode/session/message": [
+        "./src/types/opencode-types"
+      ],
+      "@/*": [
+        "./node_modules/dreamcode/src/*"
+      ]
+    }
   }
 }

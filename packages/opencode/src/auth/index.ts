@@ -4,7 +4,8 @@ import { Effect, Layer, Record, Result, Schema, Context, Option } from "effect"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Global } from "@opencode-ai/core/global"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { createCipheriv, createDecipheriv, randomBytes, createHash } from "node:crypto"
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
+import fs from "node:fs"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
@@ -20,30 +21,41 @@ export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 const ENCRYPTION_PREFIX = "enc:v1:"
 
 function deriveKey(): Buffer {
-  // Use a one-time random key generated on first run and stored in config.
-  // This avoids the weak /etc/machine-id fallback that makes the key
-  // derivable by any process with access to predictable system state.
+  // AES-256-GCM key is a one-time random 32-byte buffer, generated on first
+  // run and persisted to ~/.config/dreamcode/auth.key (mode 0o600). On every
+  // subsequent read, we load that file.
+  //
+  // SECURITY: we do NOT silently fall back to a deterministic key derived
+  // from /etc/machine-id or HOME. A deterministic key means any local process
+  // (or a filesystem-only attacker with HOME access) can recover the AES key
+  // and decrypt the stored OAuth tokens. The honest behavior when the key
+  // file cannot be written is to fail closed: surface the error to the
+  // caller, who can decide whether to log, abort, or proceed without
+  // encryption-at-rest. Encryption-at-rest that an attacker can compute is
+  // worse than no encryption at all — it gives a false sense of safety.
   const keyPath = path.join(process.env.HOME || "/tmp", ".config", "dreamcode", "auth.key")
   try {
-    // If key file exists, read it
-    return require("fs").readFileSync(keyPath)
-  } catch {
-    // Generate a new random key
-    const key = require("node:crypto").randomBytes(32)
+    return fs.readFileSync(keyPath)
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") {
+      throw new Error(
+        `Unable to read OAuth encryption key at ${keyPath}: ${e?.message ?? e}. ` +
+          `Refusing to use a derivable key for token encryption-at-rest. ` +
+          `Restore file permissions on ~/.config/dreamcode or unset OPENCODE_AUTH_CONTENT.`,
+      )
+    }
+    // First-run: generate a new random key and persist it
+    const key = randomBytes(32)
+    const dir = path.dirname(keyPath)
     try {
-      const dir = path.dirname(keyPath)
-      require("fs").mkdirSync(dir, { recursive: true })
-      require("fs").writeFileSync(keyPath, key, { mode: 0o600 })
-    } catch {
-      // If we can't persist the key, fall back to machine-id (better than nothing)
-      try {
-        const raw = require("fs").readFileSync("/etc/machine-id", "utf8").trim()
-        return createHash("sha256").update(raw).digest()
-      } catch {
-        // Last resort — deterministic but scrypt-hardened
-        const fallback = process.env.HOME ?? "dreamcode-auth-fallback"
-        return require("node:crypto").scryptSync(fallback, "dreamcode-auth-salt", 32)
-      }
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(keyPath, key, { mode: 0o600 })
+    } catch (e: any) {
+      throw new Error(
+        `Unable to persist OAuth encryption key at ${keyPath}: ${e?.message ?? e}. ` +
+          `Encryption-at-rest is disabled because the key file could not be created. ` +
+          `Run with a writable HOME or run without OPENCODE_AUTH_CONTENT to surface credentials explicitly.`,
+      )
     }
     return key
   }
@@ -71,8 +83,15 @@ function decryptToken(ciphertext: string): string {
     const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(ivHex!, "hex"))
     decipher.setAuthTag(Buffer.from(tagHex!, "hex"))
     return decipher.update(Buffer.from(dataHex!, "hex")) + decipher.final("utf8")
-  } catch {
-    return ciphertext
+  } catch (err) {
+    // SECURITY: do NOT return the raw ciphertext on decrypt failure.
+    // A silent fallback to the encrypted blob treats a corrupted or
+    // attacker-supplied auth record as a valid token, which the API may
+    // then accept as a bearer credential. Log the failure and return an
+    // empty string so the caller sees a well-defined "no usable token"
+    // state.
+    console.warn("auth: failed to decrypt token, returning empty", err)
+    return ""
   }
 }
 

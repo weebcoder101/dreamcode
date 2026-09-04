@@ -15,7 +15,13 @@ import { ServerHealthIndicator, ServerRow } from "@/components/server/server-row
 import { useGlobal } from "@/context/global"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
-import { normalizeServerUrl, ServerConnection, useServer } from "@/context/server"
+import {
+  clearServerPassword,
+  getServerPassword,
+  normalizeServerUrl,
+  ServerConnection,
+  useServer,
+} from "@/context/server"
 import { type ServerHealth, useCheckServerHealth } from "@/utils/server-health"
 import { useSettings } from "@/context/settings"
 import { useTabs } from "@/context/tabs"
@@ -266,7 +272,7 @@ export function useServerManagementController(options: { onSelect?: () => void; 
 
       resetAdd()
       if (options.navigateOnAdd === false) {
-        server.add(conn)
+        await server.add(conn)
         options.onSelect?.()
         return
       }
@@ -286,12 +292,16 @@ export function useServerManagementController(options: { onSelect?: () => void; 
       const name = store.editServer.name.trim() || undefined
       const username = store.editServer.username || undefined
       const password = store.editServer.password || undefined
+      // F-003: passwords are no longer carried on the persisted conn — fetch
+      // the stored plaintext from the credential bridge so the dirty check
+      // compares what the user actually has against what they entered.
+      const storedPassword = await getServerPassword(ServerConnection.key(input.original))
       const existingName = input.original.displayName
       if (
         normalized === input.original.http.url &&
         name === existingName &&
         username === input.original.http.username &&
-        password === input.original.http.password
+        password === storedPassword
       ) {
         resetEdit()
         return
@@ -308,24 +318,34 @@ export function useServerManagementController(options: { onSelect?: () => void; 
         return
       }
       if (normalized === input.original.http.url) {
-        server.add(conn)
+        await server.add(conn)
       } else {
-        replaceServer(input.original, conn)
+        await replaceServer(input.original, conn)
       }
 
       resetEdit()
     },
   }))
 
-  const replaceServer = (original: ServerConnection.Http, next: ServerConnection.Http) => {
+  const replaceServer = async (original: ServerConnection.Http, next: ServerConnection.Http) => {
     const originalKey = ServerConnection.key(original)
     const active = server.key
     tabs.removeServer(originalKey)
-    const newConn = server.add(next)
+    // server.add() handles the credential bridge for the new key. If the
+    // URL changed, the new key differs from the original key, so we must
+    // explicitly clear the credential at the old key below.
+    const newConn = await server.add(next)
     if (!newConn) return
     const nextActive = active === originalKey ? ServerConnection.key(newConn) : active
     if (nextActive) server.setActive(nextActive)
     server.remove(originalKey)
+    if (originalKey !== ServerConnection.key(newConn)) {
+      try {
+        await clearServerPassword(originalKey)
+      } catch {
+        // best-effort
+      }
+    }
   }
 
   const items = createMemo(() => {
@@ -367,7 +387,7 @@ export function useServerManagementController(options: { onSelect?: () => void; 
     if (!persist && global.servers.health[ServerConnection.key(conn)]?.healthy === false) return
     options.onSelect?.()
     if (persist && conn.type === "http") {
-      server.add(conn)
+      await server.add(conn)
       navigate("/")
       return
     }
@@ -462,14 +482,23 @@ export function useServerManagementController(options: { onSelect?: () => void; 
     })
   }
 
-  const startEdit = (conn: ServerConnection.Http) => {
+  const startEdit = async (conn: ServerConnection.Http) => {
     resetAdd()
+    // F-003: the persisted conn no longer carries a password — pull it from
+    // the credential bridge so the form can be pre-populated with what the
+    // user actually has. Best-effort: missing bridge leaves the field empty.
+    let storedPassword = ""
+    try {
+      storedPassword = (await getServerPassword(ServerConnection.key(conn))) ?? ""
+    } catch {
+      storedPassword = ""
+    }
     setStore("editServer", {
       id: conn.http.url,
       value: conn.http.url,
       name: conn.displayName ?? "",
       username: conn.http.username ?? "",
-      password: conn.http.password ?? "",
+      password: storedPassword,
       error: "",
       status: global.servers.health[ServerConnection.key(conn)]?.healthy,
     })
@@ -614,7 +643,7 @@ export function ServerConnectionList(props: { controller: ReturnType<typeof useS
                         <DropdownMenu.Item
                           onSelect={() => {
                             if (i.type !== "http") return
-                            props.controller.startEdit(i)
+                            void props.controller.startEdit(i)
                           }}
                         >
                           <DropdownMenu.ItemLabel>{language.t("dialog.server.menu.edit")}</DropdownMenu.ItemLabel>

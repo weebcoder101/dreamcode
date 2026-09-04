@@ -1,4 +1,5 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
+import { tokenExpiryMs } from "@/plugin/shared"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { OAUTH_DUMMY_KEY } from "../../auth"
 import os from "os"
@@ -445,7 +446,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                         type: "oauth",
                         refresh: tokens.refresh_token,
                         access: tokens.access_token,
-                        expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+                        expires: tokenExpiryMs(tokens.expires_in),
                         ...(accountId && { accountId }),
                       },
                     })
@@ -525,7 +526,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                   type: "success" as const,
                   refresh: tokens.refresh_token,
                   access: tokens.access_token,
-                  expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+                  expires: tokenExpiryMs(tokens.expires_in),
                   accountId,
                 }
               },
@@ -609,7 +610,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                       type: "success" as const,
                       refresh: tokens.refresh_token,
                       access: tokens.access_token,
-                      expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+                      expires: tokenExpiryMs(tokens.expires_in),
                       accountId: extractAccountId(tokens),
                     }
                   }

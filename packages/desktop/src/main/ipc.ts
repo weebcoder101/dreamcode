@@ -18,6 +18,10 @@ const pickerFilters = (ext?: string[]) => {
   return [{ name: "Files", extensions: ext }]
 }
 
+// Protocols the renderer is allowed to ask the main process to open in the
+// user's default browser. Anything outside this set is rejected.
+const openLinkAllowedProtocols = new Set(["https:", "http:", "mailto:"])
+
 const pickedFiles = createPickedFileAuthorizations()
 
 type Deps = {
@@ -35,6 +39,9 @@ type Deps = {
   updater: UpdaterController
   showUpdater: () => Promise<void> | void
   setBackgroundColor: (color: string) => void
+  getServerCredential: (serverId: string) => string | null
+  setServerCredential: (serverId: string, password: string) => number
+  deleteServerCredential: (serverId: string) => boolean
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void> | void
 }
@@ -164,14 +171,50 @@ export function registerIpcHandlers(deps: Deps) {
   )
 
   ipcMain.on("open-link", (_event: IpcMainEvent, url: string) => {
+    // Restrict to web schemes; the renderer must not be able to coerce the
+    // host into opening file:// URIs, custom schemes, or other deep links.
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return
+    }
+    if (!openLinkAllowedProtocols.has(parsed.protocol)) return
     void shell.openExternal(url)
   })
 
+  // F-EXT-02: allowlist for the optional "app" arg. The renderer is untrusted code
+  // (XSS, hostile extension) and must not be able to point execFile at an arbitrary
+  // executable. We restrict the app identifier to a small, well-known set of editors
+  // that ship on macOS / Linux desktops. If the app arg is not on the allowlist, we
+  // fall back to shell.openPath (which uses the OS default opener) and log a warning.
   ipcMain.handle("open-path", async (_event: IpcMainInvokeEvent, path: string, app?: string) => {
-    if (!app) return shell.openPath(path)
+    const safeApps = new Set([
+      "code",
+      "code-insiders",
+      "cursor",
+      "subl",
+      "sublime_text",
+      "mate",
+      "gedit",
+      "kate",
+      "kwrite",
+      "nano",
+      "vim",
+      "nvim",
+      "emacs",
+      "TextEdit",
+      "TextMate",
+      "BBEdit",
+    ])
+    const safe = app && safeApps.has(app) ? app : undefined
+    if (!safe) {
+      if (app) console.warn(`[open-path] rejected app "${app}" (not on allowlist); falling back to default opener`)
+      return shell.openPath(path)
+    }
     await new Promise<void>((resolve, reject) => {
       const [cmd, args] =
-        process.platform === "darwin" ? (["open", ["-a", app, path]] as const) : ([app, [path]] as const)
+        process.platform === "darwin" ? (["open", ["-a", safe, path]] as const) : ([safe, [path]] as const)
       execFile(cmd, args, (err) => (err ? reject(err) : resolve()))
     })
   })
@@ -231,6 +274,20 @@ export function registerIpcHandlers(deps: Deps) {
       relaunch: deps.relaunch,
     })
   })
+
+  // F-003: server credentials are stored encrypted in main via safeStorage.
+  // The renderer never sees plaintext across the contextBridge; main forwards
+  // the password only to the SDK when establishing the HTTP connection.
+  ipcMain.handle("server-get-credential", (_event: IpcMainInvokeEvent, serverId: string) =>
+    deps.getServerCredential(serverId),
+  )
+  ipcMain.handle(
+    "server-set-credential",
+    (_event: IpcMainInvokeEvent, serverId: string, password: string) => deps.setServerCredential(serverId, password),
+  )
+  ipcMain.handle("server-delete-credential", (_event: IpcMainInvokeEvent, serverId: string) =>
+    deps.deleteServerCredential(serverId),
+  )
 }
 
 export function sendMenuCommand(win: BrowserWindow, id: string) {

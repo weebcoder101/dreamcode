@@ -365,7 +365,7 @@ function resolveEditorConnection(
 ): EditorConnection | undefined {
   if (port) {
     return {
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://localhost:${port}`,
       source: `env:${port}`,
     }
   }

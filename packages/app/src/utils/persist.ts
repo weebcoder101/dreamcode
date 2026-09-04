@@ -70,6 +70,10 @@ function cacheGet(key: string) {
   if (!entry) return
   cache.delete(key)
   cache.set(key, entry)
+  // Opportunistic prune: if a read-heavy session has accumulated cache
+  // entries, shrink toward the cap so the next write doesn't have to do
+  // a single large sweep.
+  if (cache.size > CACHE_MAX_ENTRIES) cachePrune()
   return entry.value
 }
 
@@ -111,10 +115,17 @@ function evict(storage: Storage, keep: string, value: string) {
   const indexes = Array.from({ length: total }, (_, index) => index)
   const items: Evict[] = []
 
+  // SECURITY: only evict keys that belong to the SAME storage namespace,
+  // not any "opencode.*" key. The previous check used the bare
+  // LOCAL_PREFIX, which would indiscriminately delete data from
+  // unrelated workspaces, servers, and drafts when one storage
+  // exceeded its quota. The actual storage name is the prefix that
+  // the SyncStorage wrapper prepends in localStorageWithPrefix.
+  const storagePrefix = keep.split(":")[0] + ":"
   for (const index of indexes) {
     const name = storage.key(index)
     if (!name) continue
-    if (!name.startsWith(LOCAL_PREFIX)) continue
+    if (!name.startsWith(storagePrefix)) continue
     if (name === keep) continue
     const stored = storage.getItem(name)
     items.push({ key: name, size: stored?.length ?? 0 })

@@ -1,4 +1,5 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
+import { tokenExpiryMs } from "@/plugin/shared"
 import { OAUTH_DUMMY_KEY } from "../auth"
 import { createServer } from "http"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -125,6 +126,10 @@ export function accessTokenIsExpiring(
   try {
     let payload = parts[1].replace(/-/g, "+").replace(/_/g, "/")
     while (payload.length % 4 !== 0) payload += "="
+    // SECURITY: this function only reads `exp` to drive refresh
+    // timing; the signature is NOT verified. Any downstream code
+    // that trusts other claims (sub, aud, scope) must add a
+    // proper signature check first. See opencode-C P2-6.
     const claims = JSON.parse(Buffer.from(payload, "base64").toString("utf8"))
     if (typeof claims?.exp !== "number") return false
     return claims.exp * 1000 <= Date.now() + Math.max(0, skewMs)
@@ -609,7 +614,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
                 const refreshToken = currentAuth.refresh
                 refreshPromise = refreshAccessToken(refreshToken, options)
                   .then(async (tokens) => {
-                    const refreshedExpires = Date.now() + (tokens.expires_in ?? 3600) * 1000
+                    const refreshedExpires = tokenExpiryMs(tokens.expires_in)
                     const refreshedRefresh = tokens.refresh_token || refreshToken
                     // Persist the rotated pair as best-effort. xAI has already consumed the
                     // old refresh_token by the time we get here; an auth.set failure leaves
@@ -684,7 +689,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
                     type: "success" as const,
                     refresh: tokens.refresh_token,
                     access: tokens.access_token,
-                    expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+                    expires: tokenExpiryMs(tokens.expires_in),
                   }
                 } catch {
                   return { type: "failed" as const }
@@ -720,7 +725,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
                     type: "success" as const,
                     refresh: tokens.refresh_token,
                     access: tokens.access_token,
-                    expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+                    expires: tokenExpiryMs(tokens.expires_in),
                   }
                 } catch {
                   return { type: "failed" as const }

@@ -87,7 +87,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const ctx = context(args, options)
             yield* plugin.trigger(
               "tool.execute.before",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID! },
               { args },
             )
             const result = yield* item.execute(args, ctx)
@@ -102,7 +102,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
             yield* plugin.trigger(
               "tool.execute.after",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID!, args },
               output,
             )
             if (options.abortSignal?.aborted) {

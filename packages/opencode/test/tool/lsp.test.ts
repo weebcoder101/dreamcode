@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -13,6 +14,15 @@ import { Truncate } from "@/tool/truncate"
 import { LspTool } from "../../src/tool/lsp"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -56,7 +66,7 @@ const lsp = Layer.succeed(
 )
 
 const it = testEffect(
-  Layer.mergeAll(Agent.defaultLayer, FSUtil.defaultLayer, CrossSpawnSpawner.defaultLayer, Truncate.defaultLayer, lsp),
+  Layer.mergeAll(Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)), FSUtil.defaultLayer, CrossSpawnSpawner.defaultLayer, Truncate.defaultLayer, lsp),
 )
 
 const init = Effect.fn("LspToolTest.init")(function* () {

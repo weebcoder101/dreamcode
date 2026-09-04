@@ -8,7 +8,7 @@ import { SessionID, MessageID, PartID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
-import type { SessionPrompt } from "../session/prompt"
+import { SessionPrompt, type PromptInput } from "../session/prompt"
 import { Config } from "@/config/config"
 import fs from "fs/promises"
 import path from "path"
@@ -27,8 +27,8 @@ const log = Log.create({ service: "tool.task" })
 
 export interface TaskPromptOps {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly resolvePromptParts: (template: string) => Effect.Effect<SessionPrompt.PromptInput["parts"]>
-  readonly prompt: (input: SessionPrompt.PromptInput) => Effect.Effect<SessionV1.WithParts>
+  readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts>
   readonly disableTaskTool?: boolean
 }
 

@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import fs from "fs"
 import { UI } from "../ui"
 import { effectCmd, fail } from "../effect-cmd"
 import { Git } from "@/git"
@@ -99,13 +100,29 @@ export const PrCommand = effectCmd({
     UI.println()
 
     const opencodeArgs = sessionId ? ["-s", sessionId] : []
+    // `cwd` is pinned to the current process cwd, but we still go through
+    // `fs.realpath` so a symlinked cwd can't make the child load a
+    // different project's `dreamcode.json` / `.opencode/` config. The
+    // env is scoped to a minimal allowlist so API keys from the parent
+    // process don't leak into the spawned dreamcode by default.
+    const realCwd = yield* Effect.promise(() => fs.promises.realpath(process.cwd()))
     const code = yield* Effect.promise(
       () =>
         Process.spawn(["dreamcode", ...opencodeArgs], {
           stdin: "inherit",
           stdout: "inherit",
           stderr: "inherit",
-          cwd: process.cwd(),
+          cwd: realCwd,
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            LANG: process.env.LANG,
+            LC_ALL: process.env.LC_ALL,
+            TERM: process.env.TERM,
+            SHELL: process.env.SHELL,
+            USER: process.env.USER,
+            TMPDIR: process.env.TMPDIR,
+          },
         }).exited,
     )
     // Match legacy throw semantics — propagate as a defect so the top-level

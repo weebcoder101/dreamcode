@@ -13,7 +13,7 @@ import { errorMessage } from "../util/error"
 import { EventV2 } from "@opencode-ai/core/event"
 import { GlobalBus } from "@/bus/global"
 import { Git } from "@/git"
-import { Effect, Layer, Path, Schema, Scope, Context } from "effect"
+import { Context, Duration, Effect, Layer, Path, Scope, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { NodePath } from "@effect/platform-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -474,12 +474,24 @@ export const layer: Layer.Layer<
       return result
     })
 
+    // SECURITY: the start command is a project setting that the LLM can rewrite via
+    // tool calls (the project schema includes commands.start as a writable field).
+    // The trust model is: the project owner set it, so it runs as them. But we add
+    // defense-in-depth: extendEnv is false (parent API keys do NOT leak into the
+    // child), and we set a 30s timeout. The bash -lc is by design - the user wants
+    // a shell command. The blast radius is limited to a single worktree directory.
     const runStartCommand = Effect.fnUntraced(
       function* (directory: string, cmd: string) {
         const [shell, args] = process.platform === "win32" ? ["cmd", ["/c", cmd]] : ["bash", ["-lc", cmd]]
         const result = yield* appProcess.run(
-          ChildProcess.make(shell, args as string[], { cwd: directory, extendEnv: true, stdin: "ignore" }),
-        )
+          ChildProcess.make(shell, args as string[], {
+            cwd: directory,
+            extendEnv: false,
+            stdin: "ignore",
+            // 30s total budget: force SIGKILL 30s after SIGTERM
+            forceKillAfter: Duration.seconds(30),
+          }),
+        ).pipe(Effect.timeout(Duration.seconds(30)))
         return { code: result.exitCode, stderr: result.stderr.toString("utf8") }
       },
       Effect.catch(() => Effect.succeed({ code: 1, stderr: "" })),
@@ -626,7 +638,14 @@ export const layer: Layer.Layer<
       return true
     })
 
-    return Service.of({ makeWorktreeInfo, createFromInfo, create, list, remove, reset })
+    return Service.of({
+      makeWorktreeInfo: makeWorktreeInfo as Interface["makeWorktreeInfo"],
+      createFromInfo: createFromInfo as Interface["createFromInfo"],
+      create: create as Interface["create"],
+      list: list as Interface["list"],
+      remove: remove as Interface["remove"],
+      reset: reset as Interface["reset"],
+    })
   }),
 )
 

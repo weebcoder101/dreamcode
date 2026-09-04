@@ -4,6 +4,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { Effect, Layer } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { GrepTool } from "../../src/tool/grep"
 import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -21,13 +22,22 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Git } from "@/git"
 import { Filesystem } from "@/util/filesystem"
 
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
+
 const toolLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Layer.mergeAll(
     CrossSpawnSpawner.defaultLayer,
     FSUtil.defaultLayer,
     Ripgrep.defaultLayer,
     Truncate.defaultLayer,
-    Agent.defaultLayer,
+    Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
     Git.defaultLayer,
   )
 

@@ -61,14 +61,17 @@ const KEY_VALUE_PAIR = /(\w[\w.-]*)=(?:"([^"\\]*)"|([^\s"]+))/g
 
 // ── Main redact function ────────────────────────────────────────────────────
 
-let cachedEnvSecrets: ReadonlyArray<{ name: string; value: string }> | undefined
-
 /**
  * Redact known secret patterns and env-derived secret values from a log line.
  *
  * Returns the redacted string with all matched secrets replaced by
  * `"[REDACTED]"`.  Also substitutes key=value pairs whose key name matches
  * a sensitive field (e.g. `apiKey=sk-abc…` → `apiKey=[REDACTED]`).
+ *
+ * F-REDACT-1 (P2): the env-derived secret list is recomputed on every call so
+ * that long-running processes pick up new env-derived secrets (e.g. set after
+ * module load by a test, plugin reload, or env-mutating tool). The cost of
+ * `Object.entries(process.env)` is microseconds.
  */
 export const redactLogLine = (line: string): string => {
   if (!line) return line
@@ -91,11 +94,10 @@ export const redactLogLine = (line: string): string => {
     return match
   })
 
-  // 3. Redact env-derived secret values that appear in the log
-  if (cachedEnvSecrets === undefined) {
-    cachedEnvSecrets = envSecrets()
-  }
-  for (const entry of cachedEnvSecrets) {
+  // 3. Redact env-derived secret values that appear in the log.
+  //    Recomputed on every call (no cache) so post-startup env mutations
+  //    are caught. The walk is cheap.
+  for (const entry of envSecrets()) {
     // Escape the value for use in a regex
     const escaped = entry.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     result = result.replace(new RegExp(escaped, "g"), "[REDACTED]")
@@ -105,8 +107,9 @@ export const redactLogLine = (line: string): string => {
 }
 
 /**
- * Force-refresh the cached env secret list (useful in tests).
+ * Force-refresh the cached env secret list (no-op kept for backward
+ * compatibility — the cache was removed in F-REDACT-1, so there is nothing
+ * to refresh. Tests that mutate process.env mid-process no longer need to
+ * call this; the next redactLogLine call will see the new env.
  */
-export const refreshEnvSecrets = (): void => {
-  cachedEnvSecrets = undefined
-}
+export const refreshEnvSecrets = (): void => {}

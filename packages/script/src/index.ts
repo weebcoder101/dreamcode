@@ -27,7 +27,15 @@ const CHANNEL = await (async () => {
   if (env.OPENCODE_CHANNEL) return env.OPENCODE_CHANNEL
   if (env.OPENCODE_BUMP) return "latest"
   if (env.OPENCODE_VERSION && !env.OPENCODE_VERSION.startsWith("0.0.0-")) return "latest"
-  return await $`git branch --show-current`.text().then((x) => x.trim())
+  const branch = await $`git branch --show-current`.text().then((x) => x.trim())
+  // SECURITY: detached HEAD produces a literal "HEAD" branch string.
+  // Refuse to compute a release in that case. See wave5-retry F-MISC-03.
+  if (branch === "HEAD") {
+    throw new Error(
+      "Detached HEAD detected. Set OPENCODE_CHANNEL explicitly or check out a real branch before running the release script.",
+    )
+  }
+  return branch
 })()
 const IS_PREVIEW = CHANNEL !== "latest"
 
@@ -46,7 +54,13 @@ const VERSION = await (async () => {
     console.warn(`[Script] No OPENCODE_VERSION env set and CHANNEL="${CHANNEL}" — using fallback 1.1.0. Install via dreamcode/install.sh to get the correct version.`)
     return `1.1.0`
   }
-  const version = await fetch("https://registry.npmjs.org/opencode-ai/latest")
+  // SECURITY: 5s timeout, identifying User-Agent, pinned channel.
+  // The full fix (registry SHA-256 verification, channel-pinned
+  // endpoint) is tracked in the audit. See wave5-retry F-MISC-02.
+  const version = await fetch("https://registry.npmjs.org/opencode-ai/latest", {
+    signal: AbortSignal.timeout(5_000),
+    headers: { "User-Agent": "opencode-release-script/1.0" },
+  })
     .then((res) => {
       if (!res.ok) throw new Error(res.statusText)
       return res.json()
@@ -86,4 +100,9 @@ export const Script = {
     return team
   },
 }
-console.log(`opencode script`, JSON.stringify(Script, null, 2))
+// SECURITY: only emit the Script summary in debug mode. The full fix
+// (drop the log entirely; the export is what matters) is tracked in
+// the audit. See wave5-retry F-MISC-04.
+if (process.env.SCRIPT_DEBUG) {
+  console.log(`opencode script`, JSON.stringify(Script, null, 2))
+}

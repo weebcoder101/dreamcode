@@ -1,5 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import path from "path"
 import fs from "fs/promises"
 import { WriteTool } from "../../src/tool/write"
@@ -14,6 +15,15 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
 
 const ctx = {
   sessionID: SessionID.make("ses_test-write-session"),
@@ -38,7 +48,7 @@ const it = testEffect(
     Format.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     Truncate.defaultLayer,
-    Agent.defaultLayer,
+    Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
   ),
 )
 

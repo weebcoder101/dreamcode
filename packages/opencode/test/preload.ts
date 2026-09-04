@@ -36,8 +36,18 @@ process.env["XDG_CACHE_HOME"] = path.join(dir, "cache")
 process.env["XDG_CONFIG_HOME"] = path.join(dir, "config")
 process.env["XDG_STATE_HOME"] = path.join(dir, "state")
 process.env["OPENCODE_MODELS_PATH"] = path.join(import.meta.dir, "tool", "fixtures", "models-api.json")
+// Hermeticity: without this, ModelsDev.Service forks a background refresh()
+// that ignores OPENCODE_MODELS_PATH (it stats the cache-dir file instead),
+// finds nothing, and fetches 4MB from models.dev mid-test — costing the
+// first LLM-driven test ~20s of wall time and breaking offline runs.
+// Same flag cli-process.ts sets for out-of-process CLI tests.
+process.env["OPENCODE_DISABLE_MODELS_FETCH"] = "1"
 process.env["OPENCODE_EXPERIMENTAL_EVENT_SYSTEM"] = "true"
 process.env["OPENCODE_EXPERIMENTAL_WORKSPACES"] = "true"
+// Tests don't need the built-in plugin suite (auth providers, sensor-gate
+// enforcer with its Python predictor subprocess, etc.). The enforcer alone
+// spawns a subprocess per chat.message — >1000 spawns per prompt-suite run.
+process.env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = "1"
 
 // Set test home directory to isolate tests from user's actual home directory
 // This prevents tests from picking up real user configs/skills from ~/.claude/skills

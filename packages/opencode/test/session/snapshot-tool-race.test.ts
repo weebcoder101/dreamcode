@@ -30,6 +30,14 @@ import { TestLLMServer } from "../lib/llm-server"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { Skill } from "../../src/skill"
+import { SelfEvolve } from "@/skill/self-evolve"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
+
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+import { PiecesLTM } from "@/pieces-ltm"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -93,7 +101,17 @@ const it = testEffect(
       LayerNode.replace(LSP.node, lsp),
       LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })),
     ],
-  }).pipe(Layer.provide(Skill.defaultLayer)),
+  }).pipe(
+    Layer.provide(Skill.defaultLayer),
+    // SystemPrompt.defaultLayer bakes SelfEvolve.defaultLayer, which demands
+    // PiecesLTM — provide it so the node graph can resolve the service.
+    Layer.provide(SelfEvolve.defaultLayer),
+    Layer.provide(PiecesLTM.defaultLayer),
+    // PluginBoot is demanded by Plugin.defaultLayer (baked into
+    // Skill/PiecesLTM graphs) at construction; production stubs it in
+    // app-runtime, tests mirror that here.
+    Layer.provide(noopPluginBoot),
+  ),
 )
 
 const providerCfg = (url: string) => ({

@@ -18,6 +18,11 @@ export type {
 export type ServerReadyData = {
   url: string
   username: string | null
+  // F-003: `password` here is the AUTO-GENERATED local sidecar credential,
+  // generated fresh in main per session (randomUUID). It is never persisted
+  // and is needed by the renderer to talk to the local sidecar HTTP server.
+  // For user-entered remote server credentials, the renderer must use the
+  // getServerCredential / setServerCredential bridge (safeStorage-backed).
   password: string | null
 }
 
@@ -96,6 +101,12 @@ export type ElectronAPI = {
   setTitlebar: (theme: TitlebarTheme) => Promise<void>
   runDesktopMenuAction: (action: DesktopMenuAction) => Promise<void>
   setBackgroundColor: (color: string) => Promise<void>
+  // F-003: server credential bridge. The renderer never sees plaintext
+  // passwords across the contextBridge; it asks main to set / get / delete
+  // a credential by opaque server id, and main keeps it in safeStorage.
+  getServerCredential: (serverId: string) => Promise<string | null>
+  setServerCredential: (serverId: string, password: string) => Promise<number>
+  deleteServerCredential: (serverId: string) => Promise<boolean>
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void>
 }

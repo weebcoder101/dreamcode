@@ -1,3 +1,5 @@
+import { realpathSync } from "fs"
+import path from "path"
 import { Npm } from "../../npm"
 import { Effect, Option, Config } from "effect"
 import { pathToFileURL } from "url"
@@ -34,7 +36,7 @@ export const DynamicProviderPlugin = PluginV2.define({
           if (packageName.startsWith("file://")) {
             const resolvedPath = packageName.replace("file://", "")
             try {
-              const realpath = require("fs").realpathSync(resolvedPath)
+              const realpath = realpathSync(resolvedPath)
               const allowedPrefixes = [
                 path.resolve("node_modules"),
                 path.resolve(".dreamcode"),

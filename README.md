@@ -4,7 +4,7 @@
 
 > **New to DreamCode?** Read the **[Complete Guide](GUIDE.md)** — architecture, skills, configuration, and advanced patterns.
 
-An open-source AI coding agent with native dream thinking, 37-skill dynamic graph, memory consolidation, and scoring enforcement.
+An open-source AI coding agent with native dream thinking, 32-skill dynamic graph, memory consolidation, and scoring enforcement.
 
 ---
 
@@ -160,7 +160,7 @@ $env:OPENAI_API_KEY = "your-key"; dreamcode
 
 DreamCode is a fork of [opencode-go](https://github.com/anomalyco/opencode) with:
 - **MiMo-Code's** memory system (SQLite FTS5), dream prompts, actor system, task tracking
-- **Our skill system** (37 skills, dynamic graph, model router, scoring)
+- **Our skill system** (32 skills, dynamic graph, model router, scoring)
 - **Native execution** — skills are TypeScript tools, not external scripts
 
 ## How It Differs from OpenCode
@@ -171,8 +171,8 @@ DreamCode is a fork of [opencode-go](https://github.com/anomalyco/opencode) with
 | Memory | Basic | SQLite FTS5 with reconciliation |
 | Dream | None | 6-phase memory consolidation |
 | Scoring | None | Risk/reward enforcement |
-| Model Router | None | 120+ NEURO models, domain-specific |
-| Dynamic Graph | Static chain | 37-skill dependency graph |
+| Model Router | None | NEURO models, domain-specific |
+| Dynamic Graph | Static chain | 32-skill dependency graph |
 | Subagents | Basic | Full lifecycle management |
 | Context | Basic | Auto-checkpoint + reconstruction |
 | Sandbox | On by default | **Off by default, opt-in only** |
@@ -181,10 +181,10 @@ DreamCode is a fork of [opencode-go](https://github.com/anomalyco/opencode) with
 
 | Feature | MiMo-Code | DreamCode |
 |---------|-----------|-----------|
-| Skills | ~10 skills | 37 skills |
-| Model Router | None | 120+ NEURO models |
+| Skills | ~10 skills | 32 skills |
+| Model Router | None | NEURO models |
 | Scoring | None | Risk/reward enforcement |
-| Dynamic Graph | None | 37-skill dependency graph |
+| Dynamic Graph | None | 32-skill dependency graph |
 | Chain Enforcer | None | Backtesting verification |
 
 ## Quick Start
@@ -199,7 +199,7 @@ OPENAI_API_KEY=your-key dreamcode
 
 ## NEURO API (Highly Recommended — Free)
 
-DreamCode works best with the [NEURO API](https://neurometric.ai) — **120+ specialized AI models, completely free**.
+DreamCode works best with the [NEURO API](https://neurometric.ai) — a hosted catalogue of specialized AI models (availability and pricing are set by the service).
 
 ```bash
 # Get your free key at https://neurometric.ai
@@ -218,32 +218,39 @@ DreamCode config lives at `~/.config/dreamcode/config.yaml`:
 sandbox: false          # OFF by default — set to true to enable firejail
 dream_mode: true        # Enable 6-phase dream thinking
 scoring: true           # Enable scoring enforcement
-model_router: true      # Enable 120+ model routing
+model_router: true      # Enable NEURO model routing
 ```
 
 **Sandbox is OFF by default.** DreamCode runs with full filesystem access unless you explicitly enable sandbox mode. See [GUIDE.md](GUIDE.md) for details.
 
-## Skills (37)
+## Skills (32)
 
-DreamCode has 37 native skills organized in a dynamic graph:
+DreamCode ships **32 runtime skills** in `.opencode/skills/`, wired together by the dynamic dependency graph and sensor gate. The full catalog with descriptions is in [docs/skills.md](docs/skills.md).
 
-### META (12)
-context-compactor, exhaustive-crosscheck, neuro, model-router, code-hardener, lint-fixer, pieces-ltm, automated-learning, chain-orchestrator, guardian-ai, breakthrough-overdrive-innovation, automation
+
+### META (13)
+
+`context-compactor`, `exhaustive-crosscheck`, `neuro`, `model-router`, `code-hardener`, `lint-fixer`, `pieces-ltm`, `automated-learning`, `chain-orchestrator`, `guardian-ai`, `breakthrough-overdrive-innovation`, `automation`, `effect`
 
 ### CORE (7)
-planning, architecture, quality, security, testing, debugging, performance
+
+`planning`, `architecture`, `debugging`, `performance`, `security`, `testing`, `refactoring`
 
 ### LANGUAGE (4)
-python, frontend, react, api
 
-### TOOL (3)
-git, git-feature-workflow, devops
+`python`, `frontend`, `api`, `data`
 
-### SPECIALIZED (5)
-quantum, data, research, deep-research, documentation
+### TOOL (2)
 
-### SOFT SKILL (4)
-communication, product, refactoring, onboarding
+`git`, `devops`
+
+### SPECIALIZED (3)
+
+`quantum`, `research`, `youtube-transcript`
+
+### SOFT SKILL (3)
+
+`communication`, `product`, `onboarding`
 
 ## Architecture
 
@@ -281,7 +288,7 @@ DreamCode is designed for Antigravity IDE. Open your project in Antigravity and 
 
 | Guide | Description |
 |-------|-------------|
-| **[GUIDE.md](GUIDE.md)** | Complete walkthrough — architecture, 37 skills, NEURO, Pieces LTM, advanced patterns |
+| **[GUIDE.md](GUIDE.md)** | Complete walkthrough — architecture, 32 skills, NEURO, Pieces LTM, advanced patterns |
 | **[SECURITY.md](SECURITY.md)** | Security policy, sandbox model, credential storage, vulnerability reporting |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | Development setup, PR guidelines, coding conventions |
 | **[AGENTS.md](AGENTS.md)** | Build system, architecture, code patterns (internal developers — gitignored) |
@@ -289,9 +296,9 @@ DreamCode is designed for Antigravity IDE. Open your project in Antigravity and 
 
 ### Key Topics
 - **[Dream Thinking](docs/dream-thinking.md)** — The 6-phase engine behind DREAM_INNOVATION mode
-- **[37 Skills Reference](docs/skills.md)** — Complete catalog with activation conditions and config
+- **[32 Skills Reference](docs/skills.md)** — Complete catalog with activation conditions and config
 - **[Configuration Reference](docs/config.md)** — Full YAML schema with all options
-- **[NEURO API Setup](docs/neuro.md)** — 120+ specialized models, free to use
+- **NEURO API Setup** — see the hosted [NEURO service](https://neurometric.ai) for its current model catalogue and terms
 - **[Sensor Gate](docs/sensor-gate.md)** — Intent classification, chain selection, spawn decisions
 
 ## Credits
@@ -299,7 +306,7 @@ DreamCode is designed for Antigravity IDE. Open your project in Antigravity and 
 - [OpenCode](https://github.com/anomalyco/opencode) — Base agent framework
 - [MiMo-Code](https://github.com/XiaomiMiMo/MiMo-Code) — Memory system, dream prompts, actor system
 - [MiMo](https://github.com/XiaomiMiMo/MiMo) — MiMo-7B RL model
-- [NEURO](https://neurometric.ai) — 120+ specialized models
+- [NEURO](https://neurometric.ai) — hosted specialized-model catalogue
 - [Pieces](https://pieces.app) — Long-term memory integration
 
 ## License

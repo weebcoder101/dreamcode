@@ -806,6 +806,12 @@ function contextToolSummary(parts: ToolPart[]) {
 }
 
 function ExaOutput(props: { output?: string }) {
+  // SECURITY: anchors carry data-tool="exa" so screen readers and the
+  // UI can mark the link as coming from a web-search result rather than
+  // a trusted source. The regex in `urls()` is already restricted to
+  // http/https, so non-http(s) schemes cannot reach this href, but the
+  // data attribute is the cheap belt-and-suspenders signal for any
+  // downstream security tooling or user-agent.
   const links = createMemo(() => urls(props.output))
 
   return (
@@ -816,6 +822,7 @@ function ExaOutput(props: { output?: string }) {
             {(url) => (
               <a
                 data-slot="exa-tool-link"
+                data-tool="exa"
                 href={url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -1716,6 +1723,14 @@ ToolRegistry.register({
     const url = createMemo(() => {
       const value = props.input.url
       if (typeof value !== "string") return ""
+      // SECURITY: only http(s) URLs become anchors. The tool input is
+      // LLM-controlled, so we never let data:, file:, javascript:, vbscript:,
+      // or other schemes reach an href. Browsers refuse javascript:/vbscript:
+      // in href today, but data:text/html and file:// are still navigable.
+      // Returning "" here hides the link entirely (safer than a stranded
+      // string); the tool body still shows the output, so the user can see
+      // what was fetched.
+      if (!/^https?:\/\//i.test(value)) return ""
       return value
     })
     return (

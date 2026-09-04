@@ -1,5 +1,5 @@
 import { Select as Kobalte } from "@kobalte/core/select"
-import { createMemo, onCleanup, splitProps, type ComponentProps, type JSX } from "solid-js"
+import { createMemo, createSignal, onCleanup, splitProps, type ComponentProps, type JSX } from "solid-js"
 import { pipe, groupBy, entries, map } from "remeda"
 import { Button, ButtonProps } from "./button"
 import { Icon } from "./icon"
@@ -42,18 +42,21 @@ export function Select<T>(props: SelectProps<T> & Omit<ButtonProps, "children">)
     "triggerProps",
   ])
 
-  const state = {
-    key: undefined as string | undefined,
-    cleanup: undefined as (() => void) | void,
-  }
+  const [key, setKey] = createSignal<string | undefined>(undefined)
+  const [cleanup, setCleanup] = createSignal<(() => void) | void>(undefined)
 
   const stop = () => {
-    state.cleanup?.()
-    state.cleanup = undefined
-    state.key = undefined
+    cleanup()?.()
+    setCleanup(undefined)
+    setKey(undefined)
   }
 
-  const keyFor = (item: T) => (local.value ? local.value(item) : (item as string))
+  const keyFor = (item: T) =>
+    local.value
+      ? local.value(item)
+      : typeof item === "string" || typeof item === "number" || typeof item === "boolean"
+        ? String(item)
+        : JSON.stringify(item)
 
   const move = (item: T | undefined) => {
     if (!local.onHighlight) return
@@ -62,11 +65,20 @@ export function Select<T>(props: SelectProps<T> & Omit<ButtonProps, "children">)
       return
     }
 
-    const key = keyFor(item)
-    if (state.key === key) return
-    state.cleanup?.()
-    state.cleanup = local.onHighlight(item)
-    state.key = key
+    const nextKey = keyFor(item)
+    if (key() === nextKey) return
+    cleanup()?.()
+    const result = local.onHighlight(item)
+    if (result instanceof Promise) {
+      result
+        .then((c) => {
+          if (key() === nextKey) setCleanup(c)
+        })
+        .catch(() => {})
+    } else {
+      setCleanup(result)
+    }
+    setKey(nextKey)
   }
 
   onCleanup(stop)

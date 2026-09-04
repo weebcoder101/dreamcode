@@ -102,7 +102,7 @@ export function ServerRow(props: ServerRowProps) {
                     <span class="text-text-weaker">{language.t("server.row.noUsername")}</span>
                   )}
                 </span>
-                {conn().http.password && <span class="text-text-weak">••••••••</span>}
+                {conn().http.hasCredential && <span class="text-text-weak">••••••••</span>}
               </div>
             )}
           </Show>

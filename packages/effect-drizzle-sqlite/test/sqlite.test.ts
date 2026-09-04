@@ -90,7 +90,7 @@ test("rolls back explicit transaction rollback", async () => {
           tx
             .insert(users)
             .values({ name: "Barbara" })
-            .pipe(Effect.andThen(Effect.fail(tx.rollback()))),
+            .pipe(Effect.andThen(tx.rollback())),
         )
         .pipe(Effect.ignore)
 

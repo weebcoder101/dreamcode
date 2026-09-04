@@ -11,12 +11,12 @@
 2. [Architecture Overview](#2-architecture-overview)
 3. [Installation & Setup](#3-installation--setup)
 4. [Configuration Reference](#4-configuration-reference)
-5. [The 37-Skill System](#5-the-37-skill-system)
+5. [The 32-Skill System](#5-the-32-skill-system)
 6. [Sensor Gate — How Every Prompt Is Classified](#6-sensor-gate)
 7. [Dream Thinking — The 6-Phase Engine](#7-dream-thinking)
 8. [Scoring & Enforcement](#8-scoring--enforcement)
 9. [Memory System (SQLite FTS5)](#9-memory-system)
-10. [Model Router — 120+ Models](#10-model-router)
+10. [Model Router — NEURO Models](#10-model-router)
 11. [Checkpoint & Recovery](#11-checkpoint--recovery)
 12. [Sandbox Mode](#12-sandbox-mode)
 13. [MCP Servers](#13-mcp-servers)
@@ -38,10 +38,10 @@ DreamCode is a **fork of opencode** with three major additions:
 | System | What It Does | Where It Lives |
 |--------|-------------|----------------|
 | **MiMo-Code Memory** | SQLite FTS5 memory, dream prompts, actor system | `packages/opencode/src/memory/` |
-| **37-Skill Graph** | Dynamic skill selection, model routing, scoring | `.opencode/skills/` |
+| **32-Skill Graph** | Dynamic skill selection, model routing, scoring | `.opencode/skills/` |
 | **Native TypeScript Tools** | Skills as first-class tools, not external scripts | `packages/opencode/src/tool/skill.ts` |
 
-**The key insight**: Skills are TypeScript tools registered in the agent's tool registry. When the agent runs, the sensor gate classifies your prompt, selects skills from the 37-node graph, and executes them as native tool calls.
+**The key insight**: Skills are TypeScript tools registered in the agent's tool registry. When the agent runs, the sensor gate classifies your prompt, selects skills from the 32-node graph, and executes them as native tool calls.
 
 ---
 
@@ -53,7 +53,7 @@ User Prompt
 ┌─────────────────────────────────────────┐
 │ SENSOR GATE (chain-orchestrator)        │
 │  - Classify intent                      │
-│  - Select skills from 37-node graph     │
+│  - Select skills from 32-node graph     │
 │  - Determine chain execution order      │
 └─────────────────────────────────────────┘
     ↓
@@ -122,7 +122,7 @@ dreamcode
 
 DreamCode will:
 1. Read `.opencode/` config from your project
-2. Load the 37-skill graph
+2. Load the 32-skill graph
 3. Initialize SQLite memory at `~/.local/share/dreamcode/`
 4. Start the TUI
 
@@ -142,7 +142,7 @@ DreamCode will:
 # ─── Core ───────────────────────────────────────
 dream_mode: true          # Enable 6-phase dream thinking
 scoring: true             # Enable scoring enforcement
-model_router: true        # Enable 120+ model routing
+model_router: true        # Enable NEURO model routing
 
 # ─── Sandbox ───────────────────────────────────
 sandbox: false            # Set to true to enable firejail isolation
@@ -196,76 +196,71 @@ Create `.opencode/opencode.jsonc` in your project:
 
 ---
 
-## 5. The 37-Skill System
+## 5. The 32-Skill System
+DreamCode ships **32 runtime skills** in `.opencode/skills/`, organized into 6 categories. The full catalog with activation rules is in [docs/skills.md](docs/skills.md).
 
-DreamCode has 37 skills organized in 6 categories:
 
-### META (12) — Always available
-
-| Skill | Purpose | Chains With |
-|-------|---------|-------------|
-| `context-compactor` | Compress context before agent reads it | All chains (Phase 0) |
-| `exhaustive-crosscheck` | LTM cursor decomposition → NEURO → hardener | All non-trivial tasks |
-| `neuro` | External AI architecture review (10 iterations) | code-hardener, lint-fixer |
-| `model-router` | Route to optimal model for task | All chains |
-| `code-hardener` | Logic filter, 5 iterations | lint-fixer |
-| `lint-fixer` | Post-implementation quality, 5 loops | pieces-ltm |
-| `pieces-ltm` | Auto-persist to Pieces LTM | automated-learning |
-| `automated-learning` | Self-evolution, routing patches | All chains (final step) |
-| `chain-orchestrator` | Validate dependencies, enforce order | All chains |
-| `guardian-ai` | Safety supervisor, reviews before execution | All chains |
-| `breakthrough-overdrive-innovation` | Dream-like reflection + innovation | neuro, code-hardener |
-| `automation` | Trigger-driven skill pipelines | scheduled-automations |
-
-### CORE (7) — Code changes
-
-| Skill | When To Use |
-|-------|-------------|
-| `planning` | Multi-step tasks, feature planning |
-| `architecture` | System design, pattern decisions |
-| `quality` | Linting, type checking, coverage |
-| `security` | Auth, secrets, OWASP patterns |
-| `testing` | Test writing, coverage standards |
-| `debugging` | Fault isolation, root cause |
-| `performance` | Profiling, optimization |
-
-### LANGUAGE (4) — Language-specific
-
-| Skill | Language |
-|-------|----------|
-| `python` | Python 3.12+ |
-| `frontend` | React, TailwindCSS, Vite |
-| `react` | React hooks, components |
-| `api` | REST, Flask patterns |
-
-### TOOL (3) — Tooling
-
-| Skill | Tool |
-|-------|------|
-| `git` | Branch strategy, commits |
-| `git-feature-workflow` | start/pr/finish lifecycle |
-| `devops` | Docker, CI/CD |
-
-### SPECIALIZED (5) — Domain-specific
-
-| Skill | Domain |
-|-------|--------|
-| `quantum` | QAE/QAOA, simulator benchmarking |
-| `data` | Pandas, numpy, statistics |
-| `research` | Codebase exploration |
-| `deep-research` | Multi-step web research |
-| `documentation` | Docstrings, README, API docs |
-
-### SOFT SKILL (4) — Cross-cutting
+### META (13) — Always available
 
 | Skill | Purpose |
 |-------|---------|
-| `communication` | Audience-appropriate explanation |
-| `product` | User needs, prioritization |
-| `refactoring` | Safe restructuring |
-| `onboarding` | Project orientation |
+| `context-compactor` | > |
+| `exhaustive-crosscheck` | META-SKILL — mandatory entry point for EVERY non-trivial prompt. Decomposes prompt into 5 orthogonal cursor... |
+| `neuro` | Mandatory external architectural and code-review harness for ANY non-trivial task including code changes, b... |
+| `model-router` | > |
+| `code-hardener` | Mandatory second-stage logic filter and architectural hardening skill that runs after NEURO for ANY code ch... |
+| `lint-fixer` | Mandatory post-implementation lint and type-checking skill that runs after ANY code change, bug fix, new fe... |
+| `pieces-ltm` | > |
+| `automated-learning` | Self-evolution skill — captures what worked, what failed, and what to change after every non-trivial run. P... |
+| `chain-orchestrator` | > |
+| `guardian-ai` | Codex-inspired Guardian AI — NEURO-powered safety supervisor that reviews agent actions on EVERY prompt bef... |
+| `breakthrough-overdrive-innovation` | DEFAULT THINKING MODE — not a feature, but how the agent operates. Every task gets innovation-overdrive thi... |
+| `automation` | Trigger-driven automation definitions and runner management. Use when creating, running, or managing skill-... |
+| `effect` | Work with Effect v4 / effect-smol TypeScript code in this repo |
 
----
+### CORE (7) — Code changes
+
+| Skill | Purpose |
+|-------|---------|
+| `planning` | Systematic project planning and task decomposition. Use when starting a new feature, refactoring, debugging... |
+| `architecture` | Architectural design, system patterns, and dependency management. Use when designing new modules, refactori... |
+| `debugging` | Systematic debugging methodology. Use when encountering unexpected behavior, test failures, or production i... |
+| `performance` | Performance analysis, profiling, and optimization. Use when optimizing slow code, reducing memory, or scali... |
+| `security` | Security review and vulnerability analysis. Use when handling sensitive data, authentication, authorization... |
+| `testing` | Testing strategy, test writing, and coverage standards. Use when writing or reviewing tests. Covers unit, i... |
+| `refactoring` | Safe refactoring methodology. Use when restructuring existing code without changing behavior. Covers patter... |
+
+### LANGUAGE (4) — Language / frontend
+
+| Skill | Purpose |
+|-------|---------|
+| `python` | Python development standards, typing, imports, and project structure. Use for all Python code in the projec... |
+| `frontend` | Frontend development standards for React, TailwindCSS, and Vite. Use for UI components, pages, styling, and... |
+| `api` | API design patterns, REST conventions, and endpoint standards. Use when creating or modifying API endpoints... |
+| `data` | Data science and statistical analysis best practices. Use for data analysis, statistical modeling, visualiz... |
+
+### TOOL (2) — Tooling
+
+| Skill | Purpose |
+|-------|---------|
+| `git` | Git operations, branching strategy, commit conventions, and PR workflow. Use for all git operations. Enforc... |
+| `devops` | Docker, CI/CD, deployment, and infrastructure management. Use for container builds, CI pipeline changes, de... |
+
+### SPECIALIZED (3) — Domain-specific
+
+| Skill | Purpose |
+|-------|---------|
+| `quantum` | Quantum computing POC standards for QAE, QAOA, and hybrid quantum-classical algorithms. Use for quantum cir... |
+| `research` | Systematic research methodology for investigating topics, exploring codebases, and gathering information. U... |
+| `youtube-transcript` | Fetch, analyze, and summarize YouTube video transcripts. Use when the user wants to extract transcript from... |
+
+### SOFT SKILL (3) — Cross-cutting
+
+| Skill | Purpose |
+|-------|---------|
+| `communication` | Communication standards for explaining technical concepts to different audiences. Use when presenting resul... |
+| `product` | Product-oriented thinking for understanding user needs, prioritizing features, and designing solutions. Use... |
+| `onboarding` | Project onboarding and orientation. Use when first exploring the codebase, setting up the development envir... |
 
 ## 6. Sensor Gate
 
@@ -420,7 +415,7 @@ The `reconcile-ts.ts` module walks your `.opencode/` directory, extracts tokens 
 
 ## 10. Model Router
 
-DreamCode can route to 120+ specialized models via the NEURO API:
+DreamCode can route to specialized models via the NEURO API catalogue:
 
 ### How it works
 
@@ -875,9 +870,9 @@ pieces_annotations_full_text_search --query "security audit"
 
 ## 19. NEURO API (FREE)
 
-> **DreamCode works best with NEURO — and it's completely free.**
+> **DreamCode works best with NEURO; availability and pricing are set by the service.**
 
-The [NEURO API](https://neurometric.ai) gives DreamCode access to 120+ specialized AI models for domain-specific analysis, multi-perspective review, and architectural guidance.
+The [NEURO API](https://neurometric.ai) gives DreamCode access to a hosted catalogue of specialized AI models for domain-specific analysis, multi-perspective review, and architectural guidance. The service controls the current catalogue and terms.
 
 ### Get Your Free API Key
 
@@ -914,7 +909,7 @@ For complex tasks, NEURO runs up to 10 iterations:
 
 | Feature | Without NEURO | With NEURO |
 |---------|---------------|------------|
-| Model routing | Local fallback only | 120+ specialized models |
+| Model routing | Local fallback only | Hosted specialized-model catalogue |
 | Review iterations | 1-2 local passes | Up to 10 NEURO iterations |
 | Architecture review | Basic | Multi-perspective analysis |
 | Edge case detection | Limited | Comprehensive |
@@ -1067,7 +1062,7 @@ dreamcode --resume <checkpoint-id>
 │    OFF by default                                       │
 │    export DREAMCODE_SANDBOX=on                          │
 │                                                         │
-│  SKILLS (37)                                            │
+│  SKILLS (32)                                            │
 │    META:    12 skills (always available)                │
 │    CORE:    7 skills (code changes)                     │
 │    LANG:    4 skills (language-specific)                │

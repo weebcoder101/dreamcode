@@ -10,7 +10,7 @@
 sandbox: false              # OFF by default — set true to enable firejail
 dream_mode: true            # Enable 6-phase dream thinking
 scoring: true               # Enable scoring enforcement
-model_router: true          # Enable 120+ model routing
+model_router: true          # Enable NEURO model routing
 ```
 
 ## Full Schema
@@ -28,7 +28,7 @@ model_router: true          # Enable 120+ model routing
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `neuro.api_key` | `string` | env `NEURO_API_KEY` | NEURO API key for 120+ models |
+| `neuro.api_key` | `string` | env `NEURO_API_KEY` | NEURO API key for the hosted model catalogue |
 | `neuro.endpoint` | `string` | `https://api.neurometric.ai` | API endpoint |
 | `neuro.timeout` | `int` | `30000` | Request timeout in ms |
 
@@ -72,7 +72,7 @@ model_router: true          # Enable 120+ model routing
 |----------|-------------|
 | `OPENAI_API_KEY` | OpenAI API key |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
-| `NEURO_API_KEY` | NEUROMETRIC API key (free, 120+ models) |
+| `NEURO_API_KEY` | NEUROMETRIC API key; service availability and terms apply |
 | `DREAMCODE_SANDBOX` | Enable sandbox: `on`/`off` |
 | `DREAMCODE_DIR` | Custom install directory |
 | `OPENCODE_VERSION` | Override version for builds |
@@ -82,7 +82,7 @@ model_router: true          # Enable 120+ model routing
 
 ## Provider Configuration
 
-DreamCode supports 120+ LLM providers through the NEURO API and standard AI SDK providers:
+DreamCode supports the NEURO hosted model catalogue and standard AI SDK providers:
 
 ```bash
 # OpenAI-compatible
@@ -91,8 +91,8 @@ export OPENAI_API_KEY="sk-..."
 # Anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-# NEURO (120+ specialized models)
+# NEURO (specialized model catalogue)
 export NEURO_API_KEY="nk-..."
 ```
 
-See [NEURO API Setup](neuro.md) for the full provider catalog.
+See the [NEURO service](https://neurometric.ai) for its current provider catalogue.

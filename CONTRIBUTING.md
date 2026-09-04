@@ -30,7 +30,7 @@ dreamcode/
 │   ├── app/          # Web UI (embedded in binary)
 │   └── desktop/      # Electron desktop app
 ├── .dreamcode/       # Skill scripts and configurations
-│   └── skills/       # 37 skill definitions
+│   └── skills/       # 38 skill definitions
 └── docs/             # Documentation
 ```
 

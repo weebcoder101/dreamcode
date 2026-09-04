@@ -25,7 +25,16 @@ function rewrite(request: Request, directory?: string) {
     url.searchParams.set("directory", value)
   }
 
-  const next = new Request(url, request)
+  // Clone the request to a new URL (extract init since Request accepts URL + init)
+  const next = new Request(url, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body,
+    redirect: request.redirect,
+    integrity: request.integrity,
+    referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
+  })
   next.headers.delete("x-opencode-directory")
   return next
 }

@@ -20,7 +20,7 @@ export function selectionFromLines(selection?: SelectedLineRange): FileSelection
   }
 }
 
-const pool = [
+const defaultPool = [
   "src/session/timeline.tsx",
   "src/session/composer.tsx",
   "src/components/prompt-input.tsx",
@@ -28,7 +28,12 @@ const pool = [
   "README.md",
 ]
 
-export function useFile() {
+/**
+ * Build a `useFile` mock. Pass a custom `pool` to exercise empty, single,
+ * large, or permission-denied states that the default 5-path pool cannot.
+ * See wave5-retry F-SB-03.
+ */
+export function createFileMock(pool: string[] = defaultPool) {
   return {
     tab(path: string) {
       return `file:${path}`
@@ -44,4 +49,8 @@ export function useFile() {
       return pool.filter((path) => path.toLowerCase().includes(text))
     },
   }
+}
+
+export function useFile() {
+  return createFileMock()
 }

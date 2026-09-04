@@ -14,6 +14,11 @@ import contextMenu from "electron-context-menu"
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
 import { CHANNEL } from "./constants"
+import {
+  getServerCredential,
+  setServerCredential,
+  deleteServerCredential,
+} from "./server-credentials"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
 import { exportDebugLogs, initCrashReporter, initLogging, startNetLog, write as writeLog } from "./logging"
@@ -264,6 +269,9 @@ const main = Effect.gen(function* () {
     updater,
     showUpdater: () => showUpdaterDialog(updater, true),
     setBackgroundColor: (color) => setBackgroundColor(color),
+    getServerCredential: (serverId) => getServerCredential(serverId),
+    setServerCredential: (serverId, password) => setServerCredential(serverId, password),
+    deleteServerCredential: (serverId) => deleteServerCredential(serverId),
     exportDebugLogs: () => exportDebugLogs(),
     recordFatalRendererError: (error) => writeLog("renderer", "fatal renderer error", { ...error }, "error"),
   })

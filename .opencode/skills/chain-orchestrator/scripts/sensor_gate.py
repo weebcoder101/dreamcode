@@ -148,7 +148,9 @@ BIAS_BOOSTS = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DYNAMIC GRAPH — ALL 37 skills as nodes, dependencies as edges
+# DYNAMIC GRAPH — 38 skills registered (see .opencode/skills/, .dreamcode/skills/);
+# this graph models 30 explicit nodes + dependencies. The remaining 8 are
+# standalone / orchestrator-internal and intentionally not in the graph.
 # ═══════════════════════════════════════════════════════════════════════════
 
 SKILL_GRAPH = {
@@ -257,7 +259,7 @@ def build_dynamic_graph(prompt: str) -> dict:
     # Only include dream/innovation when task actually requires it
     # (not for trivial communication-only tasks)
     task_types = {t["task_type"] for t in tasks}
-    INNOVATION_TASKS = {"refactoring", "security", "performance", "quantum", "automation"}
+    INNOVATION_TASKS = {"refactoring", "security", "performance", "architecture", "quantum", "automation"}
     if task_types & INNOVATION_TASKS:
         needed_skills.add("breakthrough-overdrive-innovation")
     
@@ -523,7 +525,7 @@ PERSONA_TEMPLATES = {
     "logging": {"name": "The Chronicler", "role": "Observability Specialist", "focus": "structured logging, tracing, metrics collection"},
 }
 
-MAX_PERSONAS = 3
+MAX_PERSONAS = 7
 
 
 def generate_personas(chain_result: dict, prompt: str) -> str:

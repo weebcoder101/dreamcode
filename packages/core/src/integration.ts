@@ -152,7 +152,16 @@ export class AuthorizationError extends Schema.TaggedErrorClass<AuthorizationErr
   cause: Schema.Defect,
 }) {}
 
-export type Error = CodeRequiredError | AuthorizationError
+/**
+ * F-LOGINTEGRATION-1 (P2): A typed "not found" error for integration methods and
+ * OAuth attempts. Replaces Effect.die in cases where a missing integration /
+ * method / attempt is a recoverable client error rather than a server defect.
+ */
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Integration.NotFound", {
+  message: Schema.String,
+}) {}
+
+export type Error = CodeRequiredError | AuthorizationError | NotFoundError
 
 export const Event = {
   Updated: EventV2.define({
@@ -206,7 +215,7 @@ export interface Interface {
       readonly key: string
       /** User-facing label for the stored credential. */
       readonly label?: string
-    }) => Effect.Effect<void, AuthorizationError>
+    }) => Effect.Effect<void, AuthorizationError | NotFoundError>
     /** Starts a stateful OAuth attempt. */
     readonly oauth: (input: {
       /** Integration being authenticated. */
@@ -217,18 +226,18 @@ export interface Interface {
       readonly inputs: Inputs
       /** User-facing label for the credential created on completion. */
       readonly label?: string
-    }) => Effect.Effect<Attempt, AuthorizationError>
+    }) => Effect.Effect<Attempt, AuthorizationError | NotFoundError>
   }
   readonly attempt: {
     /** Returns the current state of an OAuth attempt. */
-    readonly status: (attemptID: AttemptID) => Effect.Effect<AttemptStatus>
+    readonly status: (attemptID: AttemptID) => Effect.Effect<AttemptStatus, NotFoundError>
     /** Completes the attempt and stores its credential. */
     readonly complete: (input: {
       /** Opaque handle returned by `oauth`. */
       readonly attemptID: AttemptID
       /** Authorization code required by attempts in code mode. */
       readonly code?: string
-    }) => Effect.Effect<void, CodeRequiredError | AuthorizationError>
+    }) => Effect.Effect<void, CodeRequiredError | AuthorizationError | NotFoundError>
     /** Cancels an attempt and releases its resources. */
     readonly cancel: (attemptID: AttemptID) => Effect.Effect<void>
   }
@@ -427,7 +436,7 @@ export const locationLayer = Layer.effect(
             .get()
             .integrations.get(input.integrationID)
             ?.methods.some((method) => method.type === "key")
-          if (!method) return yield* Effect.die(`Key method not found: ${input.integrationID}`)
+          if (!method) return yield* Effect.fail(new NotFoundError({ message: `Key method not found: ${input.integrationID}` }))
           yield* credentials.create({
             integrationID: input.integrationID,
             label: input.label,
@@ -437,7 +446,7 @@ export const locationLayer = Layer.effect(
         oauth: Effect.fn("Integration.connect.oauth")(function* (input) {
           const method = state.get().integrations.get(input.integrationID)?.implementations.get(input.methodID)
           if (!method) {
-            return yield* Effect.die(`OAuth method not found: ${input.integrationID}/${input.methodID}`)
+            return yield* Effect.fail(new NotFoundError({ message: `OAuth method not found: ${input.integrationID}/${input.methodID}` }))
           }
           const attemptScope = yield* Scope.fork(scope)
           const authorization = yield* authorize(method.authorize(input.inputs)).pipe(
@@ -478,7 +487,7 @@ export const locationLayer = Layer.effect(
       attempt: {
         status: Effect.fn("Integration.attempt.status")(function* (attemptID) {
           const attempt = (yield* SynchronizedRef.get(attempts)).get(attemptID)
-          if (!attempt) return yield* Effect.die(`OAuth attempt not found: ${attemptID}`)
+          if (!attempt) return yield* Effect.fail(new NotFoundError({ message: `OAuth attempt not found: ${attemptID}` }))
           if (attempt.status === "failed") {
             return { status: attempt.status, message: attempt.message ?? "Authorization failed", time: attempt.time }
           }
@@ -491,12 +500,12 @@ export const locationLayer = Layer.effect(
             if (match.authorization.mode === "code" && input.code === undefined) return [match, current]
             return [match, new Map(current).set(input.attemptID, { ...match, completing: true })]
           })
-          if (!attempt) return yield* Effect.die(`OAuth attempt not found: ${input.attemptID}`)
+          if (!attempt) return yield* Effect.fail(new NotFoundError({ message: `OAuth attempt not found: ${input.attemptID}` }))
           if (attempt.status !== "pending") return
           if (attempt.authorization.mode === "code" && input.code === undefined) {
             return yield* new CodeRequiredError({ attemptID: input.attemptID })
           }
-          if (attempt.completing) return yield* Effect.die(`OAuth attempt already completing: ${input.attemptID}`)
+          if (attempt.completing) return yield* Effect.fail(new NotFoundError({ message: `OAuth attempt already completing: ${input.attemptID}` }))
           const callback =
             attempt.authorization.mode === "auto"
               ? attempt.authorization.callback

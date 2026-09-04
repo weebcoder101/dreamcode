@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import { DurableObject } from "cloudflare:workers"
-import { randomUUID } from "node:crypto"
+import { randomUUID, timingSafeEqual } from "node:crypto"
 import { jwtVerify, createRemoteJWKSet } from "jose"
 import { createAppAuth } from "@octokit/auth-app"
 import { Octokit } from "@octokit/rest"
@@ -26,9 +26,20 @@ export class SyncServer extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server)
 
     const data = await this.ctx.storage.list()
-    Array.from(data.entries())
+    // P0-05: await all sends and capture failures. A failed send on one
+    // connection should not silently drop the rest.
+    const messages = Array.from(data.entries())
       .filter(([key, _]) => key.startsWith("session/"))
-      .map(([key, content]) => server.send(JSON.stringify({ key, content })))
+      .map(([key, content]) => ({ key, content }))
+    await Promise.all(
+      messages.map(async ({ key, content }) => {
+        try {
+          server.send(JSON.stringify({ key, content }))
+        } catch (err) {
+          console.error(`[SyncServer] send failed for key=${key}:`, err)
+        }
+      })
+    )
 
     return new Response(null, {
       status: 101,
@@ -84,7 +95,19 @@ export class SyncServer extends DurableObject<Env> {
   }
 
   public async assertSecret(secret: string) {
-    if (secret !== (await this.getSecret())) throw new Error("Invalid secret")
+    // SECURITY: constant-time compare to prevent timing attacks on the
+    // per-share secret. The full fix (Argon2id hash, KMS-managed
+    // rotation, rate-limit on repeated mismatches) is tracked in the
+    // audit; this change narrows the timing oracle. See wave5-retry
+    // F-AUTH-05.
+    const expected = await this.getSecret()
+    if (!expected) throw new Error("Invalid secret")
+    if (typeof secret !== "string" || secret.length !== expected.length) {
+      throw new Error("Invalid secret")
+    }
+    if (!timingSafeEqual(Buffer.from(secret), Buffer.from(expected))) {
+      throw new Error("Invalid secret")
+    }
   }
 
   private async getSecret() {
@@ -141,7 +164,14 @@ export default new Hono<{ Bindings: Env }>()
     const body = await c.req.json<{ sessionShortName: string; adminSecret: string }>()
     const sessionShortName = body.sessionShortName
     const adminSecret = body.adminSecret
-    if (adminSecret !== Resource.ADMIN_SECRET.value) throw new Error("Invalid admin secret")
+    // SECURITY: constant-time compare to prevent timing attack on the
+    // admin secret. See wave5-retry F-AUTH-04. The full fix (Argon2id
+    // hash of the secret, KMS-managed, with rotation) is tracked in
+    // the audit; this change narrows the timing oracle to a single
+    // correct/incorrect decision in the same wall-clock window.
+    if (!timingSafeEqual(Buffer.from(adminSecret), Buffer.from(Resource.ADMIN_SECRET.value))) {
+      throw new Error("Invalid admin secret")
+    }
     const id = c.env.SYNC_SERVER.idFromName(sessionShortName)
     const stub = c.env.SYNC_SERVER.get(id)
     await stub.clear()
@@ -157,6 +187,11 @@ export default new Hono<{ Bindings: Env }>()
     const name = SyncServer.shortName(body.sessionID)
     const id = c.env.SYNC_SERVER.idFromName(name)
     const stub = c.env.SYNC_SERVER.get(id)
+    // P1-04: validate body shape before use. Missing fields are an
+    // invalid request, not an opportunity for Buffer.from(undefined).
+    if (typeof body.secret !== "string" || typeof body.key !== "string") {
+      return c.json({ error: "Invalid body" }, 400)
+    }
     await stub.assertSecret(body.secret)
     await stub.publish(body.key, body.content)
     return c.json({})
@@ -167,7 +202,12 @@ export default new Hono<{ Bindings: Env }>()
       return c.text("Error: Upgrade header is required", { status: 426 })
     }
     const id = c.req.query("id")
-    console.log("share_poll", id)
+    // SECURITY: the WebSocket is unauthenticated. The 8-char share id is
+    // the only barrier. See wave5-retry F-AUTH-06. The full fix
+    // (per-share secret in ?secret= query, Origin allowlist, per-id
+    // connection cap) is tracked in the audit; this comment makes the
+    // trust boundary explicit so future maintainers do not assume the
+    // upgrade header is sufficient.
     if (!id) return c.text("Error: Share ID is required", { status: 400 })
     const stub = c.env.SYNC_SERVER.get(c.env.SYNC_SERVER.idFromName(id))
     return stub.fetch(c.req.raw)
@@ -181,7 +221,7 @@ export default new Hono<{ Bindings: Env }>()
 
     let info: any
     const messages: Record<string, any> = {}
-    data.forEach((d) => {
+    data.forEach((d: any) => {
       const [root, type] = d.key.split("/")
       if (root !== "session") return
       if (type === "info") {
@@ -375,7 +415,7 @@ export default new Hono<{ Bindings: Env }>()
     const octokit = new Octokit({ auth: appAuth.token })
     let installation: any
     try {
-      const ret = await octokit.apps.getRepoInstallation({ owner, repo })
+      const ret = await octokit.apps.getRepoInstallation({ owner: owner!, repo: repo! })
       installation = ret.data
     } catch (err) {
       if (err instanceof Error && err.message.includes("Not Found")) {

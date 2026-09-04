@@ -14,8 +14,6 @@
 
 import { createCipheriv, createDecipheriv, randomBytes, createHash, pbkdf2Sync } from "crypto"
 import { existsSync, readFileSync } from "fs"
-import { join } from "path"
-import { homedir } from "os"
 
 const ALGORITHM = "aes-256-gcm"
 const IV_LENGTH = 12
@@ -41,8 +39,14 @@ function getMachineId(): string {
     }
   } catch { /* fall through */ }
 
-  // Strategy 3: HOME directory hash (containers, CI)
-  return createHash("sha256").update(homedir()).digest("hex")
+  // Strategy 3: ephemeral random key. If neither machine-id file is
+  // available, the credential store cannot be opened in subsequent
+  // sessions anyway (the encryption key would not be reproducible).
+  // Returning a random 256-bit string ensures credentials encrypted in
+  // this session cannot be decrypted by other processes or future
+  // sessions — strict fail-closed instead of using a guessable HOME
+  // hash that any local user can compute.
+  return randomBytes(32).toString("hex")
 }
 
 let cachedMachineId: string | null = null

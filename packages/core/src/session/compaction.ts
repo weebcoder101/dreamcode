@@ -195,8 +195,9 @@ export const make = (dependencies: Dependencies) => {
     // Extract the last user message for resume context
     const lastUserMessage = (() => {
       for (let i = input.entries.length - 1; i >= 0; i--) {
-        if (input.entries[i].message.type === "user") {
-          return input.entries[i].message.text
+        const msg = input.entries[i].message
+        if (msg.type === "user") {
+          return msg.text
         }
       }
       return undefined

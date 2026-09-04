@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Queue } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { QuestionTool } from "../../src/tool/question"
 import { Question } from "../../src/question"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -8,6 +9,15 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Truncate } from "@/tool/truncate"
 import { testEffect } from "../lib/effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
+
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
 
 const ctx = {
   sessionID: SessionID.make("ses_test-session"),
@@ -25,7 +35,7 @@ const it = testEffect(
     Question.layer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer)),
     CrossSpawnSpawner.defaultLayer,
     Truncate.defaultLayer,
-    Agent.defaultLayer,
+    Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
   ),
 )
 

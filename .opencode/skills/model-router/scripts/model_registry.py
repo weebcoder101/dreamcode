@@ -110,15 +110,6 @@ MODELS: dict[str, ModelInfo] = {
         input_categories=[ModelCategory.CODE],
         output_categories=[ModelCategory.CODE],
     ),
-    "neurometric/clawpack-pro": ModelInfo(
-        id="neurometric/clawpack-pro",
-        name="ClawPack Pro",
-        category=ModelCategory.GENERAL,
-        description="Enhanced reasoning with deeper analysis. Best for complex architectural decisions.",
-        best_for=["complex architecture", "deep analysis", "multi-file refactoring"],
-        skill_affinity=["neuro", "exhaustive-crosscheck", "architecture", "breakthrough-overdrive-innovation"],
-        tier=3,
-    ),
     "neurometric/clawpack-general": ModelInfo(
         id="neurometric/clawpack-general",
         name="ClawPack General",
@@ -127,15 +118,6 @@ MODELS: dict[str, ModelInfo] = {
         best_for=["quick analysis", "simple reviews", "documentation"],
         skill_affinity=["documentation", "communication", "onboarding"],
         tier=1,
-    ),
-    "neurometric/clawpack-coding": ModelInfo(
-        id="neurometric/clawpack-coding",
-        name="ClawPack Coding",
-        category=ModelCategory.CODE,
-        description="Specialized for code generation, refactoring, and debugging.",
-        best_for=["code generation", "refactoring", "debugging", "test writing"],
-        skill_affinity=["python", "frontend", "react", "api", "refactoring", "testing", "debugging"],
-        tier=2,
     ),
     "neurometric/clawpack-legal": ModelInfo(
         id="neurometric/clawpack-legal",
@@ -186,24 +168,6 @@ MODELS: dict[str, ModelInfo] = {
     # ========================================================================
     # CODE MODELS — Specialized for development
     # ========================================================================
-    "neurometric/code-writer": ModelInfo(
-        id="neurometric/code-writer",
-        name="Code Writer",
-        category=ModelCategory.CODE,
-        description="Generates code from specifications. Handles multiple languages.",
-        best_for=["code generation", "function implementation", "boilerplate"],
-        skill_affinity=["python", "frontend", "react", "api", "refactoring"],
-        tier=2,
-    ),
-    "neurometric/code-refactorer": ModelInfo(
-        id="neurometric/code-refactorer",
-        name="Code Refactorer",
-        category=ModelCategory.CODE,
-        description="Safe code restructuring with behavior preservation.",
-        best_for=["refactoring", "code cleanup", "pattern application"],
-        skill_affinity=["refactoring", "code-hardener", "quality"],
-        tier=2,
-    ),
     "neurometric/regex-gen": ModelInfo(
         id="neurometric/regex-gen",
         name="Regex Generator",

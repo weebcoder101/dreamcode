@@ -1,12 +1,22 @@
 import { describe, expect } from "bun:test"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Agent } from "../../src/agent/agent"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(Layer.mergeAll(Truncate.defaultLayer, Agent.defaultLayer))
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
+
+const it = testEffect(Layer.mergeAll(Truncate.defaultLayer, Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot))))
 
 const params = Schema.Struct({ input: Schema.String })
 

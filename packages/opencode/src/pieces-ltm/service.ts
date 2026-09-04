@@ -1,5 +1,6 @@
-import { Effect, Context, Layer, pipe, Schedule, Duration } from "effect"
+import { Effect, Context, Layer } from "effect"
 import { PiecesLTMConfig } from "./config"
+import { openSseMcpClient, type SseMcpClient } from "./mcp-sse-client"
 
 export type MemoryType =
   | "standup"
@@ -29,39 +30,51 @@ export interface QueryInput {
 export interface HealthStatus {
   reachable: boolean
   mcpURL: string
+  tools?: number
+  error?: string
 }
 
 export interface Interface {
-  readonly persist: (input: PersistInput) => Effect.Effect<unknown>
-  readonly query: (input: QueryInput) => Effect.Effect<unknown>
-  readonly health: () => Effect.Effect<HealthStatus>
+  readonly persist: (input: PersistInput) => Effect.Effect<unknown, unknown, never>
+  readonly query: (input: QueryInput) => Effect.Effect<unknown, unknown, never>
+  readonly health: () => Effect.Effect<HealthStatus, HealthStatus, never>
 }
 
 export class PiecesLTM extends Context.Service<PiecesLTM, Interface>()("@dreamcode/PiecesLTM") {}
 
-function callMCP(mcpURL: string, toolName: string, arguments_: Record<string, unknown>): Effect.Effect<unknown> {
-  return pipe(
-    Effect.tryPromise({
-      try: async () => {
-        const res = await fetch(`${mcpURL}/messages`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: "tools/call",
-            params: { name: toolName, arguments: arguments_ },
-          }),
-          signal: AbortSignal.timeout(30_000),
-        })
-        if (!res.ok) throw new Error(`MCP call failed: ${res.status} ${res.statusText}`)
-        return res.json() as unknown
-      },
-      catch: (err) => ({ error: `MCP call failed: ${err instanceof Error ? err.message : String(err)}` }),
-    }),
-    // One retry with exponential backoff for transient MCP failures
-    Effect.retry({ times: 1, delay: "500 millis" }),
-  )
+/**
+ * Open a single SSE-MCP session and return both the client and a closer.
+ * We use one session per Effect-level call because the Pieces desktop
+ * MCP server occasionally rotates session tokens; re-opening on demand
+ * is cheaper than recovering from a stale stream.
+ */
+function withClient<T>(mcpURL: string, fn: (c: SseMcpClient) => Promise<T>, timeoutMs = 30_000): Promise<T> {
+  return openSseMcpClient({ baseURL: mcpURL, timeoutMs }).then(async (c) => {
+    try {
+      return await fn(c)
+    } finally {
+      c.close()
+    }
+  })
+}
+
+function callTool(mcpURL: string, toolName: string, arguments_: Record<string, unknown>, timeoutMs = 30_000) {
+  return Effect.tryPromise({
+    try: async () =>
+      withClient(
+        mcpURL,
+        (c) => c.call("tools/call", { name: toolName, arguments: arguments_ }),
+        timeoutMs,
+      ),
+    catch: (err) => ({ error: `MCP call failed: ${err instanceof Error ? err.message : String(err)}` }),
+  })
+}
+
+function callJSON(mcpURL: string, method: string, params: unknown, timeoutMs = 30_000) {
+  return Effect.tryPromise({
+    try: async () => withClient(mcpURL, (c) => c.call(method, params), timeoutMs),
+    catch: (err) => ({ error: `MCP call failed: ${err instanceof Error ? err.message : String(err)}` }),
+  })
 }
 
 export const buildMemorySummary = (input: PersistInput): string => {
@@ -107,18 +120,30 @@ export const defaultLayer = Layer.effect(
   Effect.gen(function* () {
     const cfg = PiecesLTMConfig.default
     yield* Effect.logInfo(
-      "[PiecesLTM] Active — uses native fetch API. " +
-      "Connects to MCP at " + cfg.mcpURL,
+      "[PiecesLTM] Active — uses SSE MCP transport. " +
+      "Connects to " + cfg.mcpURL,
     )
 
-    // Health-check precondition: verifies Pieces MCP is reachable before any LTM operation.
-    // Returns true if reachable, false with a warning log if not.
+    const health = Effect.fn("PiecesLTM.health")(function* () {
+      return yield* Effect.tryPromise({
+        try: async () => {
+          try {
+            const tools = await withClient(cfg.mcpURL, (c) => c.listTools(), 5_000)
+            return { reachable: true, mcpURL: cfg.mcpURL, tools: tools.length } as HealthStatus
+          } catch (err) {
+            return { reachable: false, mcpURL: cfg.mcpURL, error: String(err) } as HealthStatus
+          }
+        },
+        catch: () => ({ reachable: false, mcpURL: cfg.mcpURL } as HealthStatus),
+      })
+    })
+
     const checkHealth = Effect.fn("PiecesLTM.checkHealth")(function* () {
       const h = yield* health()
       if (!h.reachable) {
         yield* Effect.logWarning(
           "[PiecesLTM] MCP server unreachable at " + cfg.mcpURL + " — " +
-          "LTM features unavailable. Install Pieces for Developers at https://pieces.app"
+          "LTM features unavailable. Install Pieces for Developers at https://pieces.app",
         )
       }
       return h.reachable
@@ -130,15 +155,16 @@ export const defaultLayer = Layer.effect(
       const memoryType = classifyMemory(input)
       const summary = buildMemorySummary(input)
       const description = `[${memoryType.toUpperCase()}] ${input.taskDescription} — ${input.outcome}`
-      const result = yield* callMCP(cfg.mcpURL, "create_pieces_memory", {
-        summary,
-        summary_description: description,
-        project: input.project ?? process.cwd(),
-        files: (input.filesChanged ?? []).map((f) =>
-          f.startsWith("/") ? f : `${process.cwd()}/${f}`,
-        ),
-        connected_client: "opencode",
-      })
+      const result = yield* callTool(cfg.mcpURL, "create_pieces_memory", {
+          summary,
+          summary_description: description,
+          project: input.project ?? process.cwd(),
+          files: (input.filesChanged ?? []).map((f) =>
+            f.startsWith("/") ? f : `${process.cwd()}/${f}`,
+          ),
+          connected_client: "opencode",
+        },
+      )
       return { memoryType, description, mcpResult: result }
     })
 
@@ -148,25 +174,8 @@ export const defaultLayer = Layer.effect(
       const arguments_: Record<string, unknown> = { question: input.query }
       if (input.timeWindow) arguments_.time_window = input.timeWindow
       if (input.topics?.length) arguments_.topics = input.topics
-      const result = yield* callMCP(cfg.mcpURL, "ask_pieces_ltm", arguments_)
+      const result = yield* callTool(cfg.mcpURL, "ask_pieces_ltm", arguments_)
       return result
-    })
-
-    const health = Effect.fn("PiecesLTM.health")(function* () {
-      // Use JSON-RPC ping (tools/list) instead of plain GET to the SSE endpoint.
-      // The Pieces MCP endpoint expects POST with JSON-RPC messages, not HTTP GET.
-      return yield* Effect.tryPromise({
-        try: async () => {
-          const r = await fetch(cfg.mcpURL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-            signal: AbortSignal.timeout(5_000),
-          })
-          return { reachable: r.ok, mcpURL: cfg.mcpURL } as HealthStatus
-        },
-        catch: () => ({ reachable: false, mcpURL: cfg.mcpURL } as HealthStatus),
-      })
     })
 
     return PiecesLTM.of({ persist, query, health })

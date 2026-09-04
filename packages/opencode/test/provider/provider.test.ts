@@ -389,6 +389,56 @@ it.instance(
 )
 
 it.instance(
+  "loads the DreamCode OmniRoute and AgentRouter test models",
+  Effect.gen(function* () {
+    const providers = yield* list
+    const omniroute = providers[ProviderV2.ID.make("omniroute")]
+    const agentrouter = providers[ProviderV2.ID.make("agentrouter")]
+
+    expect(omniroute.options.baseURL).toBe("http://127.0.0.1:21331/v1")
+    expect(omniroute.models["auto/coding:free"]).toMatchObject({
+      id: "auto/coding:free",
+      reasoning: true,
+      tool_call: true,
+    })
+    expect(agentrouter.options.baseURL).toBe("https://agentrouter.org/v1")
+    expect(agentrouter.models["deepseek-v4-flash"]).toMatchObject({
+      id: "deepseek-v4-flash",
+      reasoning: true,
+      tool_call: false,
+    })
+  }),
+  {
+    config: {
+      provider: {
+        omniroute: {
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "http://127.0.0.1:21331/v1", apiKey: "test-omniroute-key" },
+          models: {
+            "auto/coding:free": {
+              id: "auto/coding:free",
+              reasoning: true,
+              tool_call: true,
+            },
+          },
+        },
+        agentrouter: {
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: "https://agentrouter.org/v1", apiKey: "test-agentrouter-key" },
+          models: {
+            "deepseek-v4-flash": {
+              id: "deepseek-v4-flash",
+              reasoning: true,
+              tool_call: false,
+            },
+          },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
   "model cost defaults to zero when not specified",
   Effect.gen(function* () {
     const providers = yield* list

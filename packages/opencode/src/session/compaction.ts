@@ -373,7 +373,7 @@ export const layer = Layer.effect(
       )
       const nextPrompt = compacting.prompt ?? buildPrompt({ previousSummary, context: compacting.context })
       const msgs = structuredClone(selected.head)
-      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs as any })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
         toolOutputMaxChars: COMPACT_TOOL_OUTPUT_MAX_CHARS,
@@ -511,7 +511,7 @@ export const layer = Layer.effect(
                   info,
                   options: info.options,
                 },
-                message: userMessage,
+                message: userMessage as any,
                 overflow: input.overflow === true,
               },
               { enabled: true },

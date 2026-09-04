@@ -1532,7 +1532,11 @@ export const layer = Layer.effect(
                   providers[gitlab].models[modelID] = model
                 }
               }
-            } catch (e) {}
+            } catch (e) {
+              // Log instead of silently swallowing — provider discovery
+              // failures can mask config issues that affect routing.
+              console.warn(`[provider] gitlab discovery failed:`, String(e))
+            }
           })
         }
 

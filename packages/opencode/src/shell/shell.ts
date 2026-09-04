@@ -188,7 +188,17 @@ export function args(file: string, command: string, cwd: string) {
     ]
   }
   if (n === "cmd") return ["/c", command]
-  if (ps(file)) return ["-NoProfile", "-Command", command]
+  if (ps(file)) {
+    // SECURITY: pass the user-supplied command via -EncodedCommand
+    // (UTF-16LE base64) rather than -Command. -Command interprets the
+    // string as a PowerShell statement and is re-parsed, which means an
+    // LLM-supplied snippet can break out of intended quoting by
+    // supplying its own quotes or escape sequences. -EncodedCommand is
+    // decoded as a byte string and run verbatim, so it cannot be
+    // confused with shell-level quoting.
+    const encoded = Buffer.from(command, "utf16le").toString("base64")
+    return ["-NoProfile", "-EncodedCommand", encoded]
+  }
   return ["-c", command]
 }
 

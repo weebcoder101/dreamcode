@@ -5,12 +5,74 @@ import { validator } from "hono-openapi"
 import z from "zod"
 import { cors } from "hono/cors"
 import { Share } from "~/core/share"
+import { timingSafeEqual } from "node:crypto"
 
 const app = new Hono()
 
+// SECURITY: in-memory token-bucket rate limiter (F-RATE-01 defense-in-depth).
+// Per-IP allow/deny. Defaults: 60 tokens, refilled at 1 token/sec (burst 60,
+// sustained 1 rps). Disabled by setting OPENCODE_API_RATE_LIMIT=0. Worst case:
+// a single IP can issue 60 requests in a burst, then is throttled to 1 rps.
+// Upstream proxies (CDN, ingress) should be the primary throttle.
+const RATE_LIMIT = Number.parseInt(process.env.OPENCODE_API_RATE_LIMIT ?? "60", 10)
+const RATE_LIMIT_REFILL_PER_SEC = Number.parseInt(
+  process.env.OPENCODE_API_RATE_LIMIT_REFILL ?? "1",
+  10,
+)
+const buckets = new Map<string, { tokens: number; lastRefill: number }>()
+const rateLimit = async (c: any, next: any) => {
+  if (RATE_LIMIT <= 0) return next()
+  const ip =
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
+    c.req.header("x-real-ip") ??
+    "global"
+  const now = Date.now()
+  let bucket = buckets.get(ip)
+  if (!bucket) {
+    bucket = { tokens: RATE_LIMIT, lastRefill: now }
+    buckets.set(ip, bucket)
+  } else {
+    const elapsed = (now - bucket.lastRefill) / 1000
+    bucket.tokens = Math.min(RATE_LIMIT, bucket.tokens + elapsed * RATE_LIMIT_REFILL_PER_SEC)
+    bucket.lastRefill = now
+  }
+  if (bucket.tokens < 1) {
+    c.header("Retry-After", "1")
+    return c.json({ error: "rate limited" }, { status: 429 })
+  }
+  bucket.tokens -= 1
+  return next()
+}
+// Drop buckets that are full to prevent unbounded memory growth
+const gc = setInterval(() => {
+  if (RATE_LIMIT <= 0) return
+  const now = Date.now()
+  for (const [ip, bucket] of buckets) {
+    if (now - bucket.lastRefill > 3_600_000) buckets.delete(ip)
+  }
+}, 300_000)
+if (typeof gc.unref === "function") gc.unref()
+
+// SECURITY: CORS is restricted to an allowlist of origins (env: OPENCODE_API_ALLOWED_ORIGINS,
+// comma-separated). Defaults to the canonical OpenCode web origin. This blocks arbitrary
+// third-party sites from calling the share API via cross-origin fetch.
+const allowedOrigins = (process.env.OPENCODE_API_ALLOWED_ORIGINS ?? "https://opencode.ai")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0)
+
 app
   .basePath("/api")
-  .use(cors())
+  .use(rateLimit)
+  .use(
+    cors({
+      origin: allowedOrigins,
+      credentials: false,
+      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      allowHeaders: ["Content-Type", "Authorization"],
+      maxAge: 600,
+    }),
+  )
   .get(
     "/doc",
     openAPIRouteHandler(app, {
@@ -106,10 +168,29 @@ app
       },
     }),
     validator("param", z.object({ shareID: z.string() })),
+    validator("query", z.object({ secret: z.string().optional() })),
     async (c) => {
       const { shareID } = c.req.valid("param")
-      c.header("Cache-Control", "public, max-age=30, s-maxage=300, stale-while-revalidate=86400")
-      return c.json(await Share.data(shareID))
+      const { secret } = c.req.valid("query")
+      if (!secret) {
+        return c.json({ error: "missing secret" }, { status: 401 })
+      }
+      // SECURITY: the share secret must be verified, not just present.
+      const share = await Share.get(shareID)
+      if (!share) {
+        return c.json([], { status: 404 })
+      }
+      const expected = Buffer.from(share.secret)
+      const supplied = Buffer.from(secret)
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        return c.json({ error: "invalid secret" }, { status: 401 })
+      }
+      const data = await Share.data(shareID)
+      if (!data || data.length === 0) {
+        return c.json([], { status: 404 })
+      }
+      c.header("Cache-Control", "private, no-store")
+      return c.json(data)
     },
   )
   .delete(

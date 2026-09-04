@@ -220,7 +220,13 @@ export async function SensorGateEnforcerPlugin(_input: PluginInput): Promise<Hoo
         // Signal string must match SENSOR_GATE_MINIMAL_SIGNAL in prompt-state.ts.
         // NOTE: we repeat the literal here instead of importing across packages
         // (skill/ → session/) to avoid a circular dependency.
-        if (output.system?.some((s: string) => s.includes('<sensor-gate state="minimal">'))) return
+        // system may be string[] (array contract) or a bare string depending
+        // on the caller; handle both instead of crashing on .some of undefined.
+        const sys: unknown = output.system
+        const minimalSignal = Array.isArray(sys)
+          ? sys.some((s) => String(s).includes('<sensor-gate state="minimal">'))
+          : typeof sys === "string" && sys.includes('<sensor-gate state="minimal">')
+        if (minimalSignal) return
 
         type InputWithClient = { client?: { directory?: string }; sessionID?: string }
         const sessionKey = `${(_input as InputWithClient).client?.directory ?? "__default__"}:${(_input as InputWithClient).sessionID ?? "global"}`
@@ -257,7 +263,10 @@ export async function SensorGateEnforcerPlugin(_input: PluginInput): Promise<Hoo
           return
         }
 
-        output.system.push(questionBlock)
+        if (typeof output.system === "string") {
+          output.system = [output.system]
+        }
+        ;(output.system as string[]).push(questionBlock)
       },
 
       // --- dispose: cleanup ---

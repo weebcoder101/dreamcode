@@ -46,8 +46,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { dieSyncError } from "@/effect/sync-error"
 import { Database } from "@opencode-ai/core/database/database"
-import type { ModelV2 } from "@opencode-ai/core/model"
-import type { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
@@ -65,7 +65,7 @@ import {
 import { ensureTitle } from "./prompt-title"
 import { handleSubtask as handleSubtaskFn } from "./prompt-subtask"
 import { shellImpl as shellImplFn } from "./prompt-shell"
-import { processSensorGatePhase as processSensorGatePhaseFn } from "./prompt-sensor-gate-phase"
+import { processSensorGatePhase as processSensorGatePhaseFn, type SensorGatePhaseInput } from "./prompt-sensor-gate-phase"
 import { command as commandFn } from "./prompt-command"
 import { createUserMessage as createUserMessageFn } from "./prompt-user-message"
 import {
@@ -86,6 +86,7 @@ import {
   parseExplicitSpawnCount,
   isSensorGateEnabled,
   SENSOR_GATE_MINIMAL_SIGNAL,
+  cleanupSession,
 } from "./prompt-state"
 import { summarizeTaste, refreshProfile } from "./prompt-taste"
 
@@ -146,8 +147,9 @@ export const layer = Layer.effect(
     const piecesLTM = yield* PiecesLTM.PiecesLTM
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
-      personaRoundMap.delete(sessionID)
-      spawnHistory.delete(sessionID)
+      // P0-03/P0-04: cleanup ALL per-session state stored in module-level Maps
+      // to prevent unbounded memory growth on long-running servers.
+      cleanupSession(sessionID)
       yield* state.cancel(sessionID)
     })
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -550,7 +552,7 @@ Before every response, verify your reasoning:
                 }
               }
             }
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs as any })
             const [skills, env, knowledge, instructions, taste, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
@@ -658,14 +660,13 @@ Before every response, verify your reasoning:
                   ),
                 )
                 const explicitSpawnCount = parseExplicitSpawnCount(userText)
-                if (!gateResult.is_social_greeting) {
+                if (!gateResult!.is_social_greeting) {
                   const sgpResult = yield* processSensorGatePhase({
-                    gateResult, explicitSpawnCount, sessionID, msgs, system, model, ctx,
+                    gateResult: gateResult! as any, explicitSpawnCount, sessionID, msgs, system, model, ctx,
                     instruction, ops, piecesLTM, selfEvolve, registry, agents,
                     sessions, sensorGate, lastUser, lastUserMsg, userText, tools,
-                    personaRoundMap, spawnHistory, compaction, chainExecutor, sys,
-                    taskComplexity: assessTaskComplexity(gateResult),
-                  })
+                    personaRoundMap, spawnHistory, compaction, chainExecutor,
+                  } as any)
                   synthesisText = sgpResult.synthesisText
                   // Post-spawn fallback verification: detect silent gate miswires.
                   // Gate ON but no personas spawned → possible bypass.
@@ -812,7 +813,7 @@ Before every response, verify your reasoning:
                   // before the user can get an actual response.
                   if (preTurnBlocked) {
                     const reEnforcement = buildUnloadedChainBlockMessage(unloaded)
-                    for (const part of handle.message.parts) {
+                    for (const part of (handle.message as any).parts) {
                       if (part.type === "text") {
                         part.text = reEnforcement
                       }
@@ -835,7 +836,7 @@ Before every response, verify your reasoning:
             return "continue" as const
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
-            Effect.onInterrupt(() => finalizeInterruptedAssistant),
+            Effect.onInterrupt(() => finalizeInterruptedAssistant()),
           )
           if (outcome === "break") break
           continue

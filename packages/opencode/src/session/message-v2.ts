@@ -46,7 +46,7 @@ interface FetchDecompressionError extends Error {
   path: string
 }
 
-export type { OutputFormat, Part, WithParts } from "@opencode-ai/core/v1/session"
+export type { OutputFormat, Part, WithParts, Info, User, Assistant, ToolPart, ToolState, ToolStatePending, ToolStateRunning, ToolStateCompleted, ToolStateError, TextPart, FilePart, StepStartPart, StepFinishPart, SubtaskPart, CompactionPart, SnapshotPart, PatchPart, RetryPart, AgentPart, ReasoningPart } from "@opencode-ai/core/v1/session"
 
 export type Provenance = string
 

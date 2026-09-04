@@ -128,7 +128,7 @@ const password = new planetscale.Password("StatsDatabasePassword", {
   branch: branch.name,
 })
 
-const databaseUrl = $interpolate`mysql://${password.username.apply(encodeURIComponent)}:${password.plaintext.apply(
+const databaseUrl = $interpolate`mysql://${encodeURIComponent(password.username)}:${password.plaintext.apply(
   encodeURIComponent,
 )}@${password.accessHostUrl}/${cluster.name}`
 

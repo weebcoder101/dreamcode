@@ -117,15 +117,13 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       sessionID: input.sessionID,
       agent: input.agent.name,
       model: input.model,
-      provider: input.provider,
-      message: input.user,
+      provider: { source: input.provider.source, info: input.provider as any, options: input.provider.options },
+      message: input.user as any,
     },
     {
-      temperature: input.model.capabilities.temperature
-        ? (input.agent.temperature ?? ProviderTransform.temperature(input.model))
-        : undefined,
-      topP: input.agent.topP ?? ProviderTransform.topP(input.model),
-      topK: ProviderTransform.topK(input.model),
+      temperature: input.agent.temperature ?? ProviderTransform.temperature(input.model) ?? 0.7,
+      topP: input.agent.topP ?? ProviderTransform.topP(input.model) ?? 1,
+      topK: ProviderTransform.topK(input.model) ?? 0,
       maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
       options,
     },
@@ -137,8 +135,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       sessionID: input.sessionID,
       agent: input.agent.name,
       model: input.model,
-      provider: input.provider,
-      message: input.user,
+      provider: { source: input.provider.source, info: input.provider as any, options: input.provider.options },
+      message: input.user as any,
     },
     {
       headers: {},

@@ -61,7 +61,8 @@ function sdkKey(npm: string): string | undefined {
   return undefined
 }
 
-// TODO: fix this stupid inefficient dogshit function
+// TODO: optimize — this performs O(n) work per message which is costly at high
+// message counts. Consider pre-computing normalized form or caching results.
 function normalizeMessages(
   msgs: ModelMessage[],
   model: Provider.Model,

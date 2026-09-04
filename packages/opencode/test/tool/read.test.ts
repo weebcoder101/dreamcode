@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -26,6 +27,15 @@ import {
 } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
+
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 
 afterEach(async () => {
@@ -45,7 +55,7 @@ const ctx = {
 
 const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Layer.mergeAll(
-    Agent.defaultLayer,
+    Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
     FSUtil.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     Instruction.defaultLayer,

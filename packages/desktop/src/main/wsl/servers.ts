@@ -188,7 +188,7 @@ export function createWslServersController(
   }
 
   const invalidateStartAttempt = (id: string) => {
-    startAttempts.set(id, (startAttempts.get(id) ?? 0) + 1)
+    nextStartAttempt(id)
   }
 
   const isCurrentStartAttempt = (id: string, attempt: number) => {

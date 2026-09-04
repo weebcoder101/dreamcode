@@ -1,0 +1,12 @@
+{
+  "name": "@opencode/containers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.13",
+    "@types/node": "24.12.2"
+  }
+}

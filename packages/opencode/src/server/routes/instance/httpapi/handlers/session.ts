@@ -61,9 +61,14 @@ const parsePromptPayload = (
     if (obj.model !== null && typeof obj.model === "object" && !Array.isArray(obj.model)) {
       const m = obj.model as Record<string, unknown>
       if (typeof m.modelID === "string" || typeof m.id === "string") {
+        // providerID is required when a model is supplied. Previously this
+        // silently coerced to the literal "openai", which sent requests for
+        // other-model clients at a wrong provider instead of failing fast.
+        if (typeof m.providerID !== "string") {
+          return yield* new HttpApiError.BadRequest({})
+        }
         payload.model = m
         if (!m.modelID && m.id) m.modelID = m.id
-        if (!m.providerID) m.providerID = "openai"
       }
     }
     if (typeof obj.agent === "string") payload.agent = obj.agent

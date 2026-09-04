@@ -324,7 +324,10 @@ export const verify = Effect.fn("ChainExecutor.verify")(function* (results: Chai
     if (verifierResult.exitCode !== 0) {
       return verifierResult.output || `[ERROR] Enforcer exited with code ${verifierResult.exitCode}`
     }
-    return verifierResult.output || ""
+    // The enforcer is silent on success by design; empty stdout is
+    // indistinguishable from "never ran" downstream, so surface an explicit
+    // verified-OK marker instead of returning "".
+    return verifierResult.output || "[ENFORCER] chain verified — no violations reported"
   } catch (e) {
     return `[ERROR] Verify failed: ${String(e)}`
   }

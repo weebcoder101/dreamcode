@@ -307,6 +307,25 @@ const discoverSkills = Effect.fnUntraced(function* (
     yield* scan(state, dir, OPENCODE_SKILL_PATTERN)
   }
 
+  // Dreamcode-native skill roots — the same directories the sensor gate and
+  // chain executor resolve via resolveSkillsDir(). Without these, the skill
+  // tool was blind to ~/.config/dreamcode/skills (the ported 69-skill store),
+  // so gate-mandated chains could not be loaded and models improvised
+  // workarounds (subagent spawn storms). Duplicate names are handled by
+  // add() with a warning; later scans win, mirroring config precedence.
+  // Honors disableExternalSkills so hermetic/test instances stay isolated.
+  if (!disableExternalSkills) {
+    const dreamcodeRoots = [
+      ...(process.env.DREAMCODE_SKILLS_DIR ? [process.env.DREAMCODE_SKILLS_DIR] : []),
+      path.join(global.home, ".config", "dreamcode", "skills"),
+      path.join(global.home, ".dreamcode", "skills"), // legacy location
+    ]
+    for (const dir of dreamcodeRoots) {
+      if (!(yield* fsys.isDir(dir))) continue
+      yield* scan(state, dir, SKILL_PATTERN)
+    }
+  }
+
   const cfg = yield* config.get()
   for (const item of cfg.skills?.paths ?? []) {
     const expanded = item.startsWith("~/") ? path.join(global.home, item.slice(2)) : item

@@ -1,6 +1,8 @@
 import { App } from "@slack/bolt"
 import { createOpencode, type ToolPart } from "@opencode-ai/sdk"
 
+const SLACK_LOG_DEBUG = process.env.SLACK_LOG_DEBUG === "1"
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -8,16 +10,18 @@ const app = new App({
   appToken: process.env.SLACK_APP_TOKEN,
 })
 
-console.log("🔧 Bot configuration:")
-console.log("- Bot token present:", !!process.env.SLACK_BOT_TOKEN)
-console.log("- Signing secret present:", !!process.env.SLACK_SIGNING_SECRET)
-console.log("- App token present:", !!process.env.SLACK_APP_TOKEN)
+if (SLACK_LOG_DEBUG) {
+  console.log("🔧 Bot configuration:")
+  console.log("- Bot token present:", !!process.env.SLACK_BOT_TOKEN)
+  console.log("- Signing secret present:", !!process.env.SLACK_SIGNING_SECRET)
+  console.log("- App token present:", !!process.env.SLACK_APP_TOKEN)
+  console.log("🚀 Starting opencode server...")
+}
 
-console.log("🚀 Starting opencode server...")
 const opencode = await createOpencode({
   port: 0,
 })
-console.log("✅ Opencode server ready")
+if (SLACK_LOG_DEBUG) console.log("✅ Opencode server ready")
 
 const sessions = new Map<string, { client: any; server: any; sessionId: string; channel: string; thread: string }>()
 void (async () => {
@@ -50,20 +54,52 @@ async function handleToolUpdate(part: ToolPart, channel: string, thread: string)
     .catch(() => {})
 }
 
+// Redact Slack message text and other user-controlled fields before logging
+// so transcripts shipped to Logpush / journald do not retain PII.
+function redact(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[depth]"
+  if (value == null) return value
+  if (typeof value === "string") {
+    return value.length > 200 ? value.slice(0, 200) + "…" : value
+  }
+  if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1))
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) {
+      if (k === "text" || k === "message" || k === "command" || k === "raw") {
+        out[k] = "[redacted]"
+      } else {
+        out[k] = redact(v, depth + 1)
+      }
+    }
+    return out
+  }
+  return value
+}
+function logEvent(label: string, payload: unknown) {
+  if (!SLACK_LOG_DEBUG) return
+  console.log(label, JSON.stringify(redact(payload), null, 2))
+}
+function logText(label: string, text: unknown) {
+  if (!SLACK_LOG_DEBUG) return
+  const safe = typeof text === "string" ? (text.length > 200 ? text.slice(0, 200) + "…" : text) : text
+  console.log(label, safe)
+}
+
 app.use(async ({ next, context }) => {
-  console.log("📡 Raw Slack event:", JSON.stringify(context, null, 2))
+  logEvent("📡 Raw Slack event:", context)
   await next()
 })
 
 app.message(async ({ message, say }) => {
-  console.log("📨 Received message event:", JSON.stringify(message, null, 2))
+  logEvent("📨 Received message event:", message)
 
   if (message.subtype || !("text" in message) || !message.text) {
     console.log("⏭️ Skipping message - no text or has subtype")
     return
   }
 
-  console.log("✅ Processing message:", message.text)
+  logText("✅ Processing message:", message.text)
 
   const channel = message.channel
   const thread = (message as any).thread_ts || message.ts
@@ -101,13 +137,13 @@ app.message(async ({ message, say }) => {
     }
   }
 
-  console.log("📝 Sending to opencode:", message.text)
+  logText("📝 Sending to opencode:", message.text)
   const result = await session.client.session.prompt({
     path: { id: session.sessionId },
     body: { parts: [{ type: "text", text: message.text }] },
   })
 
-  console.log("📤 Opencode response:", JSON.stringify(result, null, 2))
+  logEvent("📤 Opencode response:", result)
 
   if (result.error) {
     console.error("❌ Failed to send message:", result.error)
@@ -129,7 +165,7 @@ app.message(async ({ message, say }) => {
       .join("\n") ||
     "I received your message but didn't have a response."
 
-  console.log("💬 Sending response:", responseText)
+  logText("💬 Sending response:", responseText)
 
   // Send main response (tool updates will come via live events)
   await say({ text: responseText, thread_ts: thread })
@@ -137,7 +173,7 @@ app.message(async ({ message, say }) => {
 
 app.command("/test", async ({ command, ack, say }) => {
   await ack()
-  console.log("🧪 Test command received:", JSON.stringify(command, null, 2))
+  logEvent("🧪 Test command received:", command)
   await say("🤖 Bot is working! I can hear you loud and clear.")
 })
 

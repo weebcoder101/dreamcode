@@ -7,18 +7,18 @@ This directory contains detailed documentation for specific DreamCode features.
 | Guide | File | Description |
 |-------|------|-------------|
 | Dream Thinking | [dream-thinking.md](dream-thinking.md) | The 6-phase engine: research, ground, reflect, propose, build, act |
-| Skills Reference | [skills.md](skills.md) | All 37 skills with activation conditions, config, and examples |
+| Skills Reference | [skills.md](skills.md) | All skills with activation conditions, config, and examples |
 | Configuration | [config.md](config.md) | Full YAML/JSON config schema reference |
-| NEURO API | [neuro.md](neuro.md) | 120+ specialized models setup and usage |
 | Sensor Gate | [sensor-gate.md](sensor-gate.md) | Intent classification, chain selection, spawn decisions |
-| Memory System | [memory.md](memory.md) | SQLite FTS5 memory consolidation and reconciliation |
-| Scoring & Enforcement | [scoring.md](scoring.md) | Risk/reward scoring system and enforcement |
-| Chain System | [chain-system.md](chain-system.md) | 37-skill dependency graph, chain executor, backtesting |
-| Sandbox Mode | [sandbox.md](sandbox.md) | Firejail isolation setup and security model |
-| Pieces LTM | [pieces-ltm.md](pieces-ltm.md) | Long-term memory integration with Pieces |
-| VS Code Integration | [vscode.md](vscode.md) | Tasks, launch config, and extension setup |
-| Automation | [automation.md](automation.md) | Cron jobs, scheduled tasks, and event-driven automation |
-| Troubleshooting | [troubleshooting.md](troubleshooting.md) | Common issues and solutions |
+| NEURO API | See the [NEURO service](https://neurometric.ai) | Hosted model catalogue; availability and terms are service-controlled |
+| Memory System | Not yet published as a standalone guide | SQLite FTS5 memory consolidation and reconciliation |
+| Scoring & Enforcement | Not yet published as a standalone guide | Risk/reward scoring system and enforcement |
+| Chain System | Not yet published as a standalone guide | Skill dependency graph, chain executor, backtesting |
+| Sandbox Mode | Not yet published as a standalone guide | Firejail isolation setup and security model |
+| Pieces LTM | Not yet published as a standalone guide | Long-term memory integration with Pieces |
+| VS Code Integration | Not yet published as a standalone guide | Tasks, launch config, and extension setup |
+| Automation | Not yet published as a standalone guide | Cron jobs, scheduled tasks, and event-driven automation |
+| Troubleshooting | Not yet published as a standalone guide | Common issues and solutions |
 
 ## Quick Links
 
@@ -29,4 +29,4 @@ This directory contains detailed documentation for specific DreamCode features.
 ## For Developers
 
 - **[AGENTS.md](../packages/opencode/AGENTS.md)** — Architecture decisions, code patterns, build system (internal developers)
-- **[docs/developers/](developers/)** — Plugin system, custom tools, skill authoring
+- Plugin system, custom tools, and skill authoring: see the source tree and package READMEs

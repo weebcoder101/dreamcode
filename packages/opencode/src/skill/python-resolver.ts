@@ -204,6 +204,30 @@ export function resolveSkillDirName(canonicalName: string): string {
  * skill directories. Users running from the dreamcode repo should use ./packages/opencode/src/skill/dreamcode/skills
  * (the source tree path) or set DREAMCODE_SKILLS_DIR explicitly.
  */
+/**
+ * Locate the source-tree embedded skills store by walking up from cwd.
+ * Tests run bun with cwd=packages/opencode while scripts may run from the
+ * repo root, so a single fixed join(process.cwd(), ...) misses in one of
+ * the two contexts. Walking up handles both.
+ */
+export function sourceTreeSkillsDir(): string {
+  const REL = join("packages", "opencode", "src", "skill", "dreamcode", "skills")
+  let dir = resolve(process.cwd())
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, REL)
+    try {
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) return candidate
+    } catch {
+      // unreadable — keep walking up
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  // Not found: return the cwd-relative path for parity with the old behavior
+  return resolve(REL)
+}
+
 export function resolveSkillsDir(): string {
   // Environment variable override (highest priority)
   const envSkillsDir = process.env.DREAMCODE_SKILLS_DIR
@@ -225,7 +249,7 @@ export function resolveSkillsDir(): string {
     // 4. Project-local dir: ./.dreamcode/skills (for development within dreamcode repo)
     join(process.cwd(), ".dreamcode", "skills"),
     // 5. Source tree path (for development / unbundled installs)
-    join(process.cwd(), "packages", "opencode", "src", "skill", "dreamcode", "skills"),
+    sourceTreeSkillsDir(),
   ]
   for (const dir of candidates) {
     try {
@@ -323,12 +347,18 @@ export function validateScriptPath(resolved: string, cwd?: string): boolean {
   const allowedXdg = resolve(HOME, ".config", "dreamcode", "skills")
   const allowedLegacy = resolve(HOME, ".dreamcode", "skills")
   const allowedProject = resolve(cwd ?? process.cwd(), ".dreamcode", "skills")
+  // Mirror resolveSkillsDir candidate #5: the source-tree store. Without it,
+  // a machine whose active skills dir is legacy/XDG rejects embedded-store
+  // scripts ("path outside allowed skills directory") even though the same
+  // resolver handed them out.
+  const allowedSourceTree = sourceTreeSkillsDir()
   return (
     (allowedGlobal !== null && isUnderPrefix(realpath, allowedGlobal)) ||
     isUnderPrefix(realpath, allowedBinary) ||
     isUnderPrefix(realpath, allowedXdg) ||
     isUnderPrefix(realpath, allowedLegacy) ||
-    isUnderPrefix(realpath, allowedProject)
+    isUnderPrefix(realpath, allowedProject) ||
+    isUnderPrefix(realpath, allowedSourceTree)
   )
 }
 

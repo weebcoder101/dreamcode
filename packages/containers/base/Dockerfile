@@ -16,3 +16,10 @@ RUN apt-get update \
     xz-utils \
     zip \
   && rm -rf /var/lib/apt/lists/*
+
+
+# SECURITY: non-root build user (uid 10001) so derived images do not
+# default to root, plus an opt-in HEALTHCHECK marker. See wave5-retry
+# F-CONT-02 (no USER, no HEALTHCHECK).
+RUN groupadd -g 10001 build && useradd -m -u 10001 -g build build
+HEALTHCHECK NONE

@@ -472,8 +472,32 @@ export const { use: useMarked, provider: MarkedProvider } = createSimpleContext(
       {
         renderer: {
           link({ href, title, text }) {
-            const titleAttr = title ? ` title="${title}"` : ""
-            return `<a href="${href}"${titleAttr} class="external-link" target="_blank" rel="noopener noreferrer">${text}</a>`
+            const esc = (s: string) =>
+              s
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;")
+            // F-EXT-03: scheme allowlist for markdown links. Without this, a user
+            // can paste `[click](javascript:alert(1))` into any markdown block
+            // (chat, share page, session review) and clicking executes the JS.
+            // The link target is already _blank + noopener, but that doesn't help
+            // with javascript: URIs. Reject javascript:, data:, vbscript:, file:,
+            // and any other non-allowlisted scheme. Keep http(s)://, mailto:,
+            // schemeless, root-relative, hash-anchors, and protocol-relative.
+            const rawHref = href ?? ""
+            let safeHref = rawHref
+            try {
+              const u = new URL(rawHref, "http://__local__")
+              if (!["http:", "https:", "mailto:"].includes(u.protocol)) {
+                safeHref = ""
+              }
+            } catch {
+              // Relative URL or fragment - leave it alone
+            }
+            const titleAttr = title ? ` title="${esc(title)}"` : ""
+            return `<a href="${esc(safeHref)}"${titleAttr} class="external-link" target="_blank" rel="noopener noreferrer">${esc(text ?? "")}</a>`
           },
         },
       },

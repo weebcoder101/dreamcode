@@ -16,6 +16,7 @@ import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Plugin } from "@/plugin"
+import { EventV2Bridge } from "@/event-v2-bridge"
 
 import { testEffect } from "../lib/effect"
 import type { Agent } from "../../src/agent/agent"
@@ -76,11 +77,29 @@ const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
   })
 
 function llmLayerWithExecutor(executor: Layer.Layer<RequestExecutor.Service>, flags: Partial<RuntimeFlags.Info> = {}) {
+  // Real Config.defaultLayer spawns npm-install fibers per config dir and
+  // Plugin.state joins them (waitForDependencies) — ~30s inside the first
+  // stream() call. Patch the join to a no-op; plugin deps are pre-installed.
+  const configLayer = Layer.effect(
+    Config.Service,
+    Effect.gen(function* () {
+      const real = yield* Config.Service.pipe(Effect.provide(Config.defaultLayer))
+      ;(real as any).waitForDependencies = () => Effect.void
+      return real
+    }).pipe(Effect.scoped),
+  )
+  // Plugin.defaultLayer bakes prod Config/RuntimeFlags internally, so build
+  // Plugin from its raw layer with explicit test doubles instead.
+  const pluginLayer = Plugin.layer.pipe(
+    Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(configLayer),
+    Layer.provide(RuntimeFlags.layer({ pure: true, experimentalEventSystem: true })),
+  )
   return LLM.layer.pipe(
     Layer.provide(Auth.defaultLayer),
-    Layer.provide(Config.defaultLayer),
+    Layer.provide(configLayer),
     Layer.provide(Provider.defaultLayer),
-    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(pluginLayer),
     Layer.provide(LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)))),
     Layer.provide(RuntimeFlags.layer(flags)),
   )

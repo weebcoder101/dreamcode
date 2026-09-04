@@ -108,7 +108,7 @@ async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks:
   const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
   if (plugin) {
     await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
-    hooks.push(await plugin.server(input, load.options))
+    hooks.push(await (plugin.server as any)(input, load.options))
     return
   }
 
@@ -241,7 +241,7 @@ export const layer = Layer.effect(
         // Notify plugins of current config
         for (const hook of hooks) {
           yield* Effect.tryPromise({
-            try: () => Promise.resolve(hook.config?.(cfg)),
+            try: () => Promise.resolve(hook.config?.(cfg as any)),
             catch: errorMessage,
           }).pipe(
             Effect.tapError((error) => Effect.logError("plugin config hook failed", { error })),
@@ -253,7 +253,7 @@ export const layer = Layer.effect(
           if (event.location?.directory !== ctx.directory) return Effect.void
           return Effect.sync(() => {
             for (const hook of hooks) {
-              void hook["event"]?.({ event: { id: event.id, type: event.type, properties: event.data } as Record<string, unknown> })
+              void hook["event"]?.({ event: { id: event.id, type: event.type, properties: event.data } as any })
             }
           })
         })

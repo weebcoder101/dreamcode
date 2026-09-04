@@ -1,6 +1,7 @@
 import type { Session } from "@opencode-ai/sdk/v2/client"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { base64Encode } from "@opencode-ai/core/util/encode"
+import { decode64 } from "@/utils/base64"
 import { createStore, produce } from "solid-js/store"
 import { Persist, persisted, removePersisted, draftPersistedKeys } from "@/utils/persist"
 import { ServerConnection, useServer } from "./server"
@@ -187,14 +188,14 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
               const removedCurrent =
                 currentTab?.type === "session" &&
                 currentTab.server === server.key &&
-                atob(currentTab.dirBase64) === input.directory &&
+                decode64(currentTab.dirBase64) === input.directory &&
                 sessionIDs.has(currentTab.sessionId)
 
               for (let i = tabs.length - 1; i >= 0; i--) {
                 const tab = tabs[i]
                 if (!tab || tab.type !== "session") continue
                 if (tab.server !== server.key) continue
-                if (atob(tab.dirBase64) !== input.directory) continue
+                if (decode64(tab.dirBase64) !== input.directory) continue
                 if (!sessionIDs.has(tab.sessionId)) continue
                 tabs.splice(i, 1)
               }

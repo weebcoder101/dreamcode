@@ -45,32 +45,101 @@ MEMORY_TYPES = {
 # ---------------------------------------------------------------------------
 
 def call_mcp_tool(tool_name: str, arguments: dict) -> dict:
-    """Call a Pieces MCP tool via HTTP."""
-    url = f"{PIECES_MCP_URL}/messages"
+    """Call a Pieces MCP tool via the legacy SSE transport.
 
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": arguments,
-        },
-    }
+    Pieces for Developers exposes MCP over legacy SSE: GET /sse yields an
+    'endpoint' event with the real JSON-RPC POST target (sessionId+token).
+    A bare POST to /messages 404s, and the JSON-RPC response for a call
+    arrives back on the *same* SSE stream that was opened for the session,
+    so we must keep that one stream open across the POST and read from it.
+    """
+    import time
+    import urllib.parse
 
-    payload_bytes = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url,
-        data=payload_bytes,
-        headers={"Content-Type": "application/json"},
-    )
-
+    sse_url = f"{PIECES_MCP_URL}/sse"
+    sse_req = urllib.request.Request(sse_url, headers={"Accept": "text/event-stream"})
+    sse_resp = urllib.request.urlopen(sse_req, timeout=15)
+    buf = ""
+    endpoint = None
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            return result.get("result", result)
-    except Exception as e:
-        return {"error": str(e)}
+        # 1) Read the 'endpoint' event from the live SSE stream.
+        while endpoint is None:
+            chunk = sse_resp.read(1).decode("utf-8", "replace")
+            if not chunk:
+                break
+            buf += chunk
+            if buf.endswith("\n\n"):
+                for frame in buf.split("\n\n"):
+                    if "event:" in frame:
+                        lines = frame.splitlines()
+                        kind = next(
+                            (l for l in lines if l.startswith("event:")), "event: message"
+                        ).split(":", 1)[1].strip()
+                        data = "".join(
+                            l.split(":", 1)[1] if l.startswith("data:") else ""
+                            for l in lines[1:]
+                        )
+                        if kind == "endpoint" and data.strip():
+                            endpoint = data.strip()
+                buf = ""
+
+        if not endpoint:
+            raise RuntimeError("SSE session yielded no endpoint event")
+
+        msg_url = (
+            endpoint
+            if endpoint.startswith("http")
+            else urllib.parse.urljoin(PIECES_MCP_URL, endpoint)
+        )
+
+        # 2) POST the JSON-RPC call to that endpoint (returns 202).
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+        post_req = urllib.request.Request(
+            msg_url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(post_req, timeout=30) as _post:
+            _post.read()
+
+        # 3) Read the matching response off the SAME SSE stream.
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            if not buf.endswith("\n\n"):
+                chunk = sse_resp.read(1).decode("utf-8", "replace")
+                if not chunk:
+                    break
+                buf += chunk
+            if buf.endswith("\n\n"):
+                for frame in buf.split("\n\n"):
+                    if "event:" in frame:
+                        lines = frame.splitlines()
+                        kind = next(
+                            (l for l in lines if l.startswith("event:")), "event: message"
+                        ).split(":", 1)[1].strip()
+                        data = "".join(
+                            l.split(":", 1)[1] if l.startswith("data:") else ""
+                            for l in lines[1:]
+                        )
+                        if kind in ("message", "data") and data.strip():
+                            try:
+                                parsed = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(parsed, dict) and parsed.get("id") == 1:
+                                return parsed.get("result", parsed)
+                buf = ""
+    finally:
+        try:
+            sse_resp.close()
+        except Exception:
+            pass
+    return {"error": "timed out waiting for MCP response"}
 
 
 # ---------------------------------------------------------------------------

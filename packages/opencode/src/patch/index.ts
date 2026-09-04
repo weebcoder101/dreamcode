@@ -603,6 +603,18 @@ export const maybeParseApplyPatchVerified = Effect.fn("Patch.maybeParseApplyPatc
           effectiveCwd,
           hunk.type === "update" && hunk.move_path ? hunk.move_path : hunk.path,
         )
+        // SECURITY: hunk.path is LLM-controlled. Reject any path that
+        // resolves outside the workdir (e.g. `../../etc/passwd`,
+        // `~/.ssh/authorized_keys`). Lexical containment only — symlink
+        // resolution happens at the FS layer.
+        if (!FSUtil.contains(effectiveCwd, resolvedPath)) {
+          return {
+            type: MaybeApplyPatchVerified.CorrectnessError,
+            error: new Error(
+              `Patch hunk path escapes workdir: ${hunk.path} (resolved=${resolvedPath}, workdir=${effectiveCwd})`,
+            ),
+          } satisfies MaybeApplyPatchVerifiedResult
+        }
 
         switch (hunk.type) {
           case "add":
@@ -613,7 +625,7 @@ export const maybeParseApplyPatchVerified = Effect.fn("Patch.maybeParseApplyPatc
             break
 
           case "delete": {
-            const deletePath = path.resolve(effectiveCwd, hunk.path)
+            const deletePath = resolvedPath
             const content = yield* fs.readFileString(deletePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
             if (content === undefined) {
               return {
@@ -629,7 +641,7 @@ export const maybeParseApplyPatchVerified = Effect.fn("Patch.maybeParseApplyPatc
           }
 
           case "update": {
-            const updatePath = path.resolve(effectiveCwd, hunk.path)
+            const updatePath = resolvedPath
             const originalText = yield* fs
               .readFileString(updatePath)
               .pipe(
@@ -645,10 +657,19 @@ export const maybeParseApplyPatchVerified = Effect.fn("Patch.maybeParseApplyPatc
             }
             try {
               const fileUpdate = deriveNewContentsFromChunks(updatePath, hunk.chunks, originalText)
+              const movePath = hunk.move_path ? path.resolve(effectiveCwd, hunk.move_path) : undefined
+              if (movePath && !FSUtil.contains(effectiveCwd, movePath)) {
+                return {
+                  type: MaybeApplyPatchVerified.CorrectnessError,
+                  error: new Error(
+                    `Patch move_path escapes workdir: ${hunk.move_path} (resolved=${movePath})`,
+                  ),
+                } satisfies MaybeApplyPatchVerifiedResult
+              }
               changes.set(resolvedPath, {
                 type: "update",
                 unified_diff: fileUpdate.unified_diff,
-                move_path: hunk.move_path ? path.resolve(effectiveCwd, hunk.move_path) : undefined,
+                move_path: movePath,
                 new_content: fileUpdate.content,
               })
             } catch (error) {

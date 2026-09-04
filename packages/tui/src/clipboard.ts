@@ -28,7 +28,11 @@ function writeOsc52(text: string) {
 
 export async function read() {
   if (platform() === "darwin") {
-    const file = path.join(tmpdir(), "dreamcode-clipboard.png")
+    // FIX-12: use a unique temp file per call to avoid races between concurrent clipboard
+    // reads. Previously the path was a fixed `tmpdir()/dreamcode-clipboard.png` so two
+    // processes (or two reads) would collide. Use crypto.randomUUID() for uniqueness.
+    const { randomUUID } = await import("node:crypto")
+    const file = path.join(tmpdir(), `dreamcode-clipboard-${randomUUID()}.png`)
     try {
       await exec("osascript", [
         "-e",

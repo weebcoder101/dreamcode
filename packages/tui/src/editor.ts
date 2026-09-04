@@ -77,7 +77,7 @@ export function discoverEditorConnection(directory: string) {
           if (!score) return []
           return [
             {
-              url: `ws://127.0.0.1:${port}`,
+              url: `ws://localhost:${port}`,
               authToken: typeof value.authToken === "string" ? value.authToken : undefined,
               source: `lock:${port}`,
               score,

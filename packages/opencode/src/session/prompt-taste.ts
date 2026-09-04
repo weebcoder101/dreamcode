@@ -33,12 +33,25 @@ export interface CodebaseProfile {
 }
 
 function ensureDir() {
-  try { mkdirSync(EVOLUTION_DIR, { recursive: true }) } catch { }
+  // P1-06: log instead of silently swallowing — taste signals and the
+  // codebase profile are user-visible features, and silent loss is
+  // worse than a logged warning.
+  try {
+    mkdirSync(EVOLUTION_DIR, { recursive: true })
+  } catch (err) {
+    console.warn("[prompt-taste] failed to create evolution dir:", String(err))
+  }
 }
 
 export function recordTaste(signal: TasteSignal) {
   ensureDir()
-  try { appendFileSync(TASTE_LOG, JSON.stringify(signal) + "\n") } catch { }
+  try {
+    appendFileSync(TASTE_LOG, JSON.stringify(signal) + "\n")
+  } catch (err) {
+    // P1-06: was `catch {}` — surface the failure. Taste signals are
+    // a debugging aid and silent loss is worse than a logged warning.
+    console.warn("[prompt-taste] failed to record taste signal:", String(err))
+  }
 }
 
 function readLines(path: string, max: number): string[] {
@@ -118,7 +131,12 @@ function detectCodebase(projectRoot: string): CodebaseProfile {
 export function refreshProfile(projectRoot: string) {
   const profile = detectCodebase(projectRoot)
   ensureDir()
-  try { writeFileSync(PROFILE_FILE, JSON.stringify(profile)) } catch { }
+  try {
+    writeFileSync(PROFILE_FILE, JSON.stringify(profile))
+  } catch (err) {
+    // P1-06: was `catch {}` — log the failure so callers can detect it.
+    console.warn("[prompt-taste] failed to write profile.json:", String(err))
+  }
   return profile
 }
 

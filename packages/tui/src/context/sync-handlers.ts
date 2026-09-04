@@ -38,6 +38,12 @@ export function registerEventHandlers(
         diag(
           `server.instance.disposed FIRING bootstrap — activeGen=${hasActiveGeneration} sessionMsgs=${hasSessionMessages} anySessions=${hasAnySessions}`,
         )
+        // FIX-3: this is the RECOVERY bootstrap path. It fires when the SDK reports
+        // server.instance.disposed with no in-flight generations, messages, or sessions.
+        // The initial bootstrap() in sync.tsx onMount is the COLD-START path and runs
+        // exactly once. These two look identical (both `void bootstrap()`) but they
+        // fire in different contexts. If you change the cold-start path here, leave
+        // the recovery path unchanged unless you mean to alter the recovery semantics.
         void bootstrap()
         break
       }

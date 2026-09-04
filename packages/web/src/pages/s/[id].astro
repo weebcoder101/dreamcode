@@ -1,7 +1,7 @@
 ---
 import { Base64 } from "js-base64"
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro"
-import type { Session } from "opencode/session/index"
+import type { Session } from "dreamcode/session/session"
 import config from "../../../config.mjs"
 import Share from "../../components/Share.tsx"
 
@@ -77,11 +77,21 @@ const data = (await res.json()) as {
 }
 
 if (!data.info) {
+  // SECURITY: 404 responses also receive a no-store Cache-Control so
+  // a misconfigured crawler does not amplify load. See wave5-retry
+  // F-MISC-06 for the rate-limit + edge-cache plan; this is the
+  // minimum hardening for the 404 branch today.
   return new Response(null, {
     status: 404,
     statusText: tx("share.not_found"),
+    headers: { "Cache-Control": "no-store" },
   })
 }
+
+// SECURITY: edge-cache the successful share render for 60s on the CDN,
+// 15s on the browser, and serve stale for 5m. This caps the upstream
+// load when a share id goes viral. See wave5-retry F-MISC-06.
+Astro.response.headers.set("Cache-Control", "public, max-age=15, s-maxage=60, stale-while-revalidate=300")
 
 const models: Set<string> = new Set()
 const version = data.info.version ? `v${data.info.version}` : "v0.0.1"

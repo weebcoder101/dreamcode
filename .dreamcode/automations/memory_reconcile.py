@@ -25,7 +25,7 @@ EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 MEMORY_DIR = EVOLUTION_DIR / "memory"
 MEMORY_INDEX = EVOLUTION_DIR / "memory_index.json"
 
-sys.path.insert(0, str(PROJECT_ROOT / ".opencode" / "automations"))
+sys.path.insert(0, str(Path(__file__).parent))
 from timezone import now_ist_iso, now_ist_time
 
 

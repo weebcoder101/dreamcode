@@ -5,7 +5,10 @@ on:
     - cron: "0 12 * * *" # Run daily at 12:00 UTC
   workflow_dispatch: # Allow manual trigger
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}
+# Prevent overlapping scheduled/manual runs from racing on STATS.md.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   stats:

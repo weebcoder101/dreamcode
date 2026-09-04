@@ -58,6 +58,18 @@ function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
+function isLoopbackAddress(addr: string | undefined): boolean {
+  if (!addr) return false
+  // Normalize IPv4-mapped IPv6 (::ffff:127.0.0.1) to its IPv4 form.
+  const v4 = addr.startsWith("::ffff:") ? addr.slice(7) : addr
+  // IPv6 loopback.
+  if (v4 === "::1") return true
+  // IPv4 loopback: 127.0.0.0/8.
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(v4)
+  if (!m) return false
+  return Number(m[1]) === 127
+}
+
 export function playgroundCss(): Plugin {
   return {
     name: "playground-css",
@@ -70,9 +82,40 @@ export function playgroundCss(): Plugin {
           res.end(JSON.stringify({ error: "Method not allowed" }))
           return
         }
+        // SECURITY: refuse to write to disk in production. See wave5-retry
+        // F-SB-01. The full fix (CSRF token, AST-based edits, out-of-root
+        // rejection) is tracked in the audit; this guard prevents the
+        // mutation primitive from being live if a production build ever
+        // accidentally bundles this plugin.
+        // SECURITY: this endpoint is intended for a local developer only.
+        // Refuse non-loopback clients even in development; NODE_ENV is not
+        // an authentication boundary when a dev server is exposed on a LAN.
+        // Accept any of: 127.0.0.0/8 (IPv4 loopback), ::1 (IPv6 loopback),
+        // or ::ffff:127.0.0.1 (IPv4-mapped IPv6 loopback). The previous
+        // 3-element hardcoded list drifted across WSL2 / host-network
+        // topologies; the isLoopbackAddress() helper covers all of them.
+        const remote = req.socket.remoteAddress
+        if (!isLoopbackAddress(remote)) {
+          res.statusCode = 403
+          res.setHeader("Content-Type", "application/json")
+          res.end(JSON.stringify({ error: "Playground CSS writes require a loopback client" }))
+          return
+        }
+        if (process.env.NODE_ENV === "production") {
+          res.statusCode = 403
+          res.setHeader("Content-Type", "application/json")
+          res.end(JSON.stringify({ error: "Playground CSS writes are disabled in production" }))
+          return
+        }
 
         let data = ""
+        let size = 0
         req.on("data", (chunk: Buffer) => {
+          size += chunk.length
+          if (size > 1_000_000) {
+            req.destroy()
+            return
+          }
           data += chunk.toString()
         })
         req.on("end", () => {
@@ -96,10 +139,29 @@ export function playgroundCss(): Plugin {
           // Group by file
           const grouped = new Map<string, Edit[]>()
           for (const edit of payload.edits) {
-            if (!edit.file || !edit.anchor || !edit.prop || edit.value === undefined) continue
+            if (
+              typeof edit.file !== "string" ||
+              typeof edit.anchor !== "string" ||
+              typeof edit.prop !== "string" ||
+              typeof edit.value !== "string" ||
+              !edit.file ||
+              !edit.anchor ||
+              !edit.prop
+            )
+              continue
             const abs = path.resolve(root, edit.file)
-            if (!abs.startsWith(root)) continue
-            const key = abs
+            const relative = path.relative(root, abs)
+            if (relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) continue
+            let key = abs
+            try {
+              // Resolve symlinks before writing so a path inside root cannot
+              // redirect writes to an arbitrary file outside the playground.
+              key = fs.realpathSync(abs)
+              const realRelative = path.relative(root, key)
+              if (realRelative.startsWith(".." + path.sep) || path.isAbsolute(realRelative)) continue
+            } catch {
+              // The exists check below returns a useful result for missing files.
+            }
             if (!grouped.has(key)) grouped.set(key, [])
             grouped.get(key)!.push(edit)
           }

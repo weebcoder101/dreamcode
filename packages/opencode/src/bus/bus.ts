@@ -24,10 +24,11 @@ export const layer = Layer.effect(
         GlobalBus.emit("event", { payload: { type: event.type, data } })
       })
 
-    const subscribeCallback: Interface["subscribeCallback"] = (_event, callback) =>
+    const subscribeCallback: Interface["subscribeCallback"] = (event, callback) =>
       Effect.sync(() => {
-        const handler = (evt: { payload: any }) => {
-          callback(evt.payload.data)
+        const handler = (evt: { payload: { type: string; data: unknown } }) => {
+          if (evt.payload.type !== event.type) return
+          callback(evt.payload.data as never)
         }
         GlobalBus.on("event", handler)
         return () => {

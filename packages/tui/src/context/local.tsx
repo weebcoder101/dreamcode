@@ -169,33 +169,28 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
         state.pending = false
         const modelFilePath = path.join(paths.state, "model.json")
-        void readJson<Record<string, unknown>>(modelFilePath)
-          .then((existing) =>
+        // FIX-2: read subagent.json from disk (the TUI's canonical subagent model) and
+        // merge subagentModel into model.json. The previous implementation only did this
+        // in a catch branch that could drop the field on the inner read failure,
+        // causing a split-brain where the CLI's `run` command never saw the TUI's
+        // subagent model selection. Now the merge happens on every write, so the
+        // TUI's subagent selection is always reflected in model.json.
+        const subagentPath = path.join(paths.state, "subagent.json")
+        void Promise.all([
+          readJson<Record<string, unknown>>(modelFilePath),
+          readJson<{ model?: { providerID: string; modelID: string } }>(subagentPath),
+        ])
+          .then(([existing, sub]) =>
             writeJsonAtomic(filePath, {
               ...(existing ?? {}),
               recent: modelStore.recent,
               favorite: modelStore.favorite,
               variant: modelStore.variant,
+              subagentModel: sub?.model ?? undefined,
             }),
           )
-          .catch(() => {
-            const subagentPath = path.join(paths.state, "subagent.json")
-            return readJson<{ model?: { providerID: string; modelID: string } }>(subagentPath)
-              .then((sub) =>
-                writeJsonAtomic(filePath, {
-                  recent: modelStore.recent,
-                  favorite: modelStore.favorite,
-                  variant: modelStore.variant,
-                  subagentModel: sub?.model ?? undefined,
-                }),
-              )
-              .catch(() =>
-                writeJsonAtomic(filePath, {
-                  recent: modelStore.recent,
-                  favorite: modelStore.favorite,
-                  variant: modelStore.variant,
-                }),
-              )
+          .catch((err) => {
+            console.error("[model] save failed:", err)
           })
       }
 
@@ -443,24 +438,27 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       let writeQueue: Promise<void> = Promise.resolve()
 
       function syncModelJson() {
-        writeQueue = writeQueue.then(() => {
-          const modelFilePath = path.join(paths.state, "model.json")
-          return readJson<Record<string, unknown>>(modelFilePath)
-            .then((data) => {
-              return writeJsonAtomic(modelFilePath, {
-                ...(data ?? {}),
-                subagentModel: subagentStore.model ?? undefined,
+        // FIX-1: attach .catch to the chain root so a single failure can't poison the
+        // entire serialization queue. Previously the .catch was on the *new* promise each
+        // iteration, which left the chain root in a rejected state and silently unblocked
+        // subsequent writes.
+        writeQueue = writeQueue
+          .catch((err) => {
+            console.error("[subagent] previous write failed, continuing:", err)
+          })
+          .then(() => {
+            const modelFilePath = path.join(paths.state, "model.json")
+            return readJson<Record<string, unknown>>(modelFilePath)
+              .then((data) => {
+                return writeJsonAtomic(modelFilePath, {
+                  ...(data ?? {}),
+                  subagentModel: subagentStore.model ?? undefined,
+                })
               })
-            })
-            .catch(() => {
-              return writeJsonAtomic(modelFilePath, {
-                subagentModel: subagentStore.model ?? undefined,
+              .catch((err) => {
+                console.error("[subagent] syncModelJson failed:", err)
               })
-            })
-        })
-        writeQueue.catch((err) => {
-          console.error("[subagent] syncModelJson failed:", err)
-        })
+          })
       }
 
       function save() {
@@ -469,10 +467,17 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return
         }
         state.pending = false
-        writeQueue = writeQueue.then(() => writeJsonAtomic(filePath, { model: subagentStore.model }))
-        writeQueue.catch((err) => {
-          console.error("[subagent] save failed:", err)
-        })
+        // FIX-1 (cont): chain .catch to the previous link so a failed write doesn't break
+        // the chain. The original code attached .catch to the new promise, leaving the
+        // root promise in a rejected state and silently unblocking subsequent writes.
+        writeQueue = writeQueue
+          .catch((err) => {
+            console.error("[subagent] previous write failed, continuing:", err)
+          })
+          .then(() => writeJsonAtomic(filePath, { model: subagentStore.model }))
+          .catch((err) => {
+            console.error("[subagent] save failed:", err)
+          })
         syncModelJson()
       }
 

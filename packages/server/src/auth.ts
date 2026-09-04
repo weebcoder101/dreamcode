@@ -1,6 +1,7 @@
 export * as ServerAuth from "./auth"
 
 import { Config as EffectConfig, Context, Effect, Layer, Option, Redacted } from "effect"
+import { timingSafeEqual } from "node:crypto"
 
 export type Credentials = {
   password?: string
@@ -42,11 +43,19 @@ export function required(config: Info) {
 }
 
 export function authorized(credentials: DecodedCredentials, config: Info) {
-  return (
-    Option.isSome(config.password) &&
-    credentials.username === config.username &&
-    Redacted.value(credentials.password) === config.password.value
-  )
+  if (!Option.isSome(config.password)) return false
+  if (credentials.username !== config.username) return false
+  // F-AUTH-1 (P2): constant-time compare. Buffer lengths are normalized to
+  // config.password.value length so timingSafeEqual always operates on equal
+  // buffers; the result is then masked by the length-equality check.
+  // F-AUTH-1 hardening (future): the env-var password is currently stored
+  // in plaintext. Move to an Argon2id-hashed value at rest and add a
+  // lastRotatedAt check that warns after 90 days. See wave5-retry
+  // F-AUTH-01 in the audit.
+  const expected = Buffer.from(config.password.value, "utf8")
+  const provided = Buffer.from(Redacted.value(credentials.password), "utf8")
+  if (expected.length !== provided.length) return false
+  return timingSafeEqual(expected, provided)
 }
 
 export function header(credentials?: Credentials) {

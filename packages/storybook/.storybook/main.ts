@@ -14,8 +14,12 @@ export default defineMain({
     name: "storybook-solidjs-vite",
     options: {},
   },
+  // SECURITY: F-SB-04 - addon-onboarding is gated on the
+  // STORYBOOK_ONBOARDING env var (default off). Onboarding loads
+  // third-party JS from a remote CDN and is not appropriate for CI
+  // or strict-CSP environments.
   addons: [
-    "@storybook/addon-onboarding",
+    ...(process.env.STORYBOOK_ONBOARDING === "1" ? ["@storybook/addon-onboarding"] : []),
     "@storybook/addon-docs",
     "@storybook/addon-links",
     "@storybook/addon-a11y",

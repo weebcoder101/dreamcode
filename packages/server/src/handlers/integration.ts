@@ -5,7 +5,7 @@ import { Api } from "../api"
 import { InvalidRequestError, UnknownError } from "../errors"
 import { response } from "../groups/location"
 
-const authorize = <A, R>(effect: Effect.Effect<A, Integration.AuthorizationError, R>) =>
+const authorize = <A, R>(effect: Effect.Effect<A, Integration.AuthorizationError | Integration.NotFoundError, R>) =>
   effect.pipe(
     Effect.mapError(
       () =>
@@ -75,7 +75,17 @@ export const IntegrationHandler = HttpApiBuilder.group(Api, "server.integration"
         "integration.attempt.status",
         Effect.fn(function* (ctx) {
           const service = yield* Integration.Service
-          return yield* response(service.attempt.status(ctx.params.attemptID))
+          return yield* response(
+            service.attempt.status(ctx.params.attemptID).pipe(
+              Effect.mapError(
+                (error) =>
+                  new InvalidRequestError({
+                    message: `OAuth attempt not found: ${ctx.params.attemptID}`,
+                    kind: "not_found",
+                  }),
+              ),
+            ),
+          )
         }),
       )
       .handle(

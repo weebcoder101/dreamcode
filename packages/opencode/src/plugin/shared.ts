@@ -9,6 +9,18 @@ import { Npm } from "@opencode-ai/core/npm"
 // Old npm package names for plugins that are now built-in
 export const DEPRECATED_PLUGIN_PACKAGES = ["opencode-openai-codex-auth", "opencode-copilot-auth"]
 
+/**
+ * Default token TTL in seconds (1 hour) used by OAuth providers (xai, openai-codex)
+ * when the auth response does not include an explicit `expires_in`. Centralized
+ * so the value is consistent and easy to audit.
+ */
+export const DEFAULT_TOKEN_TTL_SECONDS = 3600
+
+/** Returns the absolute expiry timestamp (ms) for a token given the optional `expires_in` from the auth response. */
+export function tokenExpiryMs(expiresIn: number | undefined): number {
+  return Date.now() + (expiresIn ?? DEFAULT_TOKEN_TTL_SECONDS) * 1000
+}
+
 export function isDeprecatedPlugin(spec: string) {
   return DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))
 }
@@ -26,7 +38,7 @@ export function parsePluginSpecifier(spec: string) {
   const hit = parse(spec)
   if (hit?.type === "alias" && !hit.name) {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    const sub = (hit as { subSpec: npa.Result }).subSpec
+    const sub = (hit as unknown as { subSpec: npa.Result }).subSpec
     if (sub?.name) {
       const version = !sub.rawSpec || sub.rawSpec === "*" ? "latest" : sub.rawSpec
       return { pkg: sub.name, version }

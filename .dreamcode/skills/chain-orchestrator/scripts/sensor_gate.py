@@ -148,7 +148,9 @@ BIAS_BOOSTS = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DYNAMIC GRAPH — ALL 37 skills as nodes, dependencies as edges
+# DYNAMIC GRAPH — 38 skills registered (see .opencode/skills/, .dreamcode/skills/);
+# this graph models 30 explicit nodes + dependencies. The remaining 8 are
+# standalone / orchestrator-internal and intentionally not in the graph.
 # ═══════════════════════════════════════════════════════════════════════════
 
 SKILL_GRAPH = {

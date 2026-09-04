@@ -190,6 +190,22 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const providerConfig = Effect.fn("ExperimentalHttpApi.providerConfig")(function* (ctx: {
       payload: typeof import("../groups/experimental").ProviderConfigPayload.Type
     }) {
+      // Validate baseURL scheme before writing it to ~/.config/dreamcode/config.json.
+      // Without this check a single un-authed call could redirect this user's
+      // API traffic to an attacker-controlled host. https is required, with
+      // http://localhost for local development.
+      let parsed: URL
+      try {
+        parsed = new URL(ctx.payload.baseURL)
+      } catch {
+        return yield* new HttpApiError.BadRequest({})
+      }
+      if (
+        parsed.protocol !== "https:" &&
+        !(parsed.protocol === "http:" && (parsed.hostname === "localhost"))
+      ) {
+        return yield* new HttpApiError.BadRequest({})
+      }
       const configDir = path.join(os.homedir(), ".config", "dreamcode")
       const configFile = path.join(configDir, "config.json")
       let existing: Record<string, any> = {}
@@ -224,6 +240,6 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("resource", resource)
       .handle("sensorGateGet", sensorGateGet)
       .handle("sensorGate", sensorGate)
-      .handle("providerConfig", providerConfig)
+      .handle("providerConfig", providerConfig as any)
   }),
 )

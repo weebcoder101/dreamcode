@@ -71,3 +71,7 @@ evolution/
 .git-rewrite/
 packages/opencode/bin/dreamcode
 **/sumati-persona*
+
+# CMDC harness-local config inside repo — never commit (2026-09-04)
+.commandcode/
+.staging-mods/

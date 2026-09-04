@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 
-SKILLS_DIR = Path("$(pwd)/.opencode/skills")
+SKILLS_DIR = Path.cwd() / ".opencode" / "skills"
 
 
 # ---------------------------------------------------------------------------

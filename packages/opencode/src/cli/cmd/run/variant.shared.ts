@@ -137,7 +137,7 @@ function state(value: unknown): ModelState {
   }
 }
 
-function createLayer(fs = FSUtil.defaultLayer) {
+function createLayer(fsUtil = FSUtil.defaultLayer) {
   return Layer.fresh(
     Layer.effect(
       Service,
@@ -196,13 +196,13 @@ function createLayer(fs = FSUtil.defaultLayer) {
           saveVariant,
         })
       }),
-    ).pipe(Layer.provide(fs)),
+    ).pipe(Layer.provide(fsUtil)),
   )
 }
 
 /** @internal Exported for testing. */
-export function createVariantRuntime(fs = FSUtil.defaultLayer): VariantRuntime {
-  const runtime = makeRuntime(Service, createLayer(fs))
+export function createVariantRuntime(fsUtil = FSUtil.defaultLayer): VariantRuntime {
+  const runtime = makeRuntime(Service, createLayer(fsUtil))
   return {
     resolveSavedVariant: (model) => runtime.runPromise((svc) => svc.resolveSavedVariant(model)).catch(() => undefined),
     saveVariant: (model, variant) => runtime.runPromise((svc) => svc.saveVariant(model, variant)).catch(() => console.warn("failed to save variant")),

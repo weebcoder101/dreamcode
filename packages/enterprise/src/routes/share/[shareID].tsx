@@ -23,6 +23,7 @@ import { clientOnly } from "@solidjs/start"
 import { Meta, Title } from "@solidjs/meta"
 import { Base64 } from "js-base64"
 import { getRequestEvent } from "solid-js/web"
+import { timingSafeEqual } from "node:crypto"
 
 const ClientOnlyWorkerPoolProvider = clientOnly(() =>
   import("@opencode-ai/ui/pierre/worker").then((m) => ({
@@ -55,10 +56,28 @@ class SessionDataMissingError extends NamedError {
   }
 }
 
+// SECURITY: a valid share secret is required to view the share.
+// The secret must be passed as the `?secret=<uuid>` query param and verified with
+// timingSafeEqual against Share.get(shareID).secret. The response strips the secret
+// before being SSR'd, so the page payload does not leak it.
+function isSecretEqual(a: string, b: string) {
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  return bufA.length === bufB.length && timingSafeEqual(bufA, bufB)
+}
+
 const getData = query(async (shareID) => {
   "use server"
+  const event = getRequestEvent()
+  const suppliedSecret = event?.request.url
+    ? new URL(event.request.url).searchParams.get("secret") ?? ""
+    : ""
+  if (!suppliedSecret) throw new SessionDataMissingError({ sessionID: shareID })
   const share = await Share.get(shareID)
   if (!share) throw new SessionDataMissingError({ sessionID: shareID })
+  if (!isSecretEqual(share.secret, suppliedSecret)) {
+    throw new SessionDataMissingError({ sessionID: shareID })
+  }
   const data = await Share.data(shareID)
   const result: {
     sessionID: string
@@ -122,10 +141,10 @@ const getData = query(async (shareID) => {
 }, "getShareData")
 
 export default function () {
-  getRequestEvent()?.response.headers.set(
-    "Cache-Control",
-    "public, max-age=30, s-maxage=300, stale-while-revalidate=86400",
-  )
+  // SECURITY: the share URL contains a secret query param. The response is keyed
+  // per-secret at the CDN, but we use `private, no-store` to ensure the secret
+  // and the share payload are not stored in shared caches.
+  getRequestEvent()?.response.headers.set("Cache-Control", "private, no-store")
 
   const params = useParams()
   const data = createAsync(async () => {

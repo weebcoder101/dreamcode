@@ -114,6 +114,13 @@ const api: ElectronAPI = {
   setTitlebar: (theme) => ipcRenderer.invoke("set-titlebar", theme),
   runDesktopMenuAction: (action) => ipcRenderer.invoke("run-desktop-menu-action", action),
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
+  // F-003: server credential bridge. main encrypts with safeStorage; the
+  // renderer only ever sees the plaintext as the return value of
+  // getServerCredential and must hand it directly to the SDK without storing.
+  getServerCredential: (serverId) => ipcRenderer.invoke("server-get-credential", serverId),
+  setServerCredential: (serverId, password) =>
+    ipcRenderer.invoke("server-set-credential", serverId, password),
+  deleteServerCredential: (serverId) => ipcRenderer.invoke("server-delete-credential", serverId),
   exportDebugLogs: () => ipcRenderer.invoke("export-debug-logs"),
   recordFatalRendererError: (error) => ipcRenderer.invoke("record-fatal-renderer-error", error),
 }

@@ -160,13 +160,13 @@ export function createMainWindow() {
 
   win.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
     const { requestHeaders } = details
-    upsertKeyValue(requestHeaders, "Access-Control-Allow-Origin", ["*"])
+    if (isRendererUrl(details.url)) upsertKeyValue(requestHeaders, "Access-Control-Allow-Origin", ["*"])
     callback({ requestHeaders })
   })
 
   win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     const { responseHeaders = {} } = details
-    addRendererHeaders(details.url, responseHeaders)
+    if (isRendererUrl(details.url)) addRendererHeaders(details.url, responseHeaders)
     callback({ responseHeaders })
   })
 

@@ -94,6 +94,6 @@ scoring: true              # Enable scoring enforcement
 
 ## Related
 
-- [Skills Reference](skills.md) — The 37 skills powering each phase
+- [Skills Reference](skills.md) — The 32 skills powering each phase
 - [Sensor Gate](sensor-gate.md) — Determines which mode to use
 - [Scoring & Enforcement](scoring.md) — Scores each phase outcome

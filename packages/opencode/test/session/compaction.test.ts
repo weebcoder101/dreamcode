@@ -13,7 +13,7 @@ import { LLM } from "../../src/session/llm"
 import { SessionCompaction } from "../../src/session/compaction"
 import { Token } from "@/util/token"
 import { Permission } from "../../src/permission"
-import { Service as PluginService, defaultLayer as PluginDefaultLayer } from "../../src/plugin"
+import { Service as PluginService, Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, TestInstance } from "../fixture/fixture"
 import { Session as SessionNs } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -30,6 +30,7 @@ import { Snapshot } from "../../src/snapshot"
 import { ProviderTest } from "../fake/provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LLMEvent, Usage } from "@opencode-ai/llm"
@@ -226,14 +227,34 @@ function cfg(compaction?: ConfigV1.Info["compaction"]) {
   })
 }
 
+// Core PluginBoot stub: PluginDefaultLayer demands it at construction.
+// Same shape as app-runtime.ts and prompt.test.ts. Hoisted so BOTH wiring
+// paths (deps below and compactionProcessLayer) share one instance.
+const noopPluginBoot = Layer.succeed(PluginBoot.Service, PluginBoot.Service.of({ wait: () => Effect.void }))
+
+// Test plugin layer: mirrors Plugin.defaultLayer's topology but provides
+// test doubles for Config (waitForDependencies no-op) and RuntimeFlags
+// (pure: true). The real defaultLayer bakes production Config/RuntimeFlags
+// into itself, so ambient overrides never reach it — with the repo's own
+// dreamcode.json declaring a plugin origin, Plugin.state blocks forever
+// joining npm-install dependency fibers.
+const testPluginLayer = Plugin.layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(TestConfig.layer()),
+  Layer.provide(RuntimeFlags.layer({ pure: true, experimentalEventSystem: true })),
+)
+
 const deps = Layer.mergeAll(
   wide().layer,
   layer("continue"),
-  Agent.defaultLayer,
-  PluginDefaultLayer,
+  Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
+  testPluginLayer,
   EventV2Bridge.defaultLayer,
+  // NOTE: real Config.defaultLayer stays — config-file-driven tests
+  // (compaction.auto=false, prune=true) need it. The npm-fiber hang is
+  // avoided by testPluginLayer's internal TestConfig stub instead.
   Config.defaultLayer,
-  RuntimeFlags.layer({ experimentalEventSystem: true }),
+  RuntimeFlags.layer({ experimentalEventSystem: true, pure: true }),
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
   ContextCompressor.defaultLayer,
@@ -278,7 +299,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     ? SessionProcessorModule.SessionProcessor.layer.pipe(
         Layer.provide(summary),
         Layer.provide(Image.defaultLayer),
-        Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+        Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true, pure: true })),
         Layer.provide(status),
       )
     : layer(options?.result ?? "continue")
@@ -289,12 +310,12 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(Snapshot.defaultLayer),
     Layer.provide(options?.llm ?? LLM.defaultLayer),
     Layer.provide(Permission.defaultLayer),
-    Layer.provide(Agent.defaultLayer),
-    Layer.provide(options?.plugin ?? PluginDefaultLayer),
+    Layer.provide(Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot))),
+    Layer.provide((options?.plugin ?? testPluginLayer).pipe(Layer.provide(noopPluginBoot))),
     Layer.provide(status),
     Layer.provide(events),
     Layer.provide(options?.config ?? Config.defaultLayer),
-    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true, pure: true })),
     Layer.provide(EventV2Bridge.defaultLayer),
   )
 }

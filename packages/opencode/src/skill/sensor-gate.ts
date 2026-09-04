@@ -7,6 +7,17 @@ import { SOCIAL_GREETING_RE, COMPLEXITY_SCORES, maxComplexityFromQuestions, spaw
 const SAFE_PROMPT_MAX = 100_000
 const USER_AGENT_COUNT_RE = /(?:spawn|use|run|deploy)\s+(\d+)\s+(?:agent|subagent|specialist|persona)/i
 
+// Explicit-spawn directives are parsed ONLY from the tail of the prompt.
+// Matches deeper in the text come overwhelmingly from pasted transcripts/logs
+// and previously triggered the hard spawn override spuriously (spawn storms).
+const EXPLICIT_SPAWN_TAIL_CHARS = 400
+
+function matchUserAgentCount(prompt: string): number {
+  const tail = prompt.length > EXPLICIT_SPAWN_TAIL_CHARS ? prompt.slice(-EXPLICIT_SPAWN_TAIL_CHARS) : prompt
+  const m = tail.match(USER_AGENT_COUNT_RE)
+  return m ? Math.min(parseInt(m[1], 10), RATE_MAX_SPAWNS) : 0
+}
+
 const RATE_MAX_SPAWNS = 5
 
 export const WORKFLOW_SKILLS = new Set(["research"])
@@ -244,8 +255,7 @@ export function evaluateSpawnNecessity(
 
   // 0. User-specified agent count — if the prompt explicitly requests N subagents,
   //    honor that as a hard override (up to RATE_MAX_SPAWNS).
-  const userCountMatch = prompt.match(USER_AGENT_COUNT_RE)
-  const userCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), RATE_MAX_SPAWNS) : 0
+  const userCount = matchUserAgentCount(prompt)
   if (userCount > 0) {
     return {
       shouldSpawn: true,
@@ -906,6 +916,16 @@ export const layer = Layer.effect(
         const directory = ctx.directory
         const result = yield* runSensorGateEffect(prompt, directory)
 
+        // Gate UNAVAILABLE (both subprocess attempts failed / empty stdout):
+        // runSensorGateEffect returns a synthetic default whose raw_output is
+        // "". Spawning fallback personas off an infra failure converted every
+        // Python hiccup into guaranteed subagent spawns. Return the bare
+        // classification instead — chain empty, personas empty, no NEURO.
+        if (!result || result.raw_output === "") {
+          debugLog("[sensor-gate] gate unavailable — returning no-op classification (no fallback personas)")
+          return result
+        }
+
         // Optimize chain: cap at MAX_CHAIN_SIZE, score by prompt relevance
         optimizeChain(result, prompt)
 
@@ -974,8 +994,7 @@ export const layer = Layer.effect(
         }
 
         // Detect explicit user request for N agents and ensure enough personas
-        const userCountMatch = prompt.match(USER_AGENT_COUNT_RE)
-        const explicitCount = userCountMatch ? Math.min(parseInt(userCountMatch[1], 10), RATE_MAX_SPAWNS) : 0
+        const explicitCount = matchUserAgentCount(prompt)
         if (explicitCount > 0 && result.personas.length < explicitCount) {
           const defaults = PERSONA_PROFILES.filter((p) =>
             !result.personas.find((pp) => pp.name === p.name)

@@ -97,8 +97,11 @@ describe("resolveSkillsDir", () => {
       // The user already has this directory; test passes implicitly
       expect(resolveSkillsDir()).toBe(targetDir)
     } else {
-      // Create it temporarily to verify candidate ordering
-      mkdirSync(targetDir, { recursive: true })
+      // Create it WITH CONTENT (a probe skill): resolveSkillsDir rejects
+      // empty dirs (crashed-run husks) via its hasContent guard, so an
+      // empty fixture would make legacy/source-tree candidates win.
+      mkdirSync(join(targetDir, "probe-skill"), { recursive: true })
+      writeFileSync(join(targetDir, "probe-skill", "SKILL.md"), "---\nname: probe-skill\n---\n")
       try {
         expect(resolveSkillsDir()).toBe(targetDir)
       } finally {
@@ -137,9 +140,12 @@ describe("resolveScript", () => {
   })
 
   it("finds a script when skills dir exists", () => {
-    // Create the .config directory so resolveSkillsDir finds it
+    // Create the .config dir WITH a probe skill so resolveSkillsDir accepts
+    // it (hasContent guard rejects empty dirs) and selects it as the
+    // active skills directory for the script lookup.
     const configDir = join(HOME, ".config", "dreamcode", "skills")
-    mkdirSync(configDir, { recursive: true })
+    mkdirSync(join(configDir, "probe-skill"), { recursive: true })
+    writeFileSync(join(configDir, "probe-skill", "SKILL.md"), "---\nname: probe-skill\n---\n")
     const scriptPath = join(configDir, "test.py")
     writeFileSync(scriptPath, "# test")
     try {

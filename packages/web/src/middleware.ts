@@ -19,8 +19,16 @@ function docsAlias(pathname: string) {
 }
 
 function cookie(locale: string) {
+  // SECURITY: oc_locale is now HttpOnly, Secure, and SameSite=Lax. Secure
+  // is gated on import.meta.env.PROD so dev HTTP is not blocked.
+  // The 1y Max-Age is reduced to 30d; rotation is implicit because the
+  // value is re-issued on every redirect. See wave5-retry F-MISC-05.
+  // Signing (HMAC over the value) is tracked in the audit as the next
+  // pass; this is the minimum hardening that closes the cross-site-
+  // write primitive today.
   const value = locale === "root" ? "en" : locale
-  return `oc_locale=${encodeURIComponent(value)}; Path=/; Max-Age=31536000; SameSite=Lax`
+  const secure = import.meta.env.PROD ? "; Secure" : ""
+  return `oc_locale=${encodeURIComponent(value)}; Path=/; Max-Age=2592000; HttpOnly${secure}; SameSite=Lax`
 }
 
 function redirect(url: URL, path: string, locale?: string) {

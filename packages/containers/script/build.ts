@@ -59,15 +59,20 @@ for (const name of images) {
     }
   }
   if (name !== "base" && name !== "bun-node") {
+    // SECURITY/HYGIENE: pass BUN_VERSION to every image so the cache key
+    // matches the bun-node base layer and we never silently rebuild Bun
+    // on top of the base. Docker buildx silently ignores --build-arg for
+    // images that do not declare the ARG, so this is safe for rust/tauri/
+    // publish even if they don't read it. See wave5-retry F-CONT-07.
     if (push) {
       console.log(
-        `docker buildx build --platform ${platform} -f ${file} -t ${image} --build-arg REGISTRY=${reg} --push .`,
+        `docker buildx build --platform ${platform} -f ${file} -t ${image} --build-arg REGISTRY=${reg} --build-arg BUN_VERSION=${bun} --push .`,
       )
-      await $`docker buildx build --platform ${platform} -f ${file} -t ${image} --build-arg REGISTRY=${reg} --push .`
+      await $`docker buildx build --platform ${platform} -f ${file} -t ${image} --build-arg REGISTRY=${reg} --build-arg BUN_VERSION=${bun} --push .`
     }
     if (!push) {
-      console.log(`docker build -f ${file} -t ${image} --build-arg REGISTRY=${reg} .`)
-      await $`docker build -f ${file} -t ${image} --build-arg REGISTRY=${reg} .`
+      console.log(`docker build -f ${file} -t ${image} --build-arg REGISTRY=${reg} --build-arg BUN_VERSION=${bun} .`)
+      await $`docker build -f ${file} -t ${image} --build-arg REGISTRY=${reg} --build-arg BUN_VERSION=${bun} .`
     }
   }
 

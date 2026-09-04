@@ -45,9 +45,19 @@ const build: Agent.Info = {
   options: {},
 }
 
+// SystemPrompt.layer demands SelfEvolve.Service (learned-knowledge source).
+const selfEvolveStub = Layer.succeed(
+  (await import("@/skill/self-evolve")).SelfEvolve.Service,
+  (await import("@/skill/self-evolve")).SelfEvolve.Service.of({
+    capture: () => Effect.void,
+    learnings: () => Effect.succeed([]),
+  }),
+)
+
 const it = testEffect(
   SystemPrompt.layer.pipe(
     Layer.provide(LocationServiceMap.layer),
+    Layer.provide(selfEvolveStub),
     Layer.provide(
       Layer.succeed(
         Skill.Service,

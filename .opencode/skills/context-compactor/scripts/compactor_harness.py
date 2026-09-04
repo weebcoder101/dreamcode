@@ -710,7 +710,7 @@ def run_compaction(
 
     # Step 2: NEURO enrichment (optional — adds relationships)
     print("[STEP 2] Enriching with NEURO...")
-    metadata = enrich_with_neuro(metadata, token_budget)
+    metadata = rewrite_with_neuro(str(metadata), token_budget)
 
     # Step 2.5: Extract AGENTS.md for preservation
     agents_md_content = ""

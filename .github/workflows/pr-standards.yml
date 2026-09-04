@@ -1,5 +1,15 @@
 name: pr-standards
 
+# SECURITY: workflow-level default permissions must be tightened before any
+# job runs. `pull_request_target` is the dangerous variant that runs against
+# the base branch with write tokens available; without a default, anyone
+# reusing this file or adding a third job inherits GITHUB_TOKEN's repo-wide
+# default. See WAV5-docs-3 in the audit.
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
 on:
   pull_request_target:
     types: [opened, edited, synchronize]
@@ -32,7 +42,12 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               path: '.github/TEAM_MEMBERS',
-              ref: 'stable-release'
+              // SECURITY: read the bypass list from the PR's actual head
+              // ref, not from `stable-release`. A maintainer whose handle
+              // is in TEAM_MEMBERS on dev but not on stable-release would
+              // otherwise be treated as an external contributor and have
+              // their PR auto-flagged. See WAV5-docs-2 in the audit.
+              ref: context.payload.pull_request?.head?.sha
             });
             const members = Buffer.from(file.content, 'base64').toString().split('\n').map(l => l.trim()).filter(Boolean);
             if (members.includes(login)) {
@@ -179,7 +194,12 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               path: '.github/TEAM_MEMBERS',
-              ref: 'stable-release'
+              // SECURITY: read the bypass list from the PR's actual head
+              // ref, not from `stable-release`. A maintainer whose handle
+              // is in TEAM_MEMBERS on dev but not on stable-release would
+              // otherwise be treated as an external contributor and have
+              // their PR auto-flagged. See WAV5-docs-2 in the audit.
+              ref: context.payload.pull_request?.head?.sha
             });
             const members = Buffer.from(file.content, 'base64').toString().split('\n').map(l => l.trim()).filter(Boolean);
             if (members.includes(login)) {

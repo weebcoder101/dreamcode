@@ -5,9 +5,28 @@ import { AuthenticationReason, InvalidRequestReason, LLMError, type LLMRequest }
 export class MissingCredentialError extends Error {
   readonly _tag = "MissingCredentialError"
 
+  // F-AUTH-01: the `source` field may carry an env-var name (e.g. "OPENAI_API_KEY") that
+  // the LLM server wants to keep private. We still expose `source` for programmatic
+  // inspection by internal code, but we do NOT echo it into `message` because `message`
+  // surfaces to the API client. Use a short 6-char hash so the message confirms WHICH
+  // credential is missing without revealing its name.
   constructor(readonly source: string) {
-    super(`Missing auth credential: ${source}`)
+    const tag = hashSourceTag(source)
+    super(`Missing auth credential [${tag}]`)
   }
+}
+
+// F-AUTH-01: a short, non-reversible tag for an env-var / source name. We use FNV-1a
+// 32-bit so the same name always yields the same tag (so support engineers can
+// correlate logs across requests), but the name cannot be recovered from the tag.
+function hashSourceTag(source: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < source.length; i++) {
+    h ^= source.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  // Convert to 8-char hex.
+  return ("00000000" + (h >>> 0).toString(16)).slice(-8)
 }
 
 export type CredentialError = MissingCredentialError | Config.ConfigError
@@ -111,6 +130,14 @@ const credentialInput = (source: Secret | Credential) =>
 
 export function bearer(source: Secret | Credential): Auth
 export function bearer(source: Secret | Credential) {
+  // SECURITY: F-AUTH-03 — the resulting "authorization" header carries
+  // the bearer token in plaintext at runtime. Effect's Logger only
+  // masks values that come from Config.string / Redacted; once a
+  // secret lands in a Headers struct and that struct is serialized
+  // (e.g. via Effect.logAnnotation or a 4xx/5xx error path that
+  // prints `input.headers`), the token will leak.
+  // The full fix is a custom Logger annotation that redacts
+  // authorization/x-api-key before emission. See wave5-retry F-AUTH-03.
   return credentialInput(source).bearer()
 }
 

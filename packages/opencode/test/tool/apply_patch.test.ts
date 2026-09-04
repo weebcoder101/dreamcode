@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import path from "path"
 import * as fs from "fs/promises"
 import { Cause, Effect, Exit, Layer } from "effect"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { ApplyPatchTool } from "../../src/tool/apply_patch"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -13,6 +14,15 @@ import { TestInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
 
+// Core PluginBoot stub: Agent.state demands it at construction; production
+// app-runtime stubs it identically. Without it every test dies with
+// "Service not found: @opencode/v2/PluginBoot".
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
+
 const it = testEffect(
   Layer.mergeAll(
     LSP.defaultLayer,
@@ -20,7 +30,7 @@ const it = testEffect(
     Format.defaultLayer,
     EventV2Bridge.defaultLayer,
     Truncate.defaultLayer,
-    Agent.defaultLayer,
+    Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
   ),
 )
 

@@ -418,8 +418,8 @@ export abstract class SQLiteEffectTransaction<
     super(dialect, session, relations)
   }
 
-  rollback() {
-    return new EffectTransactionRollbackError()
+  rollback(): Effect.Effect<never, EffectTransactionRollbackError> {
+    return Effect.fail(new EffectTransactionRollbackError())
   }
 }
 

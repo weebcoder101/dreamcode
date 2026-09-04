@@ -324,14 +324,46 @@ export const ProvidersLoginCommand = effectCmd({
     yield* Prompt.intro("Add credential")
     if (args.url) {
       const url = args.url.replace(/\/+$/, "")
+      // Restrict the well-known URL scheme to https. An attacker who phishes
+      // a user into pasting an http:// or javascript: URL should not be able
+      // to redirect the wellknown fetch or cause a binary to be spawned.
+      let parsedUrl: URL
+      try {
+        parsedUrl = new URL(url)
+      } catch {
+        return yield* fail(`Invalid URL: ${url}`)
+      }
+      if (parsedUrl.protocol !== "https:") {
+        return yield* fail(`Only https URLs are allowed: ${parsedUrl.toString()}`)
+      }
       const wellknown = (      yield* cliTry(`Failed to load auth provider metadata from ${url}: `, () =>
         fetch(`${url}/.well-known/dreamcode`).then((x) => x.json()),
       )) as {
         auth: { command: string[]; env: string }
       }
+      if (!Array.isArray(wellknown.auth.command) || wellknown.auth.command.length === 0) {
+        return yield* fail(`Malformed wellknown auth.command from ${url}`)
+      }
       yield* Prompt.log.info(`Running \`${wellknown.auth.command.join(" ")}\``)
       const abort = new AbortController()
-      const proc = Process.spawn(wellknown.auth.command, { stdout: "pipe", stderr: "inherit", abort: abort.signal })
+      // Spawn with a minimal env: the wellknown endpoint is untrusted and the
+      // command it returns runs with the user's privileges, so we should not
+      // ship API keys from the parent process along for the ride.
+      const proc = Process.spawn(wellknown.auth.command, {
+        stdout: "pipe",
+        stderr: "inherit",
+        abort: abort.signal,
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          LANG: process.env.LANG,
+          LC_ALL: process.env.LC_ALL,
+          TERM: process.env.TERM,
+          SHELL: process.env.SHELL,
+          USER: process.env.USER,
+          TMPDIR: process.env.TMPDIR,
+        },
+      })
       if (!proc.stdout) {
         yield* Prompt.log.error("Failed")
         yield* Prompt.outro("Done")
@@ -559,7 +591,7 @@ export const ProvidersLoginCommand = effectCmd({
           provider: {
             [provider]: {
               name: provider,
-              model,
+              models: { [model]: {} },
               options: { baseURL },
             },
           },

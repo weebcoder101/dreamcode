@@ -181,7 +181,13 @@ export async function handler(
         }),
       )
       logger.debug("REQUEST URL: " + reqUrl)
-      logger.debug("REQUEST: " + reqBody.substring(0, 300) + "...")
+      // Redact user prompt content from request-body debug logs to avoid
+      // PII leakage. Log only the body length and a SHA-256 fingerprint.
+      const bodyBytes = new TextEncoder().encode(reqBody).length
+      const bodyFingerprint = await crypto.subtle
+        .digest("SHA-256", new TextEncoder().encode(reqBody))
+        .then((d) => Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16))
+      logger.debug(`REQUEST: <redacted> ${bodyBytes} bytes sha256=${bodyFingerprint}`)
       const res = await fetchWith429Retry(reqUrl, {
         method: "POST",
         headers: (() => {
@@ -294,8 +300,12 @@ export async function handler(
         let timestampFirstByte = 0
 
         function pump(): Promise<void> {
+          if (reader == null) {
+            c.close()
+            return Promise.resolve()
+          }
           return (
-            reader?.read().then(async ({ done, value: rawValue }) => {
+            reader.read().then(async ({ done, value: rawValue }) => {
               if (done) {
                 const timestampLastByte = Date.now()
                 logger.metric({
@@ -1161,8 +1171,21 @@ export async function handler(
     )
     if (lock.rowsAffected === 0) return
 
-    await Actor.provide("system", { workspaceID: authInfo.workspaceID }, async () => {
-      await Billing.reload()
-    })
+    try {
+      await Actor.provide("system", { workspaceID: authInfo.workspaceID }, async () => {
+        await Billing.reload()
+      })
+    } catch (e) {
+      // Clear the lock so the next call can retry immediately instead of
+      // waiting for the 1-minute TTL. The Stripe call's own catch handler
+      // already records the error on the billing row.
+      await Database.use((tx) =>
+        tx
+          .update(BillingTable)
+          .set({ timeReloadLockedTill: sql`null` })
+          .where(eq(BillingTable.workspaceID, authInfo.workspaceID)),
+      )
+      throw e
+    }
   }
 }

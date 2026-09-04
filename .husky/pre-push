@@ -17,7 +17,9 @@ if (process.versions.bun !== expectedBunVersion) {
   console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);
 }
 '
-# packages/core and packages/llm do not exist in this fork — skipped.
-# TODO: Make this blocking once all ~199 pre-existing Effect v4 beta API drift
-# errors in packages/opencode/src are resolved. Remove the || fallback.
-cd packages/opencode && bun run typecheck || echo "[pre-push] packages/opencode typecheck: ${?} error(s) (non-blocking until pre-existing Effect v4 drift is resolved)"
+# TSC-clean packages — all must pass, or the push is blocked.
+# Add packages here only after confirming `bun run typecheck` passes with zero errors.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+(cd "$REPO_ROOT/packages/opencode" && bun run typecheck) || exit 1
+(cd "$REPO_ROOT/packages/core" && bun run typecheck) || exit 1
+(cd "$REPO_ROOT/packages/web" && bun run typecheck) || exit 1

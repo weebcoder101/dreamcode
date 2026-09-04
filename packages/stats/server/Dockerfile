@@ -27,6 +27,11 @@ COPY --from=pruner /app/out/full/ ./
 
 WORKDIR /app/packages/stats/server
 
+# SECURITY: run as the non-root `bun` user shipped with the oven/bun:alpine image. A
+# successful RCE in the Bun runtime would otherwise execute as root. UID/GID 1000
+# matches the standard `bun` user on the oven/bun:alpine base.
+USER bun
+
 EXPOSE 3000
 
 CMD ["bun", "src/server.ts"]

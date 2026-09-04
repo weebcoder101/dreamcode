@@ -2,6 +2,15 @@ import { query } from "@solidjs/router"
 
 export const modelCatalogSourceUrl = "https://models.dev/models.json"
 
+// SECURITY/RELIABILITY: in-process TTL cache for the upstream models.dev catalog.
+// Default TTL is 5 minutes; the catalog changes ~weekly, so this trades freshness for
+// avoiding a per-page-render network round-trip and a hard dependency on models.dev uptime.
+const modelCatalogCacheTtlMs = Number(process.env.STATS_MODEL_CATALOG_TTL_MS ?? 5 * 60 * 1000)
+const modelCatalogCache: { value: ModelCatalog | undefined; expiresAt: number } = {
+  value: undefined,
+  expiresAt: 0,
+}
+
 export type ModelCatalogEntry = {
   id: string
   lab: string
@@ -46,10 +55,17 @@ export type ModelCatalog = {
 
 export const getModelCatalog = query(async () => {
   "use server"
+  const now = Date.now()
+  if (modelCatalogCache.value && modelCatalogCache.expiresAt > now) {
+    return modelCatalogCache.value
+  }
   const payload = await fetch(modelCatalogSourceUrl)
     .then((response): Promise<unknown> => (response.ok ? (response.json() as Promise<unknown>) : Promise.resolve()))
     .catch(() => undefined)
-  return buildModelCatalog(payload)
+  const catalog = buildModelCatalog(payload)
+  modelCatalogCache.value = catalog
+  modelCatalogCache.expiresAt = now + modelCatalogCacheTtlMs
+  return catalog
 }, "getModelCatalog")
 
 export function findModelCatalogEntry(catalog: ModelCatalog, model: string, lab?: string) {

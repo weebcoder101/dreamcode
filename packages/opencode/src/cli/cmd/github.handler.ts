@@ -721,7 +721,25 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function getUserPrompt() {
-      const customPrompt = process.env["PROMPT"]
+      // SECURITY (C2 - cli-cmd audit): the PROMPT env var is the documented CI override
+      // for the user prompt. Trust model: it is set by the maintainer in the GitHub
+      // Actions workflow YAML, NOT by a PR contributor. But defense-in-depth: cap length
+      // (a 4 KB prompt is already absurdly long; legitimate CI prompts are 1-2 KB), strip
+      // NUL bytes, and reject control characters that would corrupt the XML system-prompt
+      // boundary (\x00-\x08, \x0b-\x0c, \x0e-\x1f). This prevents a single careless env-var
+      // passthrough from becoming a prompt-injection sink.
+      const rawPrompt = process.env["PROMPT"]
+      const customPrompt = (() => {
+        if (!rawPrompt) return rawPrompt
+        if (rawPrompt.length > 4096) {
+          throw new Error("PROMPT env var is too long (max 4096 chars)")
+        }
+        // eslint-disable-next-line no-control-regex
+        if (/[\x00-\x08\x0b-\x0c\x0e-\x1f]/.test(rawPrompt)) {
+          throw new Error("PROMPT env var contains control characters")
+        }
+        return rawPrompt
+      })()
       // For repo events and issues events, PROMPT is required since there's no comment to extract from
       if (isRepoEvent || isIssuesEvent) {
         if (!customPrompt) {

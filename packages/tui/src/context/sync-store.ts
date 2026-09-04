@@ -22,13 +22,18 @@ import type {
 } from "@opencode-ai/sdk/v2"
 import { createStore } from "solid-js/store"
 import type { SetStoreFunction } from "solid-js/store"
-import fs from "node:fs"
 
+// P2 fix: gate the diagnostic log behind OPENCODE_DIAG=1 so debug code is not running
+// on the hot path in production. The 30+ `diag(...)` calls in sync-handlers.ts and
+// friends become no-ops when the env var is unset, eliminating a 30+ sync I/O per second
+// hot path that writes to /tmp/dreamcode-diag.log.
 const DIAG_LOG = "/tmp/dreamcode-diag.log"
+const DIAG_ENABLED = !!process.env.OPENCODE_DIAG
 
 export function diag(msg: string) {
+  if (!DIAG_ENABLED) return
   try {
-    fs.appendFileSync(DIAG_LOG, `[${Date.now()}] ${msg}\n`)
+    require("node:fs").appendFileSync(DIAG_LOG, `[${Date.now()}] ${msg}\n`)
   } catch {}
 }
 

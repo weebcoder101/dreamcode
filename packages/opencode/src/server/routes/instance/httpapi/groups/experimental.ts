@@ -83,7 +83,7 @@ export const ProviderConfigPayload = Schema.Struct({
   model: Schema.String,
 })
 
-const SessionListQuery = Schema.Struct({
+export const SessionListQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   roots: Schema.optional(QueryBoolean),
   start: Schema.optional(Schema.NumberFromString),

@@ -572,3 +572,46 @@ describe("depthScore", () => {
     expect(standard).toBe(dream)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Spawn-storm regression tests (2026-08-22 audit)
+// These encode real production failures: pasted transcript content triggering
+// the explicit-spawn override, and infra failure converting into fallback spawns.
+// ---------------------------------------------------------------------------
+
+describe("explicit spawn count — tail-window parsing", () => {
+  // Directive sits ~500 chars above the end — outside the tail-400 scan
+  // window, mimicking a quoted line inside a pasted session transcript.
+  const LONG_PASTE = "x".repeat(2000) + "\nuser said: use 4 subagents for this\n" + "log line\n".repeat(60)
+
+  test("mid-paste directive in a long transcript does NOT force spawning", () => {
+    const result = evaluateSpawnNecessity(
+      makeResult({ mode: "STANDARD", confidence: 0.9, risk_level: "low", domain_tags: [], chain: [] }),
+      LONG_PASTE,
+    )
+    // The override must not fire; normal necessity rules apply (here: no domains/chain → no spawn)
+    expect(result.suggestedCount).toBe(0)
+    expect(result.shouldSpawn).toBe(false)
+  })
+
+  test("genuine tail directive is still honored as hard override", () => {
+    const result = evaluateSpawnNecessity(
+      makeResult({ mode: "STANDARD" }),
+      "analyze this repo, spawn 3 agents please",
+    )
+    expect(result.shouldSpawn).toBe(true)
+    expect(result.suggestedCount).toBe(3)
+  })
+})
+
+describe("gate-unavailable classification contract", () => {
+  test("empty raw_output parses to zero personas and empty chain", () => {
+    // This is the shape runSensorGateEffect returns when Python is unavailable.
+    // The classify() short-circuit guarantees no fallback personas fire on it.
+    const result = parseSensorGateOutput("")
+    expect(result.raw_output).toBe("")
+    expect(result.personas).toHaveLength(0)
+    expect(result.chain).toHaveLength(0)
+    expect(result.domain_tags).toHaveLength(0)
+  })
+})

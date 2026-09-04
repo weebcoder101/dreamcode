@@ -109,6 +109,13 @@ export namespace Storage {
   }
 
   export async function list(options?: { prefix?: string[]; limit?: number; after?: string; before?: string }) {
+    // SECURITY: warn (not throw) when called without a prefix. A missing prefix enumerates
+    // the entire bucket — easy footgun that becomes a multi-thousand-row S3 ListObjectsV2
+    // call. Existing callers (share.ts, scrap.ts) always pass a prefix; the warning
+    // surfaces regressions in the logs without breaking legacy/test callers.
+    if (!options?.prefix || options.prefix.length === 0) {
+      console.warn("[storage] Storage.list called without a prefix — full bucket scan")
+    }
     const p = options?.prefix ? options.prefix.join("/") + (options.prefix.length ? "/" : "") : ""
     const result = await adapter().list({
       prefix: p,

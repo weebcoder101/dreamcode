@@ -1,5 +1,16 @@
 import type { Part, UserMessage } from "./client.js"
 
+// Generate a fresh, unique ID for test/fixture messages and parts.
+// Replaces the previous `"asdasd"` placeholder that would collide across
+// in-memory messages within the same session.
+function createMessageID(): string {
+  return `msg_${crypto.randomUUID()}`
+}
+
+function createPartID(): string {
+  return `prt_${crypto.randomUUID()}`
+}
+
 export const message = {
   user(input: Omit<UserMessage, "role" | "time" | "id"> & { parts: Omit<Part, "id" | "sessionID" | "messageID">[] }): {
     info: UserMessage
@@ -9,7 +20,7 @@ export const message = {
 
     const info: UserMessage = {
       ...rest,
-      id: "asdasd",
+      id: createMessageID(),
       time: {
         created: Date.now(),
       },
@@ -22,7 +33,7 @@ export const message = {
         (part) =>
           ({
             ...part,
-            id: "asdasd",
+            id: createPartID(),
             messageID: info.id,
             sessionID: info.sessionID,
           }) as Part,

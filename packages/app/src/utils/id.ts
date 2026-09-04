@@ -85,6 +85,12 @@ function getRandomBytes(length: number): Uint8Array {
     return bytes
   }
 
+  // crypto.getRandomValues is unavailable (very old WebView, sandboxed
+  // iframe without allow-same-origin). Math.random is not
+  // cryptographically random — but this is the only JS option remaining
+  // for legacy targets. The IDs generated here are used as opaque keys,
+  // not security tokens. Callers that need a security-grade ID must
+  // detect this and surface a hard error.
   for (let i = 0; i < length; i += 1) {
     bytes[i] = Math.floor(Math.random() * 256)
   }

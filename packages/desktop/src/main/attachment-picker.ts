@@ -17,11 +17,21 @@ export function createPickedFileAuthorizations(
     },
     async read(sender: number, token: string, path: string) {
       const selection = selections.get(token)
-      if (selection?.sender !== sender || !selection.paths.delete(path))
+      if (selection?.sender !== sender || !selection.paths.has(path))
         throw new Error("File was not selected by the picker")
-      const bytes = await read(path, selection.remaining)
+      const startBytes = selection.remaining
+      let bytes: ArrayBuffer
+      try {
+        bytes = await read(path, selection.remaining)
+      } catch (error) {
+        // Roll back the budget so a failed read does not leak capacity.
+        selection.remaining = startBytes
+        throw error
+      }
+      // Only consume the path slot after a successful read.
+      selection.paths.delete(path)
       selection.remaining -= bytes.byteLength
-      if (selection.paths.size === 0) selections.delete(token)
+      if (selection.paths.size === 0 || selection.remaining <= 0) selections.delete(token)
       return bytes
     },
     release(sender: number, token: string) {

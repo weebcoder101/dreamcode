@@ -31,7 +31,12 @@ type Dictionary = i18n.Flatten<RawDictionary>
 type Source = { dict: Record<string, string> }
 
 function cookie(locale: Locale) {
-  return `oc_locale=${encodeURIComponent(locale)}; Path=/; Max-Age=31536000; SameSite=Lax`
+  // Add `Secure` when the page is served over HTTPS. We avoid the
+  // `__Host-` prefix here because the cookie must be readable on the
+  // localhost Electron renderer, where the page is `http://` and the
+  // `__Host-` prefix would cause the browser to reject it.
+  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : ""
+  return `oc_locale=${encodeURIComponent(locale)}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`
 }
 
 const LOCALES: readonly Locale[] = [

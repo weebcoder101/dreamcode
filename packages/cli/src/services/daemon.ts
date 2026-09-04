@@ -172,8 +172,11 @@ export const layer = Layer.effect(
       )
       yield* fs.rename(temp, file)
       yield* registration().pipe(
+        // Only step down when a competing registration is observed. Transient
+        // read failures (file briefly missing during an atomic rename, or any
+        // other IO error) retry on the next tick rather than self-terminating.
         Effect.flatMap((info) => (info.id === id ? Effect.void : signal(process.pid, "SIGTERM"))),
-        Effect.catch(() => signal(process.pid, "SIGTERM")),
+        Effect.catch(() => Effect.void),
         Effect.repeat(Schedule.spaced("10 seconds")),
         Effect.forkScoped,
       )

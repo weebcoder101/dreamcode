@@ -154,11 +154,28 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
       return "sh"
     })
 
+    const INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh"
+    const INSTALL_SCRIPT_PIN_SHA256 = process.env.DREAMCODE_INSTALL_SHA256 ?? ""
+
     const upgradeCurl = Effect.fnUntraced(
       function* (target: string) {
-        const response = yield* httpOk.execute(HttpClientRequest.get("https://raw.githubusercontent.com/weebcoder101/dreamcode/main/install.sh"))
+        const response = yield* httpOk.execute(HttpClientRequest.get(INSTALL_SCRIPT_URL))
         const body = yield* response.text
         const bodyBytes = new TextEncoder().encode(body)
+        if (INSTALL_SCRIPT_PIN_SHA256) {
+          const hash = yield* Effect.promise(() => crypto.subtle.digest("SHA-256", bodyBytes)).pipe(
+            Effect.map((buf) =>
+              Array.from(new Uint8Array(buf))
+                .map((b) => b.toString(16).padStart(2, "0"))
+                .join(""),
+            ),
+          )
+          if (hash !== INSTALL_SCRIPT_PIN_SHA256) {
+            return yield* new UpgradeFailedError({
+              stderr: `install script SHA256 mismatch (expected ${INSTALL_SCRIPT_PIN_SHA256}, got ${hash}); refusing to pipe to bash`,
+            })
+          }
+        }
         const shell = yield* upgradeScriptShell()
         const result = yield* appProcess.run(
           ChildProcess.make(shell, [], {

@@ -79,6 +79,16 @@ export const layer = Layer.effect(
 
             for (const { item, cmd } of formatters) {
               yield* Effect.logInfo("running", { command: cmd })
+              // FMT-01 (defense-in-depth): reject filepaths with NUL bytes or other
+              // characters that could become shell metachars if a downstream formatter
+              // ever switches to shell=true. Today ChildProcess.make receives the
+              // arguments as an array (no shell), so this is strictly belt-and-braces
+              // — but a single careless refactor downstream would otherwise turn
+              // $FILE into an RCE sink. Reject early.
+              if (filepath.includes("\0")) {
+                yield* Effect.logError("format rejected: filepath contains NUL byte", { file: filepath })
+                return false
+              }
               const replaced = cmd.map((x) => x.replace("$FILE", filepath))
               const dir = yield* InstanceState.directory
               const result = yield* appProcess

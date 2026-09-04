@@ -17,8 +17,6 @@ export async function POST(input: APIEvent) {
     input.request.headers.get("stripe-signature")!,
     Resource.STRIPE_WEBHOOK_SECRET.value,
   )
-  console.log(body.type, JSON.stringify(body, null, 2))
-
   return (async () => {
     if (body.type === "customer.updated") {
       // check default payment method changed
@@ -302,7 +300,6 @@ export async function POST(input: APIEvent) {
         if (!invoiceID) throw new Error("Invoice ID not found")
 
         const paymentIntent = await Billing.stripe().paymentIntents.retrieve(invoiceID)
-        console.log(JSON.stringify(paymentIntent))
         const errorMessage =
           typeof paymentIntent === "object" && paymentIntent !== null
             ? paymentIntent.last_payment_error?.message

@@ -241,7 +241,7 @@ const runSkillScriptAsync = Effect.fn("SkillTool.runSkillScript")(function* (scr
 })
 
 export const Parameters = Schema.Struct({
-  name: Schema.String.annotate({ description: "Skill name from the 37-skill graph" }),
+  name: Schema.String.annotate({ description: "Skill name from the 32-skill graph" }),
   skill: Schema.optional(Schema.String).annotate({ description: "Skill name (deprecated, use name)" }),
   prompt: Schema.String.annotate({ description: "Task prompt to pass to the skill" }),
   run_sensor_gate: Schema.optional(Schema.Boolean).annotate({
@@ -291,11 +291,16 @@ export const SkillTool = Tool.define<typeof Parameters, Metadata, never>(
                     metadata: { skill_executed: skillName, score: 0 },
                   }
                 }
-                return {
-                  title: `Skill: ${skillName}`,
-                  output: `[SKILL NOT FOUND: ${skillName}]`,
-                  metadata: { skill_executed: "", score: 0 },
-                }
+                // NOT FOUND must be a real failure, not success-shaped output:
+                // scanForSkillToolCalls counts completed tool calls as loaded,
+                // so this previously let gate-mandated chains pass unloaded.
+                const available = yield* svcOption.value.all().pipe(
+                  Effect.map((list) => list.map((s) => s.name).toSorted().join(", ")),
+                  Effect.orElseSucceed(() => ""),
+                )
+                return yield* Effect.fail(
+                  new Error(`[SKILL NOT FOUND] "${skillName}". Available skills: ${available || "(none)"}`),
+                )
               }
               yield* Effect.logWarning("[skill-tool] Skill.Service not available in current layer")
             } else {

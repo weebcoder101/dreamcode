@@ -31,8 +31,12 @@ export function useAuthSession() {
     name: "auth",
     maxAge: 60 * 60 * 24 * 365,
     cookie: {
-      secure: false,
+      // Secure is auto-on in production; off in dev so the cookie works on
+      // http://localhost. Pinning to SameSite=Lax prevents the session cookie
+      // from being sent on cross-site POSTs.
+      secure: Resource.App.stage === "production",
       httpOnly: true,
+      sameSite: "lax",
     },
   })
 }

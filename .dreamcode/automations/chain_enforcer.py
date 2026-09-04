@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
 EVOLUTION_DIR = PROJECT_ROOT / "evolution"
 SKILLS_DIR = PROJECT_ROOT / ".opencode" / "skills"
 
-sys.path.insert(0, str(PROJECT_ROOT / ".opencode" / "automations"))
+sys.path.insert(0, str(Path(__file__).parent))
 from timezone import now_ist_iso, now_ist_time
 
 

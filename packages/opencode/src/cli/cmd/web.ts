@@ -4,6 +4,7 @@ import { effectCmd } from "../effect-cmd"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import open from "open"
+import crypto from "node:crypto"
 import { networkInterfaces } from "os"
 
 function getNetworkIPs() {
@@ -37,8 +38,17 @@ export const WebCommand = effectCmd({
   instance: false,
   handler: Effect.fn("Cli.web")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
+    // SECURITY: fail-closed password. If the user did not set
+    // OPENCODE_SERVER_PASSWORD, generate a random one and print it once.
+    // The previous behavior was fail-open (warn and run unsecured),
+    // which exposed a remote network-bind server to anyone reachable
+    // on the port with no auth.
     if (!Flag.OPENCODE_SERVER_PASSWORD) {
-      UI.println(UI.Style.TEXT_WARNING_BOLD + "!  OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
+      const generated = crypto.randomUUID()
+      process.env.OPENCODE_SERVER_PASSWORD = generated
+      UI.println(UI.Style.TEXT_WARNING_BOLD + "!  OPENCODE_SERVER_PASSWORD was not set.")
+      UI.println(UI.Style.TEXT_WARNING_BOLD + "    Generated a random password for this session:")
+      UI.println(UI.Style.TEXT_INFO_BOLD + `    ${generated}`)
     }
     const opts = yield* resolveNetworkOptions(args)
     const server = yield* Effect.promise(() => Server.listen(opts))

@@ -22,6 +22,8 @@ import { provideTmpdirInstance, provideTmpdirServer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Plugin } from "../../src/plugin"
+import { TestConfig } from "../fixture/config"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionEvent } from "@opencode-ai/core/session/event"
@@ -176,9 +178,17 @@ const root = LayerNode.group([
   SessionStatus.node,
   CrossSpawnSpawner.node,
 ])
+// Test plugin layer: prod Plugin.defaultLayer bakes Config/RuntimeFlags and
+// blocks on npm-install fibers for the repo dreamcode.json plugin origin.
+const testPluginLayer = Plugin.layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(TestConfig.layer()),
+  Layer.provide(RuntimeFlags.layer({ pure: true, experimentalEventSystem: true })),
+)
 const replacements = [
   LayerNode.replace(SessionSummary.node, summary),
   LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })),
+  LayerNode.replace(Plugin.node, testPluginLayer),
 ]
 const env = LayerNode.buildLayer(LayerNode.group([root, LayerNode.make(TestLLMServer.layer, [])]), { replacements })
 
@@ -647,6 +657,10 @@ it.live("session.processor effect tests publish retry status updates", () =>
           system: [],
           messages: [{ role: "user", content: "retry" }],
           tools: {},
+          // retries: 0 disables the AI SDK's internal HTTP retry (default 2)
+          // so the 503 surfaces to the processor's own retry loop, which is
+          // what publishes the session.status retry event asserted below.
+          retries: 0,
         })
 
         yield* off
@@ -657,6 +671,10 @@ it.live("session.processor effect tests publish retry status updates", () =>
       }),
     { config: (url) => providerCfg(url) },
   ),
+  // The processor's retry loop sleeps RETRY_INITIAL_DELAY (2s) between
+  // attempts — the default 5s bun timeout is too tight for the real
+  // backoff this test exercises.
+  15_000,
 )
 
 it.live("session.processor effect tests compact on structured context overflow", () =>
@@ -829,9 +847,15 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
           expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
         }
         expect(yield* llm.calls).toBe(1)
-        expect(call?.state.status).toBe("running")
-        if (call?.state.status === "running") {
-          expect(call.state.input).toBeDefined()
+        // Cleanup marks pending tools as aborted: status "error", explicit
+        // abort message, interrupted flag, closed time. (Restored — the
+        // e608c8ad0 audit flipped this to "running" without touching the
+        // production cleanup, contradicting the test's own name.)
+        expect(call?.state.status).toBe("error")
+        if (call?.state.status === "error") {
+          expect(call.state.error).toBe("Tool execution aborted")
+          expect(call.state.metadata?.interrupted).toBe(true)
+          expect(call.state.time?.end).toBeDefined()
         }
       }),
     { config: (url) => providerCfg(url) },

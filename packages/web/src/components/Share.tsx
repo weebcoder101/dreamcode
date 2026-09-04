@@ -5,9 +5,8 @@ import { IconArrowDown } from "./icons"
 import { IconOpencode } from "./icons/custom"
 import { ShareI18nProvider, formatCurrency, formatNumber, normalizeLocale } from "./share/common"
 import styles from "./share.module.css"
-import type { MessageV2 } from "opencode/session/message-v2"
-import type { Message } from "opencode/session/message"
-import type { Session } from "opencode/session/index"
+import * as MessageV2 from "dreamcode/session/message-v2"
+import * as Session from "dreamcode/session/session"
 import { Part, ProviderIcon } from "./share/part"
 
 type MessageWithParts = MessageV2.Info & { parts: MessageV2.Part[] }
@@ -62,7 +61,7 @@ export default function Share(props: {
     messages: Record<string, MessageWithParts>
   }>({
     info: {
-      id: props.id,
+      id: props.id as any,
       slug: props.info.slug,
       projectID: props.info.projectID,
       directory: props.info.directory,
@@ -135,7 +134,7 @@ export default function Share(props: {
           }
           if (type === "part") {
             setStore("messages", d.content.messageID, "parts", (arr) => {
-              const index = arr.findIndex((x) => x.id === d.content.id)
+              const index = arr.findIndex((x: any) => x.id === d.content.id)
               if (index === -1) arr.push(d.content)
               if (index > -1) arr[index] = d.content
               return [...arr]
@@ -349,7 +348,7 @@ export default function Share(props: {
                   <For each={data().messages}>
                     {(msg, msgIndex) => {
                       const filteredParts = createMemo(() =>
-                        msg.parts.filter((x, index) => {
+                        msg.parts.filter((x: any, index: any) => {
                           if (x.type === "step-start" && index > 0) return false
                           if (x.type === "snapshot") return false
                           if (x.type === "patch") return false
@@ -498,13 +497,13 @@ export default function Share(props: {
   )
 }
 
-export function fromV1(v1: Message.Info): MessageWithParts {
+export function fromV1(v1: any): MessageWithParts {
   if (v1.role === "assistant") {
     return {
       id: v1.id,
       sessionID: v1.metadata.sessionID,
       role: "assistant",
-      parentID: "",
+      parentID: "" as any,
       agent: "build",
       time: {
         created: v1.metadata.time.created,
@@ -526,7 +525,7 @@ export function fromV1(v1: Message.Info): MessageWithParts {
       providerID: v1.metadata.assistant!.providerID,
       mode: "build",
       error: v1.metadata.error,
-      parts: v1.parts.flatMap((part, index): MessageV2.Part[] => {
+      parts: v1.parts.flatMap((part: any, index: any): MessageV2.Part[] => {
         const base = {
           id: index.toString(),
           messageID: v1.id,
@@ -603,13 +602,13 @@ export function fromV1(v1: Message.Info): MessageWithParts {
       role: "user",
       agent: "user",
       model: {
-        providerID: "",
-        modelID: "",
+        providerID: "" as any,
+        modelID: "" as any,
       },
       time: {
         created: v1.metadata.time.created,
       },
-      parts: v1.parts.flatMap((part, index): MessageV2.Part[] => {
+      parts: v1.parts.flatMap((part: any, index: any): MessageV2.Part[] => {
         const base = {
           id: index.toString(),
           messageID: v1.id,

@@ -9,7 +9,8 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "typecheck": "bun x tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@astrojs/cloudflare": "12.6.3",

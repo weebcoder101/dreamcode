@@ -31,10 +31,14 @@ if (typeof window !== "undefined" && DOMPurify.isSupported) {
 const config = {
   USE_PROFILES: { html: true, mathMl: true },
   SANITIZE_NAMED_PROPS: true,
-  FORBID_TAGS: ["style", "form", "input", "textarea", "select", "button", "label", "fieldset", "legend", "foreignObject"],
+  FORBID_TAGS: [
+    "style", "form", "input", "textarea", "select", "button", "label",
+    "fieldset", "legend", "foreignObject", "use", "a", "image",
+    "iframe", "object", "embed",
+  ],
   FORBID_CONTENTS: ["style", "script", "form", "foreignObject"],
   ADD_TAGS: ["svg", "path"],
-  ADD_ATTR: ["d", "viewBox", "preserveAspectRatio", "xmlns", "target"],
+  ADD_ATTR: ["d", "viewBox", "preserveAspectRatio", "xmlns"],
 }
 
 const iconPaths = {

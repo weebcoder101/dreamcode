@@ -6,7 +6,8 @@ import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option } from "effect"
+import { Npm } from "@opencode-ai/core/npm"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@opencode-ai/core/util/error"
@@ -46,6 +47,8 @@ import { SystemPrompt } from "../../src/session/system"
 import { ContextCompressor } from "../../src/session/context-compressor"
 import { ChainExecutor } from "../../src/skill/chain-executor"
 import { PiecesLTM } from "../../src/pieces-ltm"
+import { SelfEvolve } from "../../src/skill/self-evolve"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { SensorGate } from "../../src/skill/sensor-gate"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
@@ -55,6 +58,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
 import { TestInstance } from "../fixture/fixture"
+import { TestConfig } from "../fixture/config"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -194,7 +198,62 @@ const blockingProcessor = Layer.succeed(
   }),
 )
 
+// Mirror app-runtime.ts: production itself stubs PluginBoot with wait→void;
+// tests use the same shape so tool registration doesn't block on plugin boot.
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
+// Test plugin layer: Plugin.defaultLayer bakes production Config/RuntimeFlags
+// into itself, so its state build joins npm-install fibers for the repo's own
+// dreamcode.json plugin origin — hanging every test that reaches a
+// plugin.trigger. TestConfig stubs waitForDependencies; pure skips origins.
+const testPluginLayer = Plugin.layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(TestConfig.layer()),
+  Layer.provide(
+    RuntimeFlags.layer({
+      pure: true,
+      experimentalEventSystem: true,
+      // The internal SensorGateEnforcerPlugin runs predict.py (a Python
+      // subprocess) on every chat.message — thousands of spawns per suite run.
+      disableDefaultPlugins: true,
+    }),
+  ),
+)
+
 function makePrompt(input?: { processor?: "blocking" }) {
+  // Real Config.defaultLayer spawns an npm-install fiber (@opencode-ai/plugin,
+  // arborist reify) PER config directory, and Plugin.state joins those fibers
+  // via waitForDependencies() — ~30s of npm work inside the first prompt.
+  // Plugin deps are already materialized under .opencode/node_modules, so the
+  // join is skippable: build the real service (its config discovery still reads
+  // the test-written dreamcode.json) and patch only waitForDependencies to a
+  // no-op. Effect v4 service objects are Proxy-backed — spreading loses their
+  // methods; direct property assignment works.
+  const fastNpm = Layer.succeed(
+    Npm.Service,
+    Npm.Service.of({
+      add: () => Effect.die("Npm.add unavailable in prompt tests") as Effect.Effect<never, never, never>,
+      install: () => Effect.void,
+      which: () => Effect.succeed(Option.none()),
+    }),
+  )
+  const configLayer = Layer.effect(
+    Config.Service,
+    Effect.gen(function* () {
+      // fastNpm replaces the Npm.defaultLayer that Config.defaultLayer bakes:
+      // no arborist fibers are spawned at all (previously they ran in the
+      // background even with waitForDependencies patched to a no-op).
+      const real = yield* Config.Service.pipe(
+        Effect.provide(Config.defaultLayer.pipe(Layer.provide(fastNpm))),
+        Effect.scoped,
+      )
+      ;(real as any).waitForDependencies = () => Effect.void
+      return real
+    }),
+  )
   const deps = Layer.mergeAll(
     Session.defaultLayer,
     Snapshot.defaultLayer,
@@ -203,8 +262,8 @@ function makePrompt(input?: { processor?: "blocking" }) {
     AgentSvc.defaultLayer,
     Command.defaultLayer,
     Permission.defaultLayer,
-    Plugin.defaultLayer,
-    Config.defaultLayer,
+    testPluginLayer,
+    configLayer,
     ProviderSvc.defaultLayer,
     lsp,
     mcp,
@@ -213,6 +272,9 @@ function makePrompt(input?: { processor?: "blocking" }) {
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    // Must reach AgentSvc/Agent.state at construction time — providing it
+    // later is too late because defaultLayer memoizes its requirements.
+    noopPluginBoot,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -255,7 +317,9 @@ function makePrompt(input?: { processor?: "blocking" }) {
         Skill.defaultLayer,
         noopSensorGate,
         ChainExecutor.defaultLayer,
+        SelfEvolve.defaultLayer,
         PiecesLTM.defaultLayer,
+        noopPluginBoot,
       ),
     ),
     Layer.provideMerge(proc),
@@ -936,7 +1000,12 @@ it.instance(
       const { llm } = yield* useServerConfig(providerCfg)
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
-      const chat = yield* sessions.create({ title: "Pinned" })
+      // allow-all: subtask execution evaluates "task" permission; without an
+      // allow rule the ask() deferred blocks forever in headless tests.
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
       yield* llm.hang
       const msg = yield* user(chat.id, "hello")
       yield* addSubtask(chat.id, msg.id)

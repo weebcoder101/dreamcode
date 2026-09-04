@@ -9,15 +9,18 @@ import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Session } from "@/session/session"
-import type { SessionPrompt } from "../../src/session/prompt"
+import { SessionPrompt, type PromptInput } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 
 import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Plugin } from "../../src/plugin"
+import { TestConfig } from "../fixture/config"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -32,9 +35,27 @@ const ref = {
   modelID: ModelV2.ID.make("test-model"),
 }
 
+// Core PluginBoot stub: Agent.state and ToolRegistry demand it at
+// construction time — providing it later is too late (layers memoize).
+const noopPluginBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
+// Test plugin layer: mirrors Plugin.defaultLayer's topology but swaps in
+// TestConfig (no-op waitForDependencies) + pure RuntimeFlags so Plugin.state
+// never joins npm-install fibers for the repo's dreamcode.json plugin origin.
+const testPluginLayer = Plugin.layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(TestConfig.layer()),
+  Layer.provide(RuntimeFlags.layer({ pure: true })),
+)
+
 const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Layer.mergeAll(
-    Agent.defaultLayer,
+    // noopPluginBoot must be provided DIRECTLY to Agent.defaultLayer:
+    // its state build runs at construction and demands PluginBoot.
+    Agent.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
     BackgroundJob.defaultLayer,
     EventV2Bridge.defaultLayer,
     Config.defaultLayer,
@@ -42,8 +63,8 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Session.defaultLayer,
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
-    Truncate.defaultLayer,
-    ToolRegistry.defaultLayer,
+    Truncate.defaultLayer.pipe(Layer.provide(noopPluginBoot)),
+    ToolRegistry.defaultLayer.pipe(Layer.provide(testPluginLayer)),
     Database.defaultLayer,
     RuntimeFlags.layer(flags),
   ).pipe(Layer.provide(Ripgrep.defaultLayer))
@@ -89,7 +110,7 @@ const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   return { chat, assistant }
 })
 
-function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void; text?: string }): TaskPromptOps {
+function stubOps(opts?: { onPrompt?: (input: PromptInput) => void; text?: string }): TaskPromptOps {
   return {
     cancel: () => Effect.void,
     resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
@@ -101,7 +122,7 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
   }
 }
 
-function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
+function reply(input: PromptInput, text: string): SessionV1.WithParts {
   const id = MessageID.ascending()
   return {
     info: {
@@ -216,7 +237,7 @@ describe("tool.task", () => {
       const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
+      let seen: PromptInput | undefined
       const promptOps = stubOps({ text: "resumed", onPrompt: (input) => (seen = input) })
 
       const result = yield* def.execute(
@@ -299,7 +320,7 @@ describe("tool.task", () => {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      const ready = defer<SessionPrompt.PromptInput>()
+      const ready = defer<PromptInput>()
       const cancelled = defer<SessionID>()
       const abort = new AbortController()
       const promptOps: TaskPromptOps = {
@@ -350,7 +371,7 @@ describe("tool.task", () => {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
+      let seen: PromptInput | undefined
       const promptOps = stubOps({ text: "created", onPrompt: (input) => (seen = input) })
 
       const result = yield* def.execute(
@@ -389,7 +410,7 @@ describe("tool.task", () => {
         const { chat, assistant } = yield* seed()
         const tool = yield* TaskTool
         const def = yield* tool.init()
-        let seen: SessionPrompt.PromptInput | undefined
+        let seen: PromptInput | undefined
         const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
 
         const result = yield* def.execute(
@@ -491,7 +512,7 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const ready = yield* Deferred.make<void>()
       const done = yield* Deferred.make<void>()
-      const injected = yield* Deferred.make<SessionPrompt.PromptInput>()
+      const injected = yield* Deferred.make<PromptInput>()
       let runs = 0
       const promptOps: TaskPromptOps = {
         cancel: () => Effect.void,
@@ -595,8 +616,8 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const first = defer<void>()
       const second = defer<void>()
-      const updated = defer<SessionPrompt.PromptInput>()
-      const injected = defer<SessionPrompt.PromptInput>()
+      const updated = defer<PromptInput>()
+      const injected = defer<PromptInput>()
       let prompts = 0
       const promptOps: TaskPromptOps = {
         ...stubOps(),

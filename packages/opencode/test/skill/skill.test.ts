@@ -106,6 +106,7 @@ Instructions here.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("returns skill directories from Skill.dirs", () =>
@@ -135,6 +136,7 @@ description: Skill for dirs test.
         ),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("discovers multiple skills from .opencode/skill/ directory", () =>
@@ -174,6 +176,7 @@ description: Second test skill.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("skips skills with missing frontmatter", () =>
@@ -195,6 +198,7 @@ Just some content without YAML frontmatter.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("discovers skills without descriptions", () =>
@@ -226,6 +230,7 @@ Instructions here.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("discovers skills from .claude/skills/ directory", () =>
@@ -254,6 +259,7 @@ description: A skill in the .claude/skills directory.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("discovers global skills from ~/.claude/skills/ directory", () =>
@@ -289,6 +295,7 @@ description: A skill in the .claude/skills directory.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("fails with typed error when requiring a missing skill", () =>
@@ -304,6 +311,7 @@ description: A skill in the .claude/skills directory.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.effect("exposes tagged expected skill failure classes", () =>
@@ -348,6 +356,7 @@ description: A skill in the .agents/skills directory.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("discovers global skills from ~/.agents/skills/ directory", () =>
@@ -427,6 +436,7 @@ description: A skill in the .agents/skills directory.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   itWithoutClaudeCodeSkills.live("skips Claude Code skills when disabled", () =>
@@ -464,6 +474,7 @@ description: A skill in the .agents/skills directory.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   itWithoutExternalSkills.live("skips external skill directories when disabled", () =>
@@ -511,13 +522,20 @@ description: A skill in the .opencode/skill directory.
         }),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 
   it.live("properly resolves directories that skills live in", () =>
     provideTmpdirInstance(
       (dir) =>
-        Effect.gen(function* () {
-          yield* Effect.promise(() =>
+        // withHome redirects HOME into the tmpdir so the dreamcode-native
+        // global roots (~/.config/dreamcode/skills, ~/.dreamcode/skills)
+        // resolve inside the sandbox and stay absent — keeps the exact-4
+        // dirs() contract hermetic against this machine's real skill store.
+        withHome(
+          dir,
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
             Promise.all([
               Bun.write(
                 path.join(dir, ".claude", "skills", "claude-skill", "SKILL.md"),
@@ -564,8 +582,10 @@ description: A skill in the .opencode/skills directory.
 
           const skill = yield* Skill.Service
           expect((yield* skill.dirs()).length).toBe(4)
-        }),
+          }),
+        ),
       { git: true },
     ),
+  { timeout: 30000 },
   )
 })

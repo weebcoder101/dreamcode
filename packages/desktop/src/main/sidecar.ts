@@ -52,7 +52,9 @@ async function start(command: StartCommand) {
   try {
     prepareSidecarEnv(command.password, command.userDataPath)
     ensureLoopbackNoProxy()
-    useSystemCertificates()
+    if (process.env.OPENCODE_USE_SYSTEM_CERTIFICATES === "1") {
+      useSystemCertificates()
+    }
     useEnvProxy()
     const { Server } = await import("virtual:opencode-server")
 
@@ -109,6 +111,9 @@ function ensureLoopbackNoProxy() {
 }
 
 function useSystemCertificates() {
+  // Opt-in via OPENCODE_USE_SYSTEM_CERTIFICATES=1.
+  // Merging the system CA bundle broadens the server's trust store to every
+  // system-installed root (corporate MITM proxies, accidentally-trusted CAs).
   try {
     const nodeTls = tls as NodeTlsWithSystemCertificates
     nodeTls.setDefaultCACertificates([
